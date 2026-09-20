@@ -188,6 +188,32 @@
   gap: 3px;
 }
 
+.meso-line-row {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.meso-line-row .meso-line-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.meso-line-row--athlete .meso-line-input {
+  color: var(--dim);
+  background: var(--rail);
+}
+
+.meso-line-athlete-mark {
+  padding-left: 4px;
+  color: var(--dim);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  line-height: 1.2;
+}
+
 .meso-table-skipped {
   display: inline-block;
   color: var(--dim);

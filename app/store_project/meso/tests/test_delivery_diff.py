@@ -38,6 +38,7 @@ from store_project.users.factories import UserFactory
 from ._helpers import day
 from ._helpers import make_slot
 from ._helpers import presc as presc_
+from ._helpers import sub_line
 
 pytestmark = pytest.mark.django_db
 
@@ -274,6 +275,51 @@ class TestDiffWeekSnapshots:
         assert diff["sessions"] == []
         assert diff["has_changes"] is False
 
+    def test_old_payload_without_authorship_matches_new_coach_line(self):
+        previous = _snap(
+            [
+                _session(
+                    1,
+                    1,
+                    "Lower",
+                    [
+                        _presc(
+                            10,
+                            "Squat",
+                            lines=[{"line": 1, "text": "Pause for two seconds"}],
+                        )
+                    ],
+                )
+            ]
+        )
+        current = _snap(
+            [
+                _session(
+                    1,
+                    1,
+                    "Lower",
+                    [
+                        _presc(
+                            10,
+                            "Squat",
+                            lines=[
+                                {
+                                    "line": 1,
+                                    "text": "Pause for two seconds",
+                                    "athlete_authored": False,
+                                }
+                            ],
+                        )
+                    ],
+                )
+            ]
+        )
+
+        diff = diff_week_snapshots(current, previous)
+
+        assert diff["has_changes"] is False
+        assert diff["sessions"] == []
+
 
 # --------------------------------------------------------------------------- #
 # Presenter + view (DB-backed)                                                 #
@@ -373,6 +419,70 @@ class TestDeliverScreenChanges:
         (wk,) = deliver["weeks"]
         assert wk["changes"] is not None
         assert wk["changes"]["has_changes"] is False
+
+    def test_athlete_authored_line_after_delivery_is_not_a_change(self):
+        plan, week, _, presc = seed_plan()
+        delivery = record_delivery(week)
+        sub_line(presc, "155 x 8, RPE 8", athlete_authored=True)
+
+        current = serialize_week_snapshot(week)
+        diff = diff_week_snapshots(current, delivery.payload)
+
+        assert current["sessions"][0]["exercises"][0]["lines"] == [
+            {
+                "line": 1,
+                "text": "155 x 8, RPE 8",
+                "athlete_authored": True,
+            }
+        ]
+        assert diff["has_changes"] is False
+        assert diff["sessions"] == []
+
+    def test_coach_authored_line_change_still_surfaces(self):
+        plan, week, _, presc = seed_plan()
+        coach_line = sub_line(presc, "155 x 8, RPE 7")
+        delivery = record_delivery(week)
+        coach_line.text = "155 x 8, RPE 8"
+        coach_line.save(update_fields=["text"])
+
+        current = serialize_week_snapshot(week)
+        diff = diff_week_snapshots(current, delivery.payload)
+
+        assert (
+            current["sessions"][0]["exercises"][0]["lines"][0]["athlete_authored"]
+            is False
+        )
+        assert diff["has_changes"] is True
+        (session_diff,) = diff["sessions"]
+        (changed,) = session_diff["changed"]
+        (field,) = changed["fields"]
+        assert field == {
+            "field": "lines",
+            "label": "Lines",
+            "before": "155 x 8, RPE 7",
+            "after": "155 x 8, RPE 8",
+        }
+
+    def test_mixed_line_changes_only_surface_the_coach_line(self):
+        plan, week, _, presc = seed_plan()
+        coach_line = sub_line(presc, "155 x 8, RPE 7")
+        delivery = record_delivery(week)
+        coach_line.text = "160 x 8, RPE 8"
+        coach_line.save(update_fields=["text"])
+        athlete_text = "athlete-only 155 x 8, RPE 9"
+        sub_line(presc, athlete_text, athlete_authored=True)
+
+        diff = diff_week_snapshots(serialize_week_snapshot(week), delivery.payload)
+
+        assert diff["has_changes"] is True
+        (session_diff,) = diff["sessions"]
+        (changed,) = session_diff["changed"]
+        (field,) = changed["fields"]
+        assert field["field"] == "lines"
+        assert field["label"] == "Lines"
+        assert field["before"] == "155 x 8, RPE 7"
+        assert field["after"] == "160 x 8, RPE 8"
+        assert athlete_text not in str(diff)
 
     def test_each_week_carries_its_own_diff(self):
         # Block delivery: every live week diffs against ITS OWN last-delivered
@@ -497,6 +607,18 @@ class TestDeliverScreenRendersDiff:
         body = self._screen(client, plan).content.decode()
 
         assert "No changes" in body
+
+    def test_athlete_authored_line_is_omitted_from_redelivery_diff(self, client):
+        plan, week, _, presc = seed_plan()
+        record_delivery(week)
+        athlete_text = "athlete-only 155 x 8, RPE 9"
+        sub_line(presc, athlete_text, athlete_authored=True)
+        client.force_login(plan.relationship.coach)
+
+        body = self._screen(client, plan).content.decode()
+
+        assert "No changes" in body
+        assert athlete_text not in body
 
     def test_add_this_week_placeholder_shows_no_phantom_add_on_other_weeks(
         self, client

@@ -33,7 +33,7 @@ def initials(name):
     return (parts[0][0] + parts[-1][0]).upper()
 
 
-def serialize_prescription(cell, lines=()):
+def serialize_prescription(cell, lines=(), *, include_athlete_authored=False):
     """One exercise row in a session's grid (text-first, Phase 2a).
 
     ``cell`` is the row's line-0 ``Prescription`` — a fixed ``ExerciseSlot``
@@ -43,6 +43,15 @@ def serialize_prescription(cell, lines=()):
     content only (blank sub-lines dropped). ``tempo``/``rest``/``note`` are
     the per-EXERCISE columns off the slot (D2).
     """
+    serialized_lines = []
+    for line in lines:
+        if not line.text.strip():
+            continue
+        line_data = {"line": line.line, "text": line.text}
+        if include_athlete_authored:
+            line_data["athlete_authored"] = line.athlete_authored
+        serialized_lines.append(line_data)
+
     data = {
         "id": cell.pk,
         "name": cell.name,
@@ -51,11 +60,7 @@ def serialize_prescription(cell, lines=()):
         "tempo": cell.exercise_slot.tempo,
         "rest": cell.exercise_slot.rest,
         "note": cell.exercise_slot.note,
-        "lines": [
-            {"line": line.line, "text": line.text}
-            for line in lines
-            if line.text.strip()
-        ],
+        "lines": serialized_lines,
     }
     # The designer renders a single `tag`; the model stores a list.
     if cell.tags:
@@ -147,7 +152,7 @@ def serialize_chat_thread(plan):
     return thread
 
 
-def serialize_session(session):
+def serialize_session(session, *, include_athlete_authored=False):
     """One training day (a column in the coach designer grid).
 
     Returns every live cell (``session.cells()``, the P0 fixed-lineup cutover) —
@@ -166,7 +171,11 @@ def serialize_session(session):
         "name": session.name,
         "bias": session.bias,
         "exercises": [
-            serialize_prescription(c, lines_by_slot.get(c.exercise_slot_id, ()))
+            serialize_prescription(
+                c,
+                lines_by_slot.get(c.exercise_slot_id, ()),
+                include_athlete_authored=include_athlete_authored,
+            )
             for c in session.cells()
         ],
     }
@@ -248,7 +257,8 @@ def serialize_week_snapshot(week):
             "is_deload": week.is_deload,
         },
         "sessions": [
-            serialize_session(s) for s in week.sessions.filter(deleted_at__isnull=True)
+            serialize_session(s, include_athlete_authored=True)
+            for s in week.sessions.filter(deleted_at__isnull=True)
         ],
     }
 
@@ -261,7 +271,7 @@ def serialize_week_snapshot(week):
 _PRESCRIPTION_DIFF_FIELDS = (
     ("name", "Exercise"),
     ("text", "Prescription"),
-    ("lines", "Sub-lines"),
+    ("lines", "Lines"),
     ("tempo", "Tempo"),
     ("rest", "Rest"),
     ("note", "Instructions"),
@@ -360,7 +370,25 @@ def _diff_exercises(current, previous):
         # since ``skipped`` itself is one of the diffed fields below).
         if prev_e.get("skipped") and e.get("skipped"):
             continue
-        fields = _diff_fields(prev_e, e, _PRESCRIPTION_DIFF_FIELDS)
+        prev_for_diff = {
+            **prev_e,
+            "lines": [
+                {"line": line.get("line"), "text": line.get("text")}
+                for line in prev_e.get("lines", [])
+                if not line.get("athlete_authored", False)
+            ],
+        }
+        current_for_diff = {
+            **e,
+            "lines": [
+                {"line": line.get("line"), "text": line.get("text")}
+                for line in e.get("lines", [])
+                if not line.get("athlete_authored", False)
+            ],
+        }
+        fields = _diff_fields(
+            prev_for_diff, current_for_diff, _PRESCRIPTION_DIFF_FIELDS
+        )
         if fields:
             changed.append({"name": e.get("name") or "Exercise", "fields": fields})
     return {"added": added, "removed": removed, "changed": changed}
@@ -956,7 +984,12 @@ def serialize_mesocycle_grid(mesocycle):
                     # serialization) so the editor can show a cleared line
                     # in place rather than collapsing the stack.
                     "lines": [
-                        {"id": lc.pk, "line": lc.line, "text": lc.text}
+                        {
+                            "id": lc.pk,
+                            "line": lc.line,
+                            "text": lc.text,
+                            "athlete_authored": lc.athlete_authored,
+                        }
                         for lc in lines_by_key.get((exercise_slot.pk, week.pk), [])
                     ],
                 }

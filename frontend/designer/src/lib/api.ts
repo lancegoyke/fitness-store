@@ -26,6 +26,7 @@ export interface CellLine {
   id?: number;
   line: number;
   text: string;
+  athlete_authored?: boolean;
 }
 
 /** One exercise row (a Prescription) as the grid renders/edits it.

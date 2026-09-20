@@ -207,6 +207,54 @@ describe("cell sub-lines", () => {
     expect(screen.getByTestId("cell-line-new-100")).toHaveValue("");
   });
 
+  it("marks only athlete-authored lines and clears the mark after a coach edit", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    const athleteLine = { id: 5, line: 1, text: "100 x 5", athlete_authored: true };
+    const coachLine = { id: 6, line: 2, text: "Pause for two seconds", athlete_authored: false };
+    const athleteGrid = grid({
+      days: [day({ rows: [row({ cells: { "1": cell({ lines: [athleteLine, coachLine] }) } })] })],
+    });
+    const view = render(<MesoTable {...baseProps({ grid: athleteGrid, onWriteCellLine })} />);
+
+    const athleteMark = screen.getByTestId("cell-line-athlete-5");
+    expect(athleteMark).toHaveTextContent("athlete");
+    expect(athleteMark).toHaveAttribute("title", "Logged by your athlete");
+    expect(athleteMark).not.toHaveAttribute("tabindex");
+    expect(athleteMark).not.toHaveAttribute("data-grid-cell");
+    expect(screen.queryByTestId("cell-line-athlete-6")).not.toBeInTheDocument();
+
+    const athleteInput = screen.getByTestId("cell-line-100-1");
+    expect(athleteInput.parentElement).toHaveClass("meso-line-row--athlete");
+    await user.clear(athleteInput);
+    await user.type(athleteInput, "105 x 5");
+    await user.tab();
+
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "105 x 5");
+    const reclaimedGrid = grid({
+      days: [
+        day({
+          rows: [
+            row({
+              cells: {
+                "1": cell({
+                  lines: [
+                    { ...athleteLine, text: "105 x 5", athlete_authored: false },
+                    coachLine,
+                  ],
+                }),
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    view.rerender(
+      <MesoTable {...baseProps({ grid: reclaimedGrid, onWriteCellLine })} />,
+    );
+    expect(screen.queryByTestId("cell-line-athlete-5")).not.toBeInTheDocument();
+  });
+
   // designer-simplify: the ghost must stay a real, focusable keyboard grid
   // stop AT ALL TIMES — ArrowUp from the row below reaches it via
   // useTableNav's querySelector(...).focus(), and a shipped regression once
