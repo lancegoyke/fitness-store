@@ -15,8 +15,10 @@ class SignupForm(django_forms.Form):
     def signup(self, request, user):
         from store_project.meso.names import clean_name
 
-        user.name = clean_name(self.cleaned_data.get("name"))
-        user.save(update_fields=["name"])
+        name = clean_name(self.cleaned_data.get("name"))
+        if name:
+            user.name = name
+            user.save(update_fields=["name"])
 
 
 class UserChangeForm(forms.UserChangeForm):

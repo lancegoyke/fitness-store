@@ -104,8 +104,10 @@ class EmailDashboardBlacklistClearView(UserPassesTestMixin, View):
 
     A bounce or complaint auto-blacklists a recipient (django-ses's own
     signal handlers, connected off ``bounce_received``/``complaint_received``);
-    once the underlying problem is fixed, staff need a one-click way to let
-    SES try that recipient again. This action retains its staff gate; a GET is
+    once the underlying problem is fixed, a superuser needs a one-click way to
+    let SES try that recipient again. This action uses the same superuser gate
+    as ``EmailDashboardView``, the only page that offers it; otherwise a staff
+    account could POST the action and be redirected to a 403 (#618). A GET is
     simply not allowed (``http_method_names`` limits this to POST, so Django's
     own ``View.dispatch`` 405s it).
     """
@@ -113,7 +115,7 @@ class EmailDashboardBlacklistClearView(UserPassesTestMixin, View):
     http_method_names = ["post"]
 
     def test_func(self):
-        return self.request.user.is_staff
+        return self.request.user.is_superuser
 
     def handle_no_permission(self):
         if self.request.user.is_authenticated:

@@ -840,7 +840,9 @@ class CoachInvite(models.Model):
         straight to active. Idempotent against an already-active link, and resolves
         a pre-existing pending peer link to active. Raises ``InvalidTransition`` if
         the invite is no longer pending, or if the claimer is the coach (a user
-        cannot coach themselves).
+        cannot coach themselves). The invite label wins when the claim creates or
+        reopens the link, or fills an empty label, but not over an active link's
+        existing label.
         """
         if not self.is_pending:
             raise InvalidTransition(f"Cannot accept an invite that is {self.status}.")
@@ -855,11 +857,23 @@ class CoachInvite(models.Model):
         if user == self.coach:
             raise InvalidTransition("A coach cannot accept their own invite.")
         with transaction.atomic():
+            existing = (
+                CoachAthlete.objects.filter(coach=self.coach, athlete=user)
+                .values_list("status", flat=True)
+                .first()
+            )
+            opens_link = existing is None or existing in CoachAthlete.CLOSED_STATUSES
             link = CoachAthlete.invite(coach=self.coach, athlete=user)
             if link.is_pending:
                 link.accept()
             invite_label = clean_name(self.label)
-            if invite_label:
+            # A link may already be active through another path, with a label the
+            # coach edited since this email was sent; a stale claim must not revert
+            # it. Creating or reopening is a fresh deliberate act, so its invite
+            # label wins even over one preserved across end/reopen. An empty label
+            # is still a gap worth filling; that can refill a deliberately cleared
+            # label, but is less harmful than replacing a name the coach typed.
+            if invite_label and (opens_link or not clean_name(link.label)):
                 link.label = invite_label
                 link.save(update_fields=["label"])
             self.status = self.Status.ACCEPTED

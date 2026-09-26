@@ -264,6 +264,8 @@ ACCOUNT_RATE_LIMITS = {"login_failed": "9/10m/ip,5/5m/key"}
 SOCIALACCOUNT_QUERY_EMAIL = True
 SOCIALACCOUNT_EMAIL_REQUIRED = True
 SOCIALACCOUNT_STORE_TOKENS = False
+# Carries Google/Facebook profile names into User.name when it is still empty.
+SOCIALACCOUNT_ADAPTER = "store_project.users.adapters.SocialAccountAdapter"
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
     "allauth.account.auth_backends.AuthenticationBackend",

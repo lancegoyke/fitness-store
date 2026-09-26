@@ -5,12 +5,14 @@ from django.core import mail
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import CoachSubscriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachProfile
+from store_project.meso.models import CoachSubscription
 from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
 
@@ -265,6 +267,97 @@ class TestInviteLabels:
         assert link.label == "J. Ellis"
         client.force_login(coach)
         assert "J. Ellis" in client.get(reverse("meso:roster")).content.decode()
+
+    def test_claiming_an_old_invite_does_not_revert_a_label_edited_since(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = UserFactory()
+        CoachSubscriptionFactory(coach=coach, status=CoachSubscription.Status.ACTIVE)
+        athlete = UserFactory(email="jordan@example.com")
+        client.force_login(coach)
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(
+                reverse("meso:coach_invite"),
+                {"email": athlete.email, "name": "Jordan"},
+            )
+        invite = CoachInvite.objects.get(coach=coach, email=athlete.email)
+
+        link = CoachAthlete.request(athlete=athlete, coach=coach)
+        link.accept()
+        client.post(
+            reverse("meso:athlete_label", kwargs={"pk": athlete.pk}),
+            {"label": "Jordan E."},
+        )
+
+        client.force_login(athlete)
+        client.post(
+            reverse("meso:invite_claim", kwargs={"token": invite.token}),
+            {"action": "accept"},
+        )
+
+        link.refresh_from_db()
+        invite.refresh_from_db()
+        assert link.label == "Jordan E."
+        assert invite.status == CoachInvite.Status.ACCEPTED
+        assert link.status == CoachAthlete.Status.ACTIVE
+
+    def test_claiming_an_invite_fills_an_empty_label_on_an_active_link(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = UserFactory()
+        CoachSubscriptionFactory(coach=coach, status=CoachSubscription.Status.ACTIVE)
+        athlete = UserFactory(email="jordan@example.com")
+        client.force_login(coach)
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(
+                reverse("meso:coach_invite"),
+                {"email": athlete.email, "name": "Jordan Ellis"},
+            )
+        invite = CoachInvite.objects.get(coach=coach, email=athlete.email)
+        link = CoachAthlete.request(athlete=athlete, coach=coach)
+        link.accept()
+        assert link.label == ""
+
+        client.force_login(athlete)
+        client.post(
+            reverse("meso:invite_claim", kwargs={"token": invite.token}),
+            {"action": "accept"},
+        )
+
+        link.refresh_from_db()
+        assert link.label == "Jordan Ellis"
+        assert link.status == CoachAthlete.Status.ACTIVE
+
+    def test_claim_that_reopens_an_ended_link_applies_the_invite_label(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = UserFactory()
+        athlete = UserFactory(email="jordan@example.com")
+        link = CoachAthlete.request(athlete=athlete, coach=coach)
+        link.accept()
+        client.force_login(coach)
+        client.post(
+            reverse("meso:athlete_label", kwargs={"pk": athlete.pk}),
+            {"label": "Jordan E."},
+        )
+        link.refresh_from_db()
+        link.end()
+
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(
+                reverse("meso:coach_invite"),
+                {"email": athlete.email, "name": "Jordan Ellis"},
+            )
+        invite = CoachInvite.objects.get(coach=coach, email=athlete.email)
+        client.force_login(athlete)
+        client.post(
+            reverse("meso:invite_claim", kwargs={"token": invite.token}),
+            {"action": "accept"},
+        )
+
+        link.refresh_from_db()
+        assert link.status == CoachAthlete.Status.ACTIVE
+        assert link.label == "Jordan Ellis"
 
     def test_new_fields_default_to_empty_string(self):
         link = CoachAthleteFactory()

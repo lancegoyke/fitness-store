@@ -2,12 +2,9 @@
 
 A bounce or complaint auto-blacklists a recipient (django-ses's own signal
 handlers); once the underlying problem is fixed (a mailbox is reactivated, a
-complaint was a mistake, ...) staff need a one-click way to let SES try that
-recipient again. This POST-only action retains its staff gate and is
-CSRF-protected (the default for a Django form POST).
-
-Pre-implementation this is RED: ``notifications:email_blacklist_clear`` has no
-URL/view yet, so every test fails with ``NoReverseMatch``.
+complaint was a mistake, ...) superusers need a one-click way to let SES try
+that recipient again. This POST-only action shares the dashboard's superuser
+gate and is CSRF-protected (the default for a Django form POST).
 """
 
 import pytest
@@ -42,9 +39,18 @@ class TestBlacklistClear:
         assert "/accounts/login/" in resp["Location"]
         assert BlacklistedEmail.objects.filter(pk=entry.pk).exists()
 
-    def test_staff_post_deletes_the_row_and_redirects(self, client):
+    def test_staff_non_superuser_post_is_forbidden_and_row_remains(self, client):
         entry = BlacklistedEmail.objects.create(email="bounced@example.com")
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=False))
+
+        resp = client.post(_url(entry.pk))
+
+        assert resp.status_code == 403
+        assert BlacklistedEmail.objects.filter(pk=entry.pk).exists()
+
+    def test_superuser_post_deletes_the_row_and_redirects(self, client):
+        entry = BlacklistedEmail.objects.create(email="bounced@example.com")
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         resp = client.post(_url(entry.pk))
 
@@ -54,7 +60,7 @@ class TestBlacklistClear:
 
     def test_get_is_not_allowed(self, client):
         entry = BlacklistedEmail.objects.create(email="bounced@example.com")
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         resp = client.get(_url(entry.pk))
 

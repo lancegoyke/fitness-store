@@ -19,7 +19,17 @@ def coach_name(user) -> str:
     """Return the coach-controlled display name, then the account fallback."""
     profile = getattr(user, "coach_profile", None)
     profile_name = clean_name(getattr(profile, "display_name", ""))
-    return profile_name or clean_name(user.display_name())
+    account_name = clean_name(getattr(user, "name", ""))
+    email_prefix = clean_name((getattr(user, "email", "") or "").split("@", 1)[0])
+    return profile_name or account_name or email_prefix or "Anonymous"
+
+
+def coach_is_unnamed(user) -> bool:
+    """Whether ``coach_name`` must fall back to the coach's email prefix."""
+    profile = getattr(user, "coach_profile", None)
+    return not clean_name(getattr(profile, "display_name", "")) and not clean_name(
+        getattr(user, "name", "")
+    )
 
 
 def athlete_name(user, label="") -> str:

@@ -102,6 +102,7 @@ from .models import newest_session_logs
 from .models import sub_line_warn_reason
 from .names import athlete_name
 from .names import clean_name
+from .names import coach_is_unnamed
 from .names import coach_name
 from .names import link_athlete_name
 from .parsing import parse_performed
@@ -484,6 +485,9 @@ class RosterView(TemplateView):
         # dismissed/completed, this reads False and the original card returns —
         # nothing is ever a dead end.
         ctx["tour_entry_available"] = meso_tour.is_active(self.request.user)
+        ctx["invite_signed_as"] = (
+            coach_name(self.request.user) if coach_is_unnamed(self.request.user) else ""
+        )
         return ctx
 
 

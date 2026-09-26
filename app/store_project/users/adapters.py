@@ -1,15 +1,18 @@
-"""Project ``ACCOUNT_ADAPTER`` (issue #514): tag allauth mail with an EmailKind.
+"""Project allauth adapters for account mail and social-profile names.
 
 allauth builds every account email (signup confirmation, password reset,
 account notices) through ``DefaultAccountAdapter.render_mail``, which returns
 the built ``EmailMessage``/``EmailMultiAlternatives`` before its caller
 (``send_mail``) calls ``.send()`` on it -- the exact hook point
 ``notifications.emails.tag_kind`` needs. Wired in via ``ACCOUNT_ADAPTER``
-(``config.settings.base``), next to the other ``ACCOUNT_*`` settings.
+(``config.settings.base``), next to the other ``ACCOUNT_*`` settings. The
+``SOCIALACCOUNT_ADAPTER`` also carries provider names into ``User.name`` (#622).
 """
 
 from allauth.account.adapter import DefaultAccountAdapter
+from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 
+from store_project.meso.names import clean_name
 from store_project.notifications.emails import tag_kind
 from store_project.notifications.models import EmailKind
 
@@ -55,3 +58,22 @@ class AccountAdapter(DefaultAccountAdapter):
         message = super().render_mail(template_prefix, email, context, headers)
         tag_kind(message, kind_for_template_prefix(template_prefix))
         return message
+
+
+class SocialAccountAdapter(DefaultSocialAccountAdapter):
+    """Populate an empty account name from either provider's profile fields.
+
+    Google supplies only given/family names while Facebook supplies both those
+    fields and ``name``. An existing name is never replaced, so a name the user
+    typed remains authoritative.
+    """
+
+    def populate_user(self, request, sociallogin, data):
+        user = super().populate_user(request, sociallogin, data)
+        if not clean_name(user.name):
+            first_name = data.get("first_name") or ""
+            last_name = data.get("last_name") or ""
+            provider_name = clean_name(data.get("name") or f"{first_name} {last_name}")
+            max_length = user._meta.get_field("name").max_length
+            user.name = provider_name[:max_length]
+        return user
