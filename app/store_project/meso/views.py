@@ -65,7 +65,9 @@ from .billing import access as billing_access
 from .billing import agent_usage_report as usage_report
 from .billing import stripe_gateway as billing_gateway
 from .billing import webhooks as billing_webhooks
+from .forms import AthleteRecordForm
 from .forms import CoachDisplayNameForm
+from .forms import ContraindicationForm
 from .forms import UserNameForm
 from .history import HistoryUnavailable
 from .history import record_plan_action
@@ -73,10 +75,12 @@ from .history import restore_plan_snapshot
 from .history import serialize_plan_snapshot
 from .models import MAX_LOGGED_SET_NUMBER
 from .models import AgentProposalBatch
+from .models import AthleteProfile
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachProfile
 from .models import CoachSubscription
+from .models import Contraindication
 from .models import ExerciseSlot
 from .models import InvalidTransition
 from .models import LoggedSet
@@ -500,6 +504,10 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
             ctx["coach_form"] = kwargs.get("coach_form") or CoachDisplayNameForm(
                 initial={
                     "display_name": getattr(profile, "display_name", ""),
+                    "programming_style": ", ".join(
+                        getattr(profile, "programming_style", []) or []
+                    ),
+                    "avoid_rules": getattr(profile, "avoid_rules", ""),
                 }
             )
             ctx["coach_name"] = coach_name(self.request.user)
@@ -521,8 +529,12 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
             if form.is_valid():
                 profile, _ = CoachProfile.objects.get_or_create(user=request.user)
                 profile.display_name = form.cleaned_data["display_name"]
-                profile.save(update_fields=["display_name"])
-                messages.success(request, "Your coaching name was updated.")
+                profile.programming_style = form.cleaned_data["programming_style"]
+                profile.avoid_rules = form.cleaned_data["avoid_rules"]
+                profile.save(
+                    update_fields=["display_name", "programming_style", "avoid_rules"]
+                )
+                messages.success(request, "Your coaching settings were updated.")
                 return redirect("meso:settings")
             return self.render_to_response(self.get_context_data(coach_form=form))
 
@@ -637,6 +649,10 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
         ctx["athlete_label"] = link.label
         ctx["athlete_has_own_name"] = bool(clean_name(link.athlete.name))
+        ctx["relationship"] = {
+            "token": link.token,
+            "can_end": not link.is_self and not link.is_demo,
+        }
         return ctx
 
 
@@ -658,6 +674,90 @@ def athlete_label_update(request, pk):
         link.label = label
         link.save(update_fields=["label"])
     messages.success(request, "Athlete name updated.")
+    return redirect("meso:athlete", pk=pk)
+
+
+def _locked_active_coached_athlete(request, pk):
+    # Lock order: User → children (docs/meso/decisions.md, "Row-lock order").
+    athlete = get_object_or_404(User.objects.select_for_update(no_key=True), pk=pk)
+    get_object_or_404(
+        CoachAthlete.objects.active(),
+        coach=request.user,
+        athlete=athlete,
+    )
+    return athlete
+
+
+def _first_form_error(form):
+    return str(next(iter(form.errors.values()))[0])
+
+
+@login_required
+@require_POST
+def athlete_record_update(request, pk):
+    """Update only the submitted parts of an active athlete's global record."""
+    with transaction.atomic():
+        athlete = _locked_active_coached_athlete(request, pk)
+        form = AthleteRecordForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, _first_form_error(form))
+            return redirect("meso:athlete", pk=pk)
+
+        received = form.fields.keys() & request.POST.keys()
+        profile, _ = AthleteProfile.objects.get_or_create(user=athlete)
+        for field in received:
+            setattr(profile, field, form.cleaned_data[field])
+        if received:
+            profile.save(update_fields=sorted(received))
+    messages.success(request, "Athlete record updated.")
+    return redirect("meso:athlete", pk=pk)
+
+
+@login_required
+@require_POST
+def athlete_contraindication_add(request, pk):
+    """Add or reactivate one global contraindication for an active athlete."""
+    with transaction.atomic():
+        athlete = _locked_active_coached_athlete(request, pk)
+        form = ContraindicationForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, _first_form_error(form))
+            return redirect("meso:athlete", pk=pk)
+
+        text = form.cleaned_data["text"]
+        duplicate = (
+            Contraindication.objects.select_for_update(no_key=True)
+            .filter(athlete=athlete, text__iexact=text)
+            .order_by("-active", "pk")
+            .first()
+        )
+        if duplicate is not None and duplicate.active:
+            messages.info(request, "That contraindication is already active.")
+            return redirect("meso:athlete", pk=pk)
+        if duplicate is not None:
+            duplicate.active = True
+            duplicate.save(update_fields=["active"])
+            messages.success(request, "Contraindication restored.")
+            return redirect("meso:athlete", pk=pk)
+        Contraindication.objects.create(athlete=athlete, text=text)
+    messages.success(request, "Contraindication added.")
+    return redirect("meso:athlete", pk=pk)
+
+
+@login_required
+@require_POST
+def athlete_contraindication_clear(request, pk, cid):
+    """Resolve one athlete-owned contraindication without deleting its record."""
+    with transaction.atomic():
+        athlete = _locked_active_coached_athlete(request, pk)
+        contraindication = get_object_or_404(
+            Contraindication.objects.select_for_update(no_key=True),
+            pk=cid,
+            athlete=athlete,
+        )
+        contraindication.active = False
+        contraindication.save(update_fields=["active"])
+    messages.success(request, "Contraindication cleared and kept on record.")
     return redirect("meso:athlete", pk=pk)
 
 

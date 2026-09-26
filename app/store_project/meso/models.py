@@ -185,8 +185,8 @@ class TourEvent(models.Model):
 class AthleteProfile(models.Model):
     """Cross-coach attributes that belong to the athlete, not to any one plan (D-b).
 
-    Goals/focus live per-plan (added in a later slice); training history and
-    contraindications are global to the athlete and visible to every coach.
+    Goals, training history, notes, and contraindications are global to the
+    athlete and visible to every coach.
     """
 
     user = models.OneToOneField(
@@ -195,6 +195,7 @@ class AthleteProfile(models.Model):
         related_name="athlete_profile",
         verbose_name=_("User"),
     )
+    goals = models.TextField(_("Goals"), blank=True)
     training_started = models.DateField(_("Training started"), null=True, blank=True)
     notes = models.TextField(_("Notes"), blank=True)
     delivery_email_opt_out = models.BooleanField(

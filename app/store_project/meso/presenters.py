@@ -202,6 +202,8 @@ def roster_athlete(
 def profile_athlete(user, label=""):
     """The expanded athlete record behind the roster row."""
     name = athlete_name(user, label)
+    profile = getattr(user, "athlete_profile", None)
+    contraindications = _active_contraindications(user)
     subtitle_parts = [str(p) for p in [_age(user), _training_label(user)] if p]
     return {
         "id": user.pk,
@@ -209,9 +211,21 @@ def profile_athlete(user, label=""):
         "initials": initials(name),
         "tone": "neutral",
         "subtitle": " · ".join(subtitle_parts) or "Training experience not on file",
-        # Goals are per-plan (D-b); they arrive with the program schema (Phase 2).
-        "goals": [],
-        "contraindications": [c.text for c in _active_contraindications(user)],
+        "goals": profile.goals if profile else "",
+        "notes": profile.notes if profile else "",
+        "training_started": (
+            profile.training_started.isoformat()
+            if profile and profile.training_started
+            else None
+        ),
+        "has_profile_data": bool(
+            profile
+            and (profile.goals or profile.notes or profile.training_started is not None)
+        ),
+        "contraindications": [c.text for c in contraindications],
+        "active_contraindications": [
+            {"id": c.pk, "text": c.text} for c in contraindications
+        ],
         "has_program": False,
         "recency": "No sessions yet",
         "session_count_14d": 0,
@@ -328,8 +342,8 @@ def profile_program(link, working_plan):
     (``_profile_plan``). Unlike the old compliance-gated check, it no longer
     depends on there being a *measurable* week: cadence degrades gracefully
     (``None`` -> "No sessions yet") instead of needing to hide the whole
-    block. The goal still surfaces from the plan the coach is shaping so the
-    left rail isn't blank before any sessions exist.
+    block. The plan's goal surfaces as ``program_goal``, next to (never in place
+    of) the athlete-record ``goals`` that ``profile_athlete`` provides.
     """
     plan = _profile_plan(link)
     if plan is None:
@@ -342,7 +356,7 @@ def profile_program(link, working_plan):
                 "status": "",
                 "status_label": "",
                 "review_batch_id": None,
-                "goals": [goal] if goal else [],
+                "program_goal": goal,
             },
             "macrocycle": [],
             "results_summary": None,
@@ -373,7 +387,7 @@ def profile_program(link, working_plan):
             "status": status,
             "status_label": status_label,
             "review_batch_id": review_batch_id,
-            "goals": [goal] if goal else [],
+            "program_goal": goal,
         },
         "macrocycle": macrocycle,
         "results_summary": _profile_results(link),

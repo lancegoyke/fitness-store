@@ -33,7 +33,7 @@
           <p class="meso-sub">{{ athlete.subtitle }}</p>
           <form method="post" action="{% url 'meso:athlete_label' athlete.id %}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
             {% csrf_token %}
-            <input type="text" name="label" value="{{ athlete_label }}" maxlength="255" placeholder="Your name for this athlete" aria-label="Your name for this athlete" style="appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:7px 9px;outline:none;" />
+            <input type="text" name="label" class="meso-field" value="{{ athlete_label }}" maxlength="255" placeholder="Their name" aria-label="Your name for this athlete" style="width:auto;min-width:180px;" />
             <button type="submit" class="meso-btn meso-btn--ghost">Save name</button>
             <span class="meso-row-meta">
               {% if athlete_has_own_name %}Their own name is shown; this label is a fallback.{% else %}Shown to you (and in emails to them) until they set their own name.{% endif %}
@@ -51,43 +51,83 @@
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div class="meso-card meso-card--pad">
           <p class="meso-eyebrow">Goals</p>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;">
-            {% for goal in athlete.goals %}
-              <span class="meso-tag meso-tag--accent">{{ goal }}</span>
-            {% endfor %}
-          </div>
-        </div>
-
-        <div class="meso-card meso-card--pad">
-          <p class="meso-eyebrow">Contraindications</p>
-          {% if athlete.contraindications %}
-            <div style="display:flex;flex-direction:column;gap:6px;">
-              {% for c in athlete.contraindications %}
-                <div style="display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border-radius:7px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 22%,#fff);">
-                  <i style="width:5px;height:5px;border-radius:50%;background:var(--warn);margin-top:6px;flex:0 0 auto;"></i>
-                  <span style="font-size:12px;color:var(--warn);font-weight:600;line-height:1.3;">{{ c }}</span>
-                </div>
-              {% endfor %}
-            </div>
-          {% else %}
-            <p class="meso-sub">None on file.</p>
+          <form method="post" action="{% url 'meso:athlete_record' athlete.id %}" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
+            {% csrf_token %}
+            <textarea name="goals" class="meso-field" maxlength="2000" rows="3" aria-label="Goals" placeholder="What is this athlete working toward?">{{ athlete.goals }}</textarea>
+            <button type="submit" class="meso-btn">Save goals</button>
+          </form>
+          {% if athlete.program_goal %}
+            <p class="meso-sub" style="margin:10px 0 0;">Program goal: {{ athlete.program_goal }}</p>
           {% endif %}
         </div>
 
         <div class="meso-card meso-card--pad">
+          <p class="meso-eyebrow">Training history</p>
+          <form method="post" action="{% url 'meso:athlete_record' athlete.id %}" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
+            {% csrf_token %}
+            <label for="athlete-training-started" class="meso-row-meta">Training since</label>
+            <input id="athlete-training-started" type="date" name="training_started" class="meso-field" value="{{ athlete.training_started|default_if_none:'' }}" />
+            <textarea name="notes" class="meso-field" maxlength="5000" rows="4" aria-label="Notes" placeholder="Notes: injury history, preferences, context">{{ athlete.notes }}</textarea>
+            <button type="submit" class="meso-btn">Save training history</button>
+          </form>
+        </div>
+
+        <div class="meso-card meso-card--pad">
+          <p class="meso-eyebrow">Contraindications</p>
+          {% if athlete.active_contraindications %}
+            <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;">
+              {% for c in athlete.active_contraindications %}
+                <div style="display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border-radius:7px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 22%,#fff);">
+                  <i style="width:5px;height:5px;border-radius:50%;background:var(--warn);margin-top:6px;flex:0 0 auto;"></i>
+                  <span style="font-size:12px;color:var(--warn);font-weight:600;line-height:1.3;flex:1;min-width:0;overflow-wrap:anywhere;">{{ c.text }}</span>
+                  <form method="post" action="{% url 'meso:athlete_contraindication_clear' athlete.id c.id %}" style="margin:0;flex:0 0 auto;">
+                    {% csrf_token %}
+                    <button type="submit" class="meso-btn meso-btn--ghost" style="padding:3px 7px;font-size:11px;" aria-label="Clear contraindication: {{ c.text }}" title="Marks this contraindication resolved and keeps it on record.">Clear</button>
+                  </form>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="meso-sub" style="margin:0 0 10px;">None on file.</p>
+          {% endif %}
+          <form method="post" action="{% url 'meso:athlete_contraindication_add' athlete.id %}" style="display:flex;gap:8px;align-items:center;">
+            {% csrf_token %}
+            <input type="text" name="text" class="meso-field" maxlength="255" aria-label="Add a contraindication" placeholder="e.g. L knee: no deep flexion" style="flex:1;min-width:0;" />
+            <button type="submit" class="meso-btn">Add</button>
+          </form>
+        </div>
+
+        <div class="meso-card meso-card--pad">
           <p class="meso-eyebrow">Coach's programming style</p>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:9px;">
-            {% for tag in coach_style.tags %}
-              <span class="meso-tag">{{ tag }}</span>
-            {% endfor %}
-          </div>
-          <div style="font-size:11.5px;color:var(--dim);line-height:1.4;">
-            <span style="font-weight:700;color:var(--warn);">Avoid:</span> {{ coach_style.avoid }}
-          </div>
+          {% if coach_style.tags or coach_style.avoid %}
+            {% if coach_style.tags %}
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:9px;">
+                {% for tag in coach_style.tags %}
+                  <span class="meso-tag">{{ tag }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
+            {% if coach_style.avoid %}
+              <div style="font-size:11.5px;color:var(--dim);line-height:1.4;white-space:pre-wrap;"><span style="font-weight:700;color:var(--warn);">Avoid:</span> {{ coach_style.avoid }}</div>
+            {% endif %}
+            <p class="meso-sub" style="margin:10px 0 0;"><a href="{% url 'meso:settings' %}" style="color:var(--accent);">Edit</a></p>
+          {% else %}
+            <p class="meso-sub" style="margin:0;">Your style isn't set yet. <a href="{% url 'meso:settings' %}" style="color:var(--accent);">Set it in Meso settings</a></p>
+          {% endif %}
         </div>
 
         {# Personal records (Phase 4d) — the athlete's standing bests. #}
         {% include "meso/_pr_list.html" with records_owner="their" %}
+
+        {% if relationship.can_end %}
+          <div style="padding:2px 4px;">
+            <form method="post" action="{% url 'meso:relationship_end' relationship.token %}" onsubmit="return confirm('End this coaching relationship?');" style="margin:0;">
+              {% csrf_token %}
+              <button type="submit" class="meso-btn meso-btn--ghost">End coaching relationship</button>
+            </form>
+            <p class="meso-sub" style="margin:7px 0 0;">They move to Past athletes; their programs are archived, not deleted.</p>
+          </div>
+        {% endif %}
       </div>
 
       <!-- main -->

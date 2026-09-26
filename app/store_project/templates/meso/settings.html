@@ -40,7 +40,14 @@
             {{ coach_form.display_name }}
             {{ coach_form.display_name.errors }}
             <p class="meso-sub" style="margin:0;">How athletes see you. Leave blank to use your account name.</p>
-            <div><button type="submit" class="meso-btn meso-btn--primary">Save coaching name</button></div>
+            <label for="{{ coach_form.programming_style.id_for_label }}" class="meso-row-name">Programming style</label>
+            {{ coach_form.programming_style }}
+            {{ coach_form.programming_style.errors }}
+            <p class="meso-sub" style="margin:0;">Up to 12 comma-separated tags, each 40 characters or fewer.</p>
+            <label for="{{ coach_form.avoid_rules.id_for_label }}" class="meso-row-name">Avoid rules</label>
+            {{ coach_form.avoid_rules }}
+            {{ coach_form.avoid_rules.errors }}
+            <div><button type="submit" class="meso-btn meso-btn--primary">Save coaching settings</button></div>
           </form>
           <p class="meso-sub" style="margin:12px 0 0;">Athletes see you as: <strong>{{ coach_name }}</strong></p>
         </section>

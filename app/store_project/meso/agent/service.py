@@ -67,8 +67,9 @@ def _coach_style(coach):
 def build_context(plan, mesocycle):
     """Everything the model is grounded on, as a JSON-serializable dict.
 
-    Grounds on the plan's one athlete (profile, contraindications, recent logs)
-    plus the whole ``mesocycle`` **block** (``serialize_agent_block``): every
+    Grounds on the plan's one athlete (name, goals, training history, notes,
+    contraindications, and recent logs) plus the whole ``mesocycle`` **block**
+    (``serialize_agent_block``): every
     live week of it with its full session/cell grid and per-week
     volume/intensity/phase/deload flags, so the agent programs progression
     across the block, not one week in isolation (P4).
@@ -125,8 +126,20 @@ def build_context(plan, mesocycle):
         "coach_style": _coach_style(plan.coach),
         "block": serializers.serialize_agent_block(plan, mesocycle),
     }
+    profile = (
+        models.AthleteProfile.objects.filter(user_id=plan.relationship.athlete_id)
+        .values("goals", "notes", "training_started")
+        .first()
+    )
     context["athlete"] = {
         "name": link_athlete_name(plan.relationship),
+        "goals": profile["goals"] if profile else "",
+        "notes": profile["notes"] if profile else "",
+        "training_started": (
+            profile["training_started"].isoformat()
+            if profile and profile["training_started"]
+            else None
+        ),
         "contraindications": [
             c.text for c in plan.athlete.contraindications.filter(active=True)
         ],
