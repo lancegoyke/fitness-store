@@ -14,6 +14,16 @@ How to read the status field:
 
 ---
 
+## Names and labels (#602)
+
+- `User.name` is a person's account name; unnamed users fall back to their email.
+- A coach's `CoachProfile.display_name` is their own chosen athlete-facing name,
+  so it wins over `User.name`.
+- `CoachAthlete.label` is a coach's guess for one athlete, so the athlete's own
+  `User.name` wins; the label only precedes the email fallback.
+- Labels are per relationship, invisible to other coaches, and inert once the
+  athlete sets their own name. `UserUpdateView` edits names only, never email.
+
 ## Blockers (foundation — schema & architecture depend on these)
 
 ### B1 · Product shape & tenancy — single-coach or multi-coach?

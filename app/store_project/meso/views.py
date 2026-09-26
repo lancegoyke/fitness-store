@@ -65,6 +65,8 @@ from .billing import access as billing_access
 from .billing import agent_usage_report as usage_report
 from .billing import stripe_gateway as billing_gateway
 from .billing import webhooks as billing_webhooks
+from .forms import CoachDisplayNameForm
+from .forms import UserNameForm
 from .history import HistoryUnavailable
 from .history import record_plan_action
 from .history import restore_plan_snapshot
@@ -94,6 +96,10 @@ from .models import display_line_id
 from .models import hidden_parsed_set_pks
 from .models import newest_session_logs
 from .models import sub_line_warn_reason
+from .names import athlete_name
+from .names import clean_name
+from .names import coach_name
+from .names import link_athlete_name
 from .parsing import parse_performed
 from .parsing import performed_reps_text
 from .personal_records import new_records_in
@@ -131,6 +137,15 @@ def _is_coach(user):
         or CoachAthlete.objects.for_coach(user).exists()
         or CoachInvite.objects.for_coach(user).exists()
     )
+
+
+def _client_choices(relationships):
+    """Client-picker rows ordered by their resolved, relationship-aware name."""
+    rows = [
+        {"id": relationship.pk, "name": link_athlete_name(relationship)}
+        for relationship in relationships
+    ]
+    return sorted(rows, key=lambda row: row["name"].casefold())
 
 
 # -- billing gates (S6 Phase 3) -------------------------------------------
@@ -319,7 +334,7 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         if plan.is_template:
             return fallback
         athlete = plan.relationship.athlete
-        fallback["athlete_name"] = athlete.display_name()
+        fallback["athlete_name"] = athlete_name(athlete, plan.relationship.label)
         fallback["athlete_url"] = reverse("meso:athlete", kwargs={"pk": athlete.pk})
         weeks = (grid_data or {}).get("weeks") or []
         if weeks:
@@ -388,8 +403,8 @@ class RosterView(TemplateView):
             CoachAthlete.objects.for_coach(self.request.user)
             .active()
             .select_related("athlete", "athlete__athlete_profile")
-            .order_by("athlete__name", "athlete__email")
         )
+        links.sort(key=lambda link: link_athlete_name(link).casefold())
         # The downgrade soft-suspends every active link beyond the oldest free cap
         # (S6 Phase 5); flag those rows so the roster shows a "Suspended" badge.
         suspended = billing_access.suspended_athlete_ids(self.request.user)
@@ -407,6 +422,7 @@ class RosterView(TemplateView):
         athletes = [
             presenters.roster_athlete(
                 link.athlete,
+                label=link.label,
                 suspended=link.pk in suspended,
                 demo=link.is_demo,
                 self_link=link.is_self,
@@ -467,6 +483,52 @@ class RosterView(TemplateView):
         return ctx
 
 
+class MesoSettingsView(LoginRequiredMixin, TemplateView):
+    """Account naming and coach-facing identity settings for Meso."""
+
+    template_name = "meso/settings.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        is_coach = _is_coach(self.request.user)
+        profile = getattr(self.request.user, "coach_profile", None)
+        ctx["name_form"] = kwargs.get("name_form") or UserNameForm(
+            initial={"name": self.request.user.name}
+        )
+        ctx["is_coach"] = is_coach
+        if is_coach:
+            ctx["coach_form"] = kwargs.get("coach_form") or CoachDisplayNameForm(
+                initial={
+                    "display_name": getattr(profile, "display_name", ""),
+                }
+            )
+            ctx["coach_name"] = coach_name(self.request.user)
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        section = request.POST.get("section")
+        if section == "name":
+            form = UserNameForm(request.POST)
+            if form.is_valid():
+                request.user.name = form.cleaned_data["name"]
+                request.user.save(update_fields=["name"])
+                messages.success(request, "Your name was updated.")
+                return redirect("meso:settings")
+            return self.render_to_response(self.get_context_data(name_form=form))
+
+        if section == "coaching" and _is_coach(request.user):
+            form = CoachDisplayNameForm(request.POST)
+            if form.is_valid():
+                profile, _ = CoachProfile.objects.get_or_create(user=request.user)
+                profile.display_name = form.cleaned_data["display_name"]
+                profile.save(update_fields=["display_name"])
+                messages.success(request, "Your coaching name was updated.")
+                return redirect("meso:settings")
+            return self.render_to_response(self.get_context_data(coach_form=form))
+
+        raise Http404("Unknown settings section")
+
+
 class RelationshipHistoryView(LoginRequiredMixin, TemplateView):
     """Past athletes (``/meso/history/``) — the coach surface for closed links.
 
@@ -524,14 +586,12 @@ class TemplateLibraryView(LoginRequiredMixin, TemplateView):
         # The coach's deliverable clients, offered as "Start for client" /
         # "Batch deliver" targets. Soft-suspended (over-seat-limit, D6) links are
         # omitted — the endpoints re-check, this just keeps the screen honest.
-        ctx["clients"] = [
-            {"id": rel.pk, "name": rel.athlete.display_name()}
-            for rel in CoachAthlete.objects.for_coach(self.request.user)
+        ctx["clients"] = _client_choices(
+            CoachAthlete.objects.for_coach(self.request.user)
             .active()
             .exclude(pk__in=billing_access.suspended_athlete_ids(self.request.user))
             .select_related("athlete")
-            .order_by("athlete__name", "athlete__email")
-        ]
+        )
         return ctx
 
 
@@ -563,7 +623,7 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # Light up the program block (cadence, the macrocycle rail, status,
         # latest session). The athlete identity record carries the program
         # overlay merged in.
-        athlete = presenters.profile_athlete(link.athlete)
+        athlete = presenters.profile_athlete(link.athlete, link.label)
         program = presenters.profile_program(link, working_plan)
         athlete.update(program["athlete"])
         ctx["athlete"] = athlete
@@ -575,7 +635,30 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # Whether to offer "Draft with AI" on the create CTA — the same agent
         # allowance gate the endpoint enforces (the draft *is* an agent run).
         ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
+        ctx["athlete_label"] = link.label
+        ctx["athlete_has_own_name"] = bool(clean_name(link.athlete.name))
         return ctx
+
+
+@login_required
+@require_POST
+def athlete_label_update(request, pk):
+    """Set this coach's private fallback label for an active athlete link."""
+    label = clean_name(request.POST.get("label", ""))
+    if len(label) > 255:
+        return HttpResponseBadRequest("label must be 255 characters or fewer.")
+    with transaction.atomic():
+        # Lock order: User → CoachAthlete (docs/meso/decisions.md).
+        athlete = get_object_or_404(User.objects.select_for_update(no_key=True), pk=pk)
+        link = get_object_or_404(
+            CoachAthlete.objects.select_for_update(no_key=True).active(),
+            coach=request.user,
+            athlete=athlete,
+        )
+        link.label = label
+        link.save(update_fields=["label"])
+    messages.success(request, "Athlete name updated.")
+    return redirect("meso:athlete", pk=pk)
 
 
 class UsageDashboardView(UserPassesTestMixin, TemplateView):
@@ -3755,7 +3838,7 @@ def invite_accept(request, token):
         else:
             messages.error(
                 request,
-                f"{link.coach.display_name()} can't take on new athletes right now.",
+                f"{coach_name(link.coach)} can't take on new athletes right now.",
             )
         return redirect("meso:roster")
     link.accept()
@@ -3838,7 +3921,7 @@ def relationship_reinvite(request, token):
         CoachAthlete.invite(coach=request.user, athlete=athlete)
     messages.success(
         request,
-        f"Re-invited {athlete.display_name()} — they'll see it on their training home.",
+        f"Re-invited {athlete_name(athlete, link.label)} — they'll see it on their training home.",
     )
     return redirect("meso:relationship_history")
 
@@ -3885,6 +3968,7 @@ def athlete_request_coach(request):
         return redirect("meso:athlete_home")
     coach = (
         User.objects.filter(email__iexact=email, coach_profile__isnull=False)
+        .select_related("coach_profile")
         .exclude(pk=request.user.pk)
         .first()
     )
@@ -3917,19 +4001,17 @@ def athlete_request_coach(request):
             .first()
         )
         if existing and existing.is_active:
-            messages.info(
-                request, f"You're already training with {coach.display_name()}."
-            )
+            messages.info(request, f"You're already training with {coach_name(coach)}.")
             return redirect("meso:athlete_home")
         if existing and existing.status == CoachAthlete.Status.PENDING_ATHLETE_REQUEST:
             messages.info(
-                request, f"You've already asked to train with {coach.display_name()}."
+                request, f"You've already asked to train with {coach_name(coach)}."
             )
             return redirect("meso:athlete_home")
         if existing and existing.status == CoachAthlete.Status.PENDING_COACH_INVITE:
             messages.info(
                 request,
-                f"{coach.display_name()} already invited you — accept it below.",
+                f"{coach_name(coach)} already invited you — accept it below.",
             )
             return redirect("meso:athlete_home")
 
@@ -3949,8 +4031,8 @@ def athlete_request_coach(request):
         _flash_send_result(
             request,
             sent=sent,
-            success_message=f"Request sent to {coach.display_name()}.",
-            target=coach.display_name(),
+            success_message=f"Request sent to {coach_name(coach)}.",
+            target=coach_name(coach),
             bounce_note="Consider telling them about your request directly.",
             noun="Request",
             saved_note="saved",
@@ -4045,6 +4127,10 @@ def coach_invite(request):
         )
         return redirect("meso:roster")
     email = CoachInvite.normalize_email(request.POST.get("email"))
+    label = clean_name(request.POST.get("name", ""))
+    if len(label) > 255:
+        messages.error(request, "Name must be 255 characters or fewer.")
+        return redirect("meso:roster")
     try:
         validate_email(email)
     except ValidationError:
@@ -4069,7 +4155,9 @@ def coach_invite(request):
         )
         if locked_coach is None:
             raise Http404("Unknown coach")
-        invite, created = CoachInvite.open_for(coach=request.user, email=email)
+        invite, created = CoachInvite.open_for(
+            coach=request.user, email=email, label=label
+        )
     track(EventName.INVITE_SENT, actor=request.user, subject=invite, new=created)
     accept_url = request.build_absolute_uri(
         reverse("meso:invite_claim", kwargs={"token": invite.token})
@@ -4217,7 +4305,10 @@ def invite_claim(request, token):
     if meso_sandbox.is_sandbox(request.user):
         logout(request)
         return redirect(request.get_full_path())
-    invite = get_object_or_404(CoachInvite, token=token)
+    invite = get_object_or_404(
+        CoachInvite.objects.select_related("coach", "coach__coach_profile"),
+        token=token,
+    )
     if request.method == "POST":
         action = request.POST.get("action")
         if action not in ("accept", "decline"):
@@ -4266,7 +4357,7 @@ def invite_claim(request, token):
                 if not billing_access.can_add_athlete(invite.coach):
                     messages.error(
                         request,
-                        f"{invite.coach.display_name()} has reached their athlete "
+                        f"{coach_name(invite.coach)} has reached their athlete "
                         "limit and can't add you right now.",
                     )
                     return redirect("meso:athlete_home")
@@ -4278,7 +4369,7 @@ def invite_claim(request, token):
                 track(EventName.INVITE_ACCEPTED, actor=request.user, subject=invite)
                 messages.success(
                     request,
-                    f"You're now training with {invite.coach.display_name()}.",
+                    f"You're now training with {coach_name(invite.coach)}.",
                 )
                 return redirect("meso:athlete_home")
             invite.decline()
@@ -4303,7 +4394,7 @@ def invite_claim(request, token):
         "meso/invite_claim.html",
         {
             "invite": invite,
-            "coach_name": invite.coach.display_name(),
+            "coach_name": coach_name(invite.coach),
             "is_self": request.user == invite.coach,
         },
     )
@@ -5914,7 +6005,7 @@ def plan_batch_deliver(request, plan_id):
             _notify_athlete_block_delivered(
                 request, copy, block, len(live_weeks), via="batch"
             )
-            delivered_names.append(relationship.athlete.display_name())
+            delivered_names.append(link_athlete_name(relationship))
     messages.success(
         request,
         f"Delivered an independent copy to {', '.join(delivered_names)}.",
@@ -5998,7 +6089,7 @@ def template_use(request, plan_id):
     )
     messages.success(
         request,
-        f"Started {copy.title} for {relationship.athlete.display_name()}.",
+        f"Started {copy.title} for {link_athlete_name(relationship)}.",
     )
     return redirect("meso:designer_plan", plan_id=copy.pk)
 
@@ -6058,6 +6149,7 @@ def _notify_athlete_block_delivered(
                     week_count=week_count,
                     home_url=home_url,
                     unsubscribe_url=unsubscribe_url,
+                    athlete_label=plan.relationship.label,
                 )
         except Exception:  # mail is best-effort; never fail a delivery on it
             logger.exception(
@@ -7110,15 +7202,13 @@ class DeliverView(LoginRequiredMixin, TemplateView):
         # clients, offered as "send each an independent copy" checkboxes.
         # Soft-suspended (over-seat-limit, D6) links are omitted — the POST
         # re-checks, this just keeps the screen honest.
-        ctx["batch_candidates"] = [
-            {"id": rel.pk, "name": rel.athlete.display_name()}
-            for rel in CoachAthlete.objects.for_coach(self.request.user)
+        ctx["batch_candidates"] = _client_choices(
+            CoachAthlete.objects.for_coach(self.request.user)
             .active()
             .exclude(pk=plan.relationship_id)
             .exclude(pk__in=billing_access.suspended_athlete_ids(self.request.user))
             .select_related("athlete")
-            .order_by("athlete__name", "athlete__email")
-        ]
+        )
         return ctx
 
     def _target_week(self, plan):

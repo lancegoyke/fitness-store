@@ -49,15 +49,14 @@ from store_project.meso import serializers
 from store_project.meso import settle
 from store_project.meso.admin import ExerciseSlotInline
 from store_project.meso.admin import SessionSlotInline
-from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
-from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AthleteOneRm
 from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import LoggedSet
+from store_project.meso.models import Plan
 from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
@@ -230,13 +229,28 @@ class TestBackfillMigration:
             executor.migrate([MESO_0049])
             executor.loader.build_graph()
 
-            # Everything except `LoggedSet` is untouched by 0050/0051, so the
-            # ordinary factories/real models build it — only `LoggedSet`
-            # itself needs the historical model matching each schema step.
+            # `CoachAthlete` gained `label` after this historical state, so it
+            # joins `LoggedSet` in using the migration registry. The remaining
+            # models are unchanged by 0050–0052 and can use their normal
+            # factories; pass the relationship pk so the current Plan model
+            # never tries to hydrate the historical relationship instance.
             coach = UserFactory()
             athlete = UserFactory()
-            rel = CoachAthleteFactory(coach=coach, athlete=athlete)
-            plan = PlanFactory(relationship=rel)
+            old_apps = executor.loader.project_state([MESO_0049]).apps
+            OldCoachAthlete = old_apps.get_model("meso", "CoachAthlete")
+            rel = OldCoachAthlete.objects.create(
+                coach_id=coach.pk,
+                athlete_id=athlete.pk,
+                status="active",
+                invited_by="coach",
+            )
+            plan = Plan.objects.create(
+                relationship_id=rel.pk,
+                title="Migration fixture",
+                goal="Hypertrophy",
+                status="draft",
+                unit="kg",
+            )
             meso = MesocycleFactory(plan=plan, name="Block 1", order=0)
             week = WeekFactory(mesocycle=meso, index=1)
             session = day(week, day_number=1, name="Lower")
@@ -254,9 +268,7 @@ class TestBackfillMigration:
             )
             log = SessionLog.objects.create(session=session, athlete=athlete)
 
-            OldLoggedSet = executor.loader.project_state([MESO_0049]).apps.get_model(
-                "meso", "LoggedSet"
-            )
+            OldLoggedSet = old_apps.get_model("meso", "LoggedSet")
             with_prescription = OldLoggedSet.objects.create(
                 session_log_id=log.pk,
                 prescription_id=prescription_a.pk,

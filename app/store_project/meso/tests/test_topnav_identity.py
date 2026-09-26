@@ -4,8 +4,7 @@ The coach shell used to render a hard-coded, non-interactive "LG" monogram in
 the ``.meso-topnav`` corner — wrong initials for every coach but one (and for
 every sandbox demo visitor), and dead UI sitting right under the site nav's
 real Account/Logout links. The corner's job is *identity*: show who is signed
-in (which the site nav's text links don't) and link to the account page. When
-Meso grows its own settings surface, this avatar is its natural entry point.
+in (which the site nav's text links don't) and link to Meso settings.
 
 The athlete PWA and public landing overrides of ``topnav_avatar`` are out of
 scope here — they already render the right thing (athlete initials / a Log in
@@ -40,10 +39,10 @@ class TestCoachTopnavIdentity:
         assert AVATAR_CLASS in body
         assert ">MO</a>" in body
 
-    def test_avatar_links_to_the_account_page(self, client):
+    def test_avatar_links_to_meso_settings(self, client):
         client.force_login(make_coach())
         body = client.get(reverse("meso:roster")).content.decode()
-        assert f'{AVATAR_CLASS} href="{reverse("users:profile")}"' in body
+        assert f'{AVATAR_CLASS} href="{reverse("meso:settings")}"' in body
 
     def test_avatar_tooltip_names_the_signed_in_coach(self, client):
         client.force_login(make_coach(name="Maya Okonkwo"))
@@ -66,13 +65,13 @@ class TestOfflineShellStaysGeneric:
     def test_offline_page_renders_no_avatar_anonymously(self, client):
         body = client.get(reverse("meso:offline")).content.decode()
         assert "meso-avatar" not in body
-        assert reverse("users:profile") not in body
+        assert reverse("meso:settings") not in body
 
     def test_offline_page_renders_no_avatar_when_authenticated(self, client):
         # The service worker precaches /meso/offline/ with the athlete's
         # credentials — an inherited identity chip would bake their initials
-        # and a dead /users/profile/ link into the cached offline shell.
+        # and a dead settings link into the cached offline shell.
         client.force_login(make_coach(name="Maya Okonkwo"))
         body = client.get(reverse("meso:offline")).content.decode()
         assert "meso-avatar" not in body
-        assert reverse("users:profile") not in body
+        assert reverse("meso:settings") not in body

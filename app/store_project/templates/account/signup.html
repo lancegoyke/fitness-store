@@ -26,6 +26,12 @@
     {% endif %}
 
     <div class="stack">
+      <label for="{{ form.name.id_for_label }}">{% trans "Your name" %}</label>
+      {{ form.name }}
+      {{ form.name.errors }}
+    </div>
+
+    <div class="stack">
       <label for="{{ form.email.id_for_label }}">{% trans "Email" %}</label>
       {{ form.email }}
       {{ form.email.errors }}

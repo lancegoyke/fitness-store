@@ -5,6 +5,9 @@ from django.core.mail import EmailMessage
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 
+from store_project.meso.names import athlete_name
+from store_project.meso.names import coach_name
+
 from .models import EmailKind
 
 logger = logging.getLogger(__name__)
@@ -206,7 +209,7 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
     if not email:
         return False
     context = {
-        "coach_name": coach.display_name(),
+        "coach_name": coach_name(coach),
         "accept_url": accept_url,
     }
     subject = render_to_string(
@@ -250,7 +253,7 @@ def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
     if not email:
         return False
     context = {
-        "coach_name": coach.display_name(),
+        "coach_name": coach_name(coach),
         "accept_url": accept_url,
     }
     subject = render_to_string(
@@ -296,7 +299,7 @@ def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
     if not coach.email:
         return False
     context = {
-        "athlete_name": athlete.display_name(),
+        "athlete_name": athlete_name(athlete),
         "roster_url": roster_url,
     }
     subject = render_to_string(
@@ -380,7 +383,14 @@ def send_margin_alert_email(*, alerts, month_label, threshold) -> bool:
 
 
 def send_block_delivered_email(
-    *, athlete, coach, plan, week_count, home_url, unsubscribe_url=None
+    *,
+    athlete,
+    coach,
+    plan,
+    week_count,
+    home_url,
+    unsubscribe_url=None,
+    athlete_label="",
 ) -> bool:
     """Email an athlete that their coach delivered a whole new training block.
 
@@ -401,6 +411,7 @@ def send_block_delivered_email(
         home_url: absolute URL of the athlete's training surface (``/meso/me/``).
         unsubscribe_url: absolute URL of the tokened, login-free unsubscribe
             page; ``None`` omits the headers and footer.
+        athlete_label: this coach's fallback name for an unnamed athlete.
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because the athlete
@@ -414,8 +425,8 @@ def send_block_delivered_email(
     if not athlete.email:
         return False
     context = {
-        "athlete_name": athlete.display_name(),
-        "coach_name": coach.display_name(),
+        "athlete_name": athlete_name(athlete, athlete_label),
+        "coach_name": coach_name(coach),
         "plan_title": plan.title,
         "week_count": week_count,
         "home_url": home_url,

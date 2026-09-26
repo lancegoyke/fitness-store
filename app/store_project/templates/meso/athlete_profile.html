@@ -31,6 +31,14 @@
         <div>
           <h1 class="meso-h1">{{ athlete.name }}</h1>
           <p class="meso-sub">{{ athlete.subtitle }}</p>
+          <form method="post" action="{% url 'meso:athlete_label' athlete.id %}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            {% csrf_token %}
+            <input type="text" name="label" value="{{ athlete_label }}" maxlength="255" placeholder="Your name for this athlete" aria-label="Your name for this athlete" style="appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:7px 9px;outline:none;" />
+            <button type="submit" class="meso-btn meso-btn--ghost">Save name</button>
+            <span class="meso-row-meta">
+              {% if athlete_has_own_name %}Their own name is shown; this label is a fallback.{% else %}Shown to you (and in emails to them) until they set their own name.{% endif %}
+            </span>
+          </form>
         </div>
       </div>
       {% if athlete.status == 'needs_review' %}

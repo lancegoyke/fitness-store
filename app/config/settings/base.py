@@ -250,12 +250,13 @@ ACCOUNT_LOGOUT_REDIRECT_URL = "/accounts/login/"
 ACCOUNT_LOGOUT_ON_GET = True
 LOGIN_REDIRECT_URL = "/users/profile/"
 
-ACCOUNT_USER_DISPLAY = "store_project.users.display.get_email"
+ACCOUNT_USER_DISPLAY = "store_project.users.display.get_display_name"
 # Tags every allauth-rendered message with its EmailKind for the staff
 # deliverability dashboard (issue #514) -- see store_project.users.adapters.
 ACCOUNT_ADAPTER = "store_project.users.adapters.AccountAdapter"
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*"]
+ACCOUNT_SIGNUP_FORM_CLASS = "store_project.users.forms.SignupForm"
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_SESSION_REMEMBER = True
 ACCOUNT_EMAIL_CONFIRMATION_EXPIRE_DAYS = 7

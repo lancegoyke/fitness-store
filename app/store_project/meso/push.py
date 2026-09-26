@@ -35,6 +35,8 @@ from pywebpush import webpush
 from store_project.notifications import push as notifications_push
 from store_project.notifications.models import PushKind
 
+from .names import coach_name
+
 logger = logging.getLogger(__name__)
 
 # Push services reject stale messages; expire the "your week is ready" nudge
@@ -121,7 +123,7 @@ def notify_block_delivered(*, athlete, coach, plan, mesocycle, week_count, home_
     payload = {
         "title": "Your new training block is ready",
         "body": (
-            f"{coach.display_name()} delivered a new block "
+            f"{coach_name(coach)} delivered a new block "
             f"({_week_count_label(week_count)}) of {plan.title}."
         ),
         "url": home_url,

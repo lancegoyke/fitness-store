@@ -25,6 +25,7 @@ from .. import models
 from .. import serializers
 from ..billing import access as billing_access
 from ..billing import agent_costs
+from ..names import link_athlete_name
 from . import client as client_module
 from . import validation
 
@@ -125,7 +126,7 @@ def build_context(plan, mesocycle):
         "block": serializers.serialize_agent_block(plan, mesocycle),
     }
     context["athlete"] = {
-        "name": plan.athlete.display_name(),
+        "name": link_athlete_name(plan.relationship),
         "contraindications": [
             c.text for c in plan.athlete.contraindications.filter(active=True)
         ],

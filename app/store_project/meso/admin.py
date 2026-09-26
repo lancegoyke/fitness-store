@@ -100,6 +100,7 @@ class CoachAthleteAdmin(CascadeLockDeleteMixin, admin.ModelAdmin):
     list_display = (
         "coach",
         "athlete",
+        "label",
         "status",
         "invited_by",
         "is_demo",
@@ -121,6 +122,7 @@ class CoachAthleteAdmin(CascadeLockDeleteMixin, admin.ModelAdmin):
 class CoachInviteAdmin(admin.ModelAdmin):
     list_display = (
         "email",
+        "label",
         "coach",
         "status",
         "created_at",
