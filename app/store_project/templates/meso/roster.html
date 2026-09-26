@@ -200,6 +200,7 @@
           {% else %}
             <details data-tour="roster-invite" style="border-top:1px solid var(--line-2);">
               <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent);">+ Invite an athlete</summary>
+              {% if invite_signed_as %}<p class="meso-row-meta" style="margin:0;padding:0 16px 4px;">Invites are signed “{{ invite_signed_as }}”. <a href="{% url 'meso:settings' %}" style="color:var(--accent);">Add your name</a> to change that.</p>{% endif %}
               <form method="post" action="{% url 'meso:coach_invite' %}" style="display:flex;gap:9px;padding:4px 16px 16px;flex-wrap:wrap;">
                 {% csrf_token %}
                 <input name="name" type="text" maxlength="255" placeholder="Name (optional)" style="flex:1;min-width:150px;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />

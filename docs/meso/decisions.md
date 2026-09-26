@@ -23,6 +23,13 @@ How to read the status field:
   `User.name` wins; the label only precedes the email fallback.
 - Labels are per relationship, invisible to other coaches, and inert once the
   athlete sets their own name. `UserUpdateView` edits names only, never email.
+- An email invite's label reaches the link when the claim creates or reopens it,
+  or when the link's label is empty; it never replaces a label already set on a
+  link that was already active (#623).
+- Social signups (Google, Facebook) set `User.name` from the provider's `name`,
+  else `first_name last_name`, only when it is empty (#622). A coach with neither
+  `User.name` nor a `CoachProfile.display_name` sees a one-line nudge on the
+  roster invite form.
 
 ## Athlete record (#603)
 
