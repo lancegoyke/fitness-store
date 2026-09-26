@@ -499,6 +499,8 @@ the staff read-out of Meso usage, gated like the other staff dashboards
 (anonymous → login, non-staff → 403). `?days=7|30|90`, default 30, parsed like
 the email dashboard's. A row is in the window when `now - days <= ts <= now`.
 
+**Superseded by #613:** The gate is now `is_superuser`; `handle_no_permission` is unchanged, and the nav links plus `/backside/` Dashboards module use the same gate.
+
 **Sources.** A number comes from the table that already records the fact with
 a timestamp, and from `analytics.Event` only when nothing else does. Events
 exist only since the slice-1 deploy (2026-09-19), so an `Event`-sourced number
@@ -1680,6 +1682,7 @@ _(Append dated entries here as decisions land.)_
   (deferred — needs an Admin API key + live org access). Remaining Meso backlog
   otherwise unchanged: billing annual prices (blocked on the owner's annual
   numbers) + the group agent (LARGE owner-decision).
+  **Superseded by #613:** The gate is now `is_superuser`; `handle_no_permission` is unchanged, and the nav links plus `/backside/` Dashboards module use the same gate.
 - 2026-06-30 — **Group agent Phase 1 built: the AI agent edits the shared program**
   (PR #350, no migration). The proposal agent rejected a group plan with a `400`
   (its grounding dereferenced a single `plan.athlete`); now it grounds on the

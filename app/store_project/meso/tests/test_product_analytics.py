@@ -1,4 +1,4 @@
-"""RED tests for #509 slice 2 — the `/meso/analytics/` staff dashboard.
+"""RED tests for #509 slice 2 — the `/meso/analytics/` superuser dashboard.
 
 Read first: `docs/meso/decisions.md` "First-party usage events (#509)";
 `analytics/{events,models,track}.py`; `meso/views.py`
@@ -2014,15 +2014,15 @@ class TestProductAnalyticsView:
         assert resp.status_code == 302
         assert "/accounts/login/" in resp["Location"]
 
-    def test_authenticated_non_staff_is_forbidden(self, client):
+    def test_authenticated_non_superuser_is_forbidden(self, client):
         client.force_login(UserFactory())
 
         resp = client.get(reverse("meso:product_analytics"))
 
         assert resp.status_code == 403
 
-    def test_staff_gets_200_with_the_four_section_headings(self, client):
-        client.force_login(UserFactory(is_staff=True))
+    def test_superuser_gets_200_with_the_four_section_headings(self, client):
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         resp = client.get(reverse("meso:product_analytics"))
         body = resp.content.decode()
@@ -2037,7 +2037,7 @@ class TestProductAnalyticsView:
         ]
 
     def test_push_table_renders_inside_the_email_card_not_a_fifth_h2(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         sent_at = timezone.now() - datetime.timedelta(days=1)
         _push_notification(sent_at=sent_at)
 
@@ -2055,14 +2055,14 @@ class TestProductAnalyticsView:
         ]
 
     def test_days_7_sets_the_context(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         resp = client.get(reverse("meso:product_analytics"), {"days": 7})
 
         assert resp.context["days"] == 7
 
     def test_invalid_days_defaults_to_30_with_a_flashed_message(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         resp = client.get(reverse("meso:product_analytics"), {"days": "abc"})
 
@@ -2074,7 +2074,7 @@ class TestProductAnalyticsView:
     def test_context_carries_active_analytics_and_the_email_dashboard_link(
         self, client
     ):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         resp = client.get(reverse("meso:product_analytics"), {"days": 7})
 
@@ -2183,7 +2183,7 @@ class TestProductAnalyticsQueryCount:
             )
 
     def test_query_count_is_fixed_regardless_of_data_size(self, client, now):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         url = reverse("meso:product_analytics")
 
         with CaptureQueriesContext(connection) as empty:

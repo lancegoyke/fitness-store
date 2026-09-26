@@ -1,4 +1,4 @@
-"""Adapt the SES event ledger into the staff deliverability dashboard's context.
+"""Adapt the SES event ledger into the superuser dashboard's context.
 
 Issue #507 part 2. ``models.py`` and ``ses_events.py`` (part 1) write two
 tables: ``SentEmail`` (one row per message SES actually accepted) and

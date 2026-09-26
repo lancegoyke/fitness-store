@@ -750,7 +750,7 @@ def billing_state(coach, *, checkout_pending=False):
 def coach_billing(coach, *, checkout_pending=False):
     """The coach-facing billing & usage page context (agent-usage — coach surface).
 
-    The complement to the staff-only owner dashboard (``usage_dashboard``): that
+    The complement to the superuser-only owner dashboard (``usage_dashboard``): that
     shows org-wide **cost** (COGS); this shows *one coach* their **bill** (the flat
     monthly Pro price they owe, D14) and **how much agent they've used** this month,
     broken down per athlete. The hard line: a coach sees what they pay and how
@@ -1993,7 +1993,7 @@ def usage_dashboard(report, *, threshold):
 
 
 def tour_funnel(*, variant=None, since=None):
-    """Aggregate :class:`TourEvent` rows into the staff funnel dashboard's context.
+    """Aggregate :class:`TourEvent` rows into the superuser funnel dashboard.
 
     The read side of the guided-tour analytics (#441 P3-6): the ``record_*``
     helpers write one row per funnel moment; this rolls them up per-kind,
@@ -2087,7 +2087,7 @@ def tour_funnel(*, variant=None, since=None):
 
 
 # ---------------------------------------------------------------------------
-# Product analytics (#509 slice 2): the staff dashboard at /meso/analytics/.
+# Product analytics (#509 slice 2): the superuser dashboard at /meso/analytics/.
 #
 # ``track()`` (``analytics/track.py``) writes one ``Event`` row per first-party
 # action; this rolls those up alongside the pre-existing Meso tables (``Plan``/
@@ -2229,7 +2229,7 @@ def _self_subject_exclusion():
 
 
 def product_analytics(*, days, now=None):
-    """Aggregate Meso's usage tables into the staff dashboard's context (#509).
+    """Aggregate Meso's usage tables into the superuser dashboard context (#509).
 
     ``now`` defaults to ``timezone.now()``. ``days`` sets the report's own
     window (``[since, now]``, inclusive both ends) for the funnel, feature

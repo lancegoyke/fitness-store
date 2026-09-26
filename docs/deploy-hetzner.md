@@ -263,7 +263,7 @@ The web container's healthcheck performs an internal HTTPS-style GET, so a
   destinations → make sure **Send, Delivery, Open, Click, Bounce, Complaint**
   are selected (Reject, DeliveryDelay, and RenderingFailure are logged by the
   webhook but not stored yet — see `ses_events.py`).
-- **Dashboard:** `/backside/email/` (staff only) — totals, a per-kind
+- **Dashboard:** `/backside/email/` (superusers only) — totals, a per-kind
   breakdown, a per-day trend, recent events, bounce/complaint problems, and
   the current SES blacklist, with a recipient lookup (`?q=`) and a
   7/30/90-day window (`?days=`).

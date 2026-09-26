@@ -1,4 +1,4 @@
-"""Views for issue #507: the SES/SNS event webhook and the staff dashboard.
+"""Views for issue #507: the SES/SNS event webhook and the superuser dashboard.
 
 The dashboard (part 2) reads the SES event ledger ``presenters.email_dashboard``
 aggregates: ``SentEmail`` (written the moment ``SESBackend`` hands a message
@@ -8,8 +8,8 @@ possible — see ``ses_events`` and ``models``).
 
 Gate + window handling mirror ``meso.views.TourFunnelView`` /
 ``UsageDashboardView`` exactly: anonymous → login redirect (the
-``UserPassesTestMixin`` default), authenticated non-staff → a flat 403 (so a
-logged-in coach or athlete can't probe org-wide delivery data), staff → 200.
+``UserPassesTestMixin`` default), authenticated non-superuser → a flat 403 (so a
+logged-in coach or athlete can't probe org-wide delivery data), superuser → 200.
 
 Issue #514 moved the dashboard's template off the Meso shell onto
 ``admin/base_site.html``, so its context now also carries
@@ -59,7 +59,7 @@ class EmailDashboardView(UserPassesTestMixin, TemplateView):
     template_name = "notifications/email_dashboard.html"
 
     def test_func(self):
-        return self.request.user.is_staff
+        return self.request.user.is_superuser
 
     def handle_no_permission(self):
         # Authenticated-but-unauthorized → 403 (not a pointless login bounce);
@@ -105,9 +105,9 @@ class EmailDashboardBlacklistClearView(UserPassesTestMixin, View):
     A bounce or complaint auto-blacklists a recipient (django-ses's own
     signal handlers, connected off ``bounce_received``/``complaint_received``);
     once the underlying problem is fixed, staff need a one-click way to let
-    SES try that recipient again. Gate mirrors ``EmailDashboardView``; a GET
-    is simply not allowed (``http_method_names`` limits this to POST, so
-    Django's own ``View.dispatch`` 405s it).
+    SES try that recipient again. This action retains its staff gate; a GET is
+    simply not allowed (``http_method_names`` limits this to POST, so Django's
+    own ``View.dispatch`` 405s it).
     """
 
     http_method_names = ["post"]

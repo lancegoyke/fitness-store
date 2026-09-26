@@ -3,8 +3,8 @@
 A bounce or complaint auto-blacklists a recipient (django-ses's own signal
 handlers); once the underlying problem is fixed (a mailbox is reactivated, a
 complaint was a mistake, ...) staff need a one-click way to let SES try that
-recipient again. POST-only, staff-gated identically to
-``EmailDashboardView``, CSRF-protected (the default for a Django form POST).
+recipient again. This POST-only action retains its staff gate and is
+CSRF-protected (the default for a Django form POST).
 
 Pre-implementation this is RED: ``notifications:email_blacklist_clear`` has no
 URL/view yet, so every test fails with ``NoReverseMatch``.

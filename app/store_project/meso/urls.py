@@ -29,11 +29,11 @@ urlpatterns = [
     ),
     path("designer/", MesoDesignerView.as_view(), name="designer"),
     # Owner-facing agent usage + margin dashboard (agent-usage Phase 4) —
-    # staff-gated, all-coach; the web read-out of meso_agent_usage_report.
+    # superuser-gated, all-coach; the web read-out of meso_agent_usage_report.
     path("usage/", UsageDashboardView.as_view(), name="usage_dashboard"),
-    # Owner-facing guided-tour funnel dashboard (#441 P3-6) — staff-gated, all-coach.
+    # Owner-facing guided-tour funnel dashboard (#441 P3-6) — superuser-only.
     path("tour/funnel/", views.TourFunnelView.as_view(), name="tour_funnel"),
-    # Owner-facing product-analytics dashboard (#509 slice 2) — staff-gated, all-coach.
+    # Owner-facing product-analytics dashboard (#509 slice 2) — superuser-only.
     path(
         "analytics/",
         views.ProductAnalyticsView.as_view(),

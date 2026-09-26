@@ -1,7 +1,7 @@
-"""Issue #507 part 2 — the staff email deliverability dashboard view.
+"""Issue #507 part 2 — the superuser email deliverability dashboard view.
 
-Mirrors ``meso.views.TourFunnelView`` / ``UsageDashboardView``'s staff gate
-exactly (anon → login, non-staff → 403, staff → 200) and wires the
+Mirrors ``meso.views.TourFunnelView`` / ``UsageDashboardView``'s superuser gate
+exactly (anon → login, non-superuser → 403, superuser → 200) and wires the
 ``?days=7|30|90`` window (default 30; invalid input falls back to 30 with a
 flashed ``messages.error``, mirroring ``UsageDashboardView._window``) and the
 ``?q=<email>`` recipient lookup on top of ``presenters.email_dashboard``.
@@ -61,12 +61,12 @@ class TestAdminChrome:
     """Issue #514: the dashboard moved off the Meso shell onto ``admin/base_site.html``.
 
     It must render with the real Django admin header/breadcrumbs/nav sidebar
-    (``admin.site.each_context`` in the view's context) and carry no trace of
-    Meso.
+    (``admin.site.each_context`` in the view's context) without rendering the
+    Meso application shell.
     """
 
     def test_renders_on_the_admin_base(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         body = client.get(_url()).content.decode()
 
@@ -75,15 +75,15 @@ class TestAdminChrome:
         assert "Email deliverability" in body
 
     def test_no_meso_chrome(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         body = client.get(_url()).content.decode()
 
-        assert "Meso" not in body
-        assert "meso-" not in body
+        assert 'class="meso-app"' not in body
+        assert 'class="meso-topnav"' not in body
 
     def test_breadcrumbs_home_links_to_admin_index(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         body = client.get(_url()).content.decode()
 
@@ -96,13 +96,13 @@ class TestGate:
         assert resp.status_code == 302
         assert "/accounts/login/" in resp["Location"]
 
-    def test_authenticated_non_staff_is_forbidden(self, client):
+    def test_authenticated_non_superuser_is_forbidden(self, client):
         client.force_login(UserFactory())
         resp = client.get(_url())
         assert resp.status_code == 403
 
-    def test_staff_gets_the_dashboard(self, client):
-        client.force_login(UserFactory(is_staff=True))
+    def test_superuser_gets_the_dashboard(self, client):
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         resp = client.get(_url())
         assert resp.status_code == 200
         assert resp.templates[0].name == "notifications/email_dashboard.html"
@@ -120,7 +120,7 @@ class TestTextOnlyOpenRateRendersAsDash:
 
     def test_password_reset_row_shows_a_dash_not_a_percentage(self, client):
         _sent(kind=EmailKind.PASSWORD_RESET)
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         table = _table(client.get(_url()).content.decode(), "email-by-kind")
 
@@ -130,7 +130,7 @@ class TestTextOnlyOpenRateRendersAsDash:
     def test_html_kind_still_shows_a_percentage(self, client):
         _sent(kind=EmailKind.ORDER_CONFIRMATION)
         _event(EmailEvent.EventType.OPEN, kind=EmailKind.ORDER_CONFIRMATION)
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         table = _table(client.get(_url()).content.decode(), "email-by-kind")
 
@@ -139,7 +139,7 @@ class TestTextOnlyOpenRateRendersAsDash:
 
 class TestContext:
     def test_presenter_keys_are_present(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         ctx = client.get(_url()).context
 
@@ -160,18 +160,18 @@ class TestContext:
 
 class TestDaysWindow:
     def test_defaults_to_30(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         ctx = client.get(_url()).context
         assert ctx["days"] == 30
 
     @pytest.mark.parametrize("days", [7, 30, 90])
     def test_accepts_valid_windows(self, client, days):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         ctx = client.get(_url(), {"days": days}).context
         assert ctx["days"] == days
 
     def test_invalid_days_falls_back_to_30_with_a_message(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         resp = client.get(_url(), {"days": "abc"})
         assert resp.status_code == 200
         assert resp.context["days"] == 30
@@ -179,7 +179,7 @@ class TestDaysWindow:
         assert any("abc" in m for m in messages)
 
     def test_out_of_range_days_falls_back_to_30_with_a_message(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         resp = client.get(_url(), {"days": "14"})
         assert resp.status_code == 200
         assert resp.context["days"] == 30
@@ -192,7 +192,7 @@ class TestDaysWindow:
             ses_message_id="ses-old", recipient="old@example.com", sent_at=old
         )
         _sent(recipient="recent@example.com")
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         ctx7 = client.get(_url(), {"days": 7}).context
         ctx90 = client.get(_url(), {"days": 90}).context
@@ -205,7 +205,7 @@ class TestRecipientLookup:
     def test_case_insensitive_lookup_scopes_to_that_recipient(self, client):
         _sent(recipient="Match@Example.com", subject="Matched subject")
         _sent(recipient="other@example.com", subject="Other subject")
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         resp = client.get(_url(), {"q": "match@example.com"})
 
@@ -219,6 +219,6 @@ class TestRecipientLookup:
         assert "Other subject" not in body
 
     def test_blank_q_does_not_run_a_lookup(self, client):
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         resp = client.get(_url())
         assert resp.context["recipient"] is None
