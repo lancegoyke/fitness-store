@@ -1,7 +1,7 @@
-"""Staff opens the product-analytics dashboard and switches its window (#509).
+"""Superuser opens the product-analytics dashboard and switches its window (#509).
 
-Desktop only: `/meso/analytics/` is a staff-only, wide-table dashboard, never
-opened on a phone — same reasoning as `test_meso_coach_agent.py`'s
+Desktop only: `/meso/analytics/` is a superuser-only (#613), wide-table
+dashboard, never opened on a phone — same reasoning as `test_meso_coach_agent.py`'s
 `@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)`.
 
 `analytics_data` below seeds one realistic week of Meso activity so all four
@@ -69,11 +69,16 @@ def analytics_data(db):
     def ago(days):
         return now - datetime.timedelta(days=days)
 
-    staff = UserFactory(is_staff=True, name="Sam Staff", email="sam.staff@example.com")
-    # A CoachProfile just lands staff on the (empty, harmless) roster at
+    superuser = UserFactory(
+        is_staff=True,
+        is_superuser=True,
+        name="Sam Super",
+        email="sam.super@example.com",
+    )
+    # A CoachProfile just lands the superuser on the (empty, harmless) roster at
     # `/meso/` instead of being bounced to the athlete home — `_ineligible_
-    # users()` excludes staff from every count below regardless.
-    CoachProfileFactory(user=staff)
+    # users()` excludes the superuser by `is_staff` from every count below.
+    CoachProfileFactory(user=superuser)
 
     # -- Casey Coach + Alex Athlete: the full email-invite activation path --
     casey = UserFactory(name="Casey Coach", email="casey.coach@example.com")
@@ -234,7 +239,7 @@ def analytics_data(db):
     CoachInvite.objects.filter(pk=pending_invite.pk).update(created_at=ago(20))
 
     return {
-        "staff": staff,
+        "superuser": superuser,
         "casey": casey,
         "alex": alex,
         "jordan": jordan,
@@ -255,13 +260,13 @@ def _row(section, text):
 
 
 @pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
-def test_staff_opens_analytics_and_switches_the_window(
+def test_superuser_opens_analytics_and_switches_the_window(
     page, viewport, shot, login, analytics_data
 ):
-    login(analytics_data["staff"])
+    login(analytics_data["superuser"])
 
-    # Reach the dashboard the real way: /meso/ (a staff CoachProfile lands
-    # staff on the roster), then the shared topnav's own staff-only
+    # Reach the dashboard the real way: /meso/ (a superuser CoachProfile lands
+    # the superuser on the roster), then the shared topnav's own superuser-only
     # "Analytics" link (_meso_base.html) — not a goto.
     page.goto(reverse("meso:roster"))
     page.get_by_role("link", name="Analytics").click()
@@ -307,3 +312,19 @@ def test_staff_opens_analytics_and_switches_the_window(
     expect(email_invite_row.locator("td").nth(1)).to_have_text("1")  # Sent: 2 -> 1
 
     shot("02-7-days")
+
+
+@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
+def test_staff_without_superuser_sees_no_analytics_link(page, viewport, login):
+    user = UserFactory(is_staff=True, is_superuser=False)
+    CoachProfileFactory(user=user)
+
+    login(user)
+    page.goto(reverse("meso:roster"))
+
+    expect(page.get_by_role("link", name="Designer", exact=True)).to_be_visible()
+    for name in ("Usage", "Tour funnel", "Analytics", "Email"):
+        expect(page.get_by_role("link", name=name, exact=True)).to_have_count(0)
+
+    response = page.goto(reverse("meso:product_analytics"))
+    assert response.status == 403
