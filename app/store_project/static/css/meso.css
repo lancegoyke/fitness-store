@@ -699,6 +699,14 @@ button.meso-card:hover {
   color: var(--accent);
   box-shadow: 0 1px 6px rgba(49, 117, 157, 0.25);
 }
+/* The athlete PWA's chip is a link on a phone, so it meets the 44px tap target. */
+@media (max-width: 640px) {
+  .meso-avatar--tap {
+    width: 44px;
+    height: 44px;
+    font-size: 13px;
+  }
+}
 
 /* --- athlete rows / list --- */
 .meso-row {

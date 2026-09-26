@@ -532,7 +532,12 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
                 profile.programming_style = form.cleaned_data["programming_style"]
                 profile.avoid_rules = form.cleaned_data["avoid_rules"]
                 profile.save(
-                    update_fields=["display_name", "programming_style", "avoid_rules"]
+                    update_fields=[
+                        "display_name",
+                        "programming_style",
+                        "avoid_rules",
+                        "modified",
+                    ]
                 )
                 messages.success(request, "Your coaching settings were updated.")
                 return redirect("meso:settings")
@@ -708,7 +713,7 @@ def athlete_record_update(request, pk):
         for field in received:
             setattr(profile, field, form.cleaned_data[field])
         if received:
-            profile.save(update_fields=sorted(received))
+            profile.save(update_fields=[*sorted(received), "modified"])
     messages.success(request, "Athlete record updated.")
     return redirect("meso:athlete", pk=pk)
 

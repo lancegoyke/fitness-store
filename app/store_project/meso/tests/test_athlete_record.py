@@ -121,6 +121,17 @@ class TestAthleteRecord:
         assert "Run a marathon" in body
         assert "Program goal: Bench 315" in body
 
+    def test_saving_advances_the_profile_modified_timestamp(self, client):
+        link = CoachAthleteFactory(coach=UserFactory(), athlete=UserFactory())
+        profile = AthleteProfileFactory(user=link.athlete)
+        stale = timezone.now() - timedelta(days=30)
+        AthleteProfile.objects.filter(pk=profile.pk).update(modified=stale)
+        client.force_login(link.coach)
+        client.post(route("athlete_record", pk=link.athlete_id), {"goals": "Squat 200"})
+        profile.refresh_from_db()
+        assert profile.goals == "Squat 200"
+        assert profile.modified > stale
+
     def test_goals_field_defaults_to_empty_string(self):
         assert hasattr(AthleteProfile, "goals"), "AthleteProfile.goals is missing"
         assert AthleteProfile(user=UserFactory()).goals == ""
