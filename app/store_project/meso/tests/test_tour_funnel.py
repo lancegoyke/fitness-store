@@ -1,7 +1,8 @@
-"""Issue #441 P3-6 — the staff-gated TourEvent funnel dashboard.
+"""Issue #441 P3-6 — the superuser-gated TourEvent funnel dashboard.
 
-Mirrors the agent usage dashboard's staff gate (anon → login, non-staff → 403,
-staff → 200) and pins the presenter's aggregation contract: per-kind totals
+Mirrors the agent usage dashboard's superuser gate (anon → login,
+non-superuser → 403, superuser → 200) and pins the presenter's aggregation
+contract: per-kind totals
 (every ``Kind`` value 0-filled), the per-variant breakdown (both variants
 present, each kind 0-filled), the per-step advance counts (ordered by the tour
 ``STEPS`` order), and the total. There's both a rendered-view context test and a
@@ -97,7 +98,7 @@ def _nonzero_advances(step_advances):
 
 
 # ---------------------------------------------------------------------------
-# staff gate (mirrors UsageDashboardView / test_agent_usage_dashboard)
+# superuser gate (mirrors UsageDashboardView / test_agent_usage_dashboard)
 # ---------------------------------------------------------------------------
 
 
@@ -107,13 +108,13 @@ class TestTourFunnelGate:
         assert resp.status_code == 302
         assert "/accounts/login/" in resp["Location"]
 
-    def test_authenticated_non_staff_is_forbidden(self, client):
+    def test_authenticated_non_superuser_is_forbidden(self, client):
         client.force_login(UserFactory())
         resp = client.get(_url())
         assert resp.status_code == 403
 
-    def test_staff_gets_the_dashboard(self, client):
-        client.force_login(UserFactory(is_staff=True))
+    def test_superuser_gets_the_dashboard(self, client):
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
         resp = client.get(_url())
         assert resp.status_code == 200
         assert resp.templates[0].name == "meso/tour_funnel.html"
@@ -127,7 +128,7 @@ class TestTourFunnelGate:
 class TestTourFunnelContext:
     def test_context_aggregates_the_constructed_events(self, client):
         _seed_events()
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         ctx = client.get(_url()).context
 

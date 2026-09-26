@@ -1,10 +1,11 @@
 """The coach-facing billing & usage page (agent-usage tracking — coach surface).
 
-The owner dashboard (``UsageDashboardView``, Phase 4) is **staff-gated** and shows
-org-wide *cost* (COGS) so a coach can't probe what the agent costs the business.
-This is the complementary **coach-scoped** read: a coach sees *their* plan, the
-seats they pay for, their projected bill (the revenue they owe — base + per-seat),
-and how many AI-agent runs they've spent this month broken down by athlete.
+The owner dashboard (``UsageDashboardView``, Phase 4) is **superuser-gated** and
+shows org-wide *cost* (COGS) so a coach can't probe what the agent costs the
+business. This is the complementary **coach-scoped** read: a coach sees *their*
+plan, the seats they pay for, their projected bill (the revenue they owe — base +
+per-seat), and how many AI-agent runs they've spent this month broken down by
+athlete.
 
 The hard line this slice draws: a coach sees **what they pay** (revenue) and
 **how much they've used** (run counts), never the internal per-run **cost**

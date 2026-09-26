@@ -71,7 +71,7 @@
             {% if not is_sandbox %}
               <a class="meso-navlink {% if active == 'billing' %}is-active{% endif %}" href="{% url 'meso:billing' %}">Billing</a>
             {% endif %}
-            {% if request.user.is_staff %}
+            {% if request.user.is_superuser %}
               <a class="meso-navlink {% if active == 'usage' %}is-active{% endif %}" href="{% url 'meso:usage_dashboard' %}">Usage</a>
               <a class="meso-navlink {% if active == 'tour_funnel' %}is-active{% endif %}" href="{% url 'meso:tour_funnel' %}">Tour funnel</a>
               <a class="meso-navlink {% if active == 'analytics' %}is-active{% endif %}" href="{% url 'meso:product_analytics' %}">Analytics</a>

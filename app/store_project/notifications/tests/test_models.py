@@ -1,7 +1,7 @@
 """``SentEmail`` / ``EmailEvent`` model shape (issue #507, part 1).
 
 These are the two tracking tables the rest of #507 (part 1's receivers, part
-2's staff dashboard) is built on:
+2's superuser dashboard) is built on:
 
 - ``SentEmail`` — one row per message actually handed to SES
   (``django_ses.signals.message_sent``), keyed by SES's own ``MessageId``.

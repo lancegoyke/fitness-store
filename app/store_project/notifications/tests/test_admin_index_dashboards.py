@@ -1,11 +1,11 @@
-"""Issue #514: the `/backside/` admin home links out to the staff dashboards.
+"""Issue #514: the `/backside/` admin home links to superuser-only dashboards.
 
 ``templates/admin/index.html`` extends Django's own ``admin/index.html`` (a
 same-name override -- Django's template loader resolves it to the *next*
 match in the search path, admin's own bundled template) and adds a
 "Dashboards" module to the ``content`` block, ahead of the stock app list,
-linking to the email deliverability dashboard and the two existing Meso
-staff dashboards. This proves the project's ``templates/admin/`` override is
+linking to the email deliverability dashboard and the three Meso superuser
+dashboards. This proves the project's ``templates/admin/`` override is
 actually picked up (there's already a same-pattern override at
 ``templates/admin/challenges/challenge/change_form.html``), that the links
 resolve, and that the module lives inside ``#content-main`` -- not appended
@@ -22,8 +22,8 @@ pytestmark = pytest.mark.django_db
 
 
 class TestDashboardsModule:
-    def test_staff_sees_the_dashboards_module_with_all_three_links(self, client):
-        client.force_login(UserFactory(is_staff=True))
+    def test_superuser_sees_the_dashboards_module_with_all_four_links(self, client):
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         body = client.get(reverse("admin:index")).content.decode()
 
@@ -31,6 +31,20 @@ class TestDashboardsModule:
         assert reverse("notifications:email_dashboard") in body
         assert reverse("meso:usage_dashboard") in body
         assert reverse("meso:tour_funnel") in body
+        assert reverse("meso:product_analytics") in body
+
+    def test_staff_non_superuser_does_not_see_the_dashboards_module(self, client):
+        client.force_login(UserFactory(is_staff=True, is_superuser=False))
+
+        resp = client.get(reverse("admin:index"))
+        body = resp.content.decode()
+
+        assert resp.status_code == 200
+        assert 'id="dashboards-module"' not in body
+        assert reverse("notifications:email_dashboard") not in body
+        assert reverse("meso:usage_dashboard") not in body
+        assert reverse("meso:tour_funnel") not in body
+        assert reverse("meso:product_analytics") not in body
 
     def test_dashboards_module_is_inside_content_main_not_the_sidebar(self, client):
         """The module must sit in the main column, ahead of the app list.
@@ -41,7 +55,7 @@ class TestDashboardsModule:
         ``content`` instead and putting the module first inside
         ``#content-main`` keeps it visible regardless of app-list length.
         """
-        client.force_login(UserFactory(is_staff=True))
+        client.force_login(UserFactory(is_staff=True, is_superuser=True))
 
         body = client.get(reverse("admin:index")).content.decode()
 

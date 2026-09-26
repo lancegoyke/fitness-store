@@ -1,7 +1,7 @@
 {% extends "admin/index.html" %}
 {% comment %}
 Issue #514: the /backside/ home page otherwise has no link at all to the
-staff-only dashboards (email deliverability, Meso usage, Meso tour funnel) --
+superuser-only dashboards (email deliverability, Meso usage, Meso tour funnel) --
 they're bookmark-only. This is a same-name override: Django's template
 loader resolves {% extends "admin/index.html" %} inside a template that IS
 "admin/index.html" to the *next* match in the search path (here, the one
@@ -27,15 +27,17 @@ visible regardless of app-list length.
 
 {% block content %}
   <div id="content-main" class="app-list">
-    <div class="module" id="dashboards-module">
-      <table>
-        <caption>Dashboards</caption>
-        <tr><th scope="row"><a href="{% url 'notifications:email_dashboard' %}">Email deliverability</a></th></tr>
-        <tr><th scope="row"><a href="{% url 'meso:usage_dashboard' %}">Meso usage</a></th></tr>
-        <tr><th scope="row"><a href="{% url 'meso:tour_funnel' %}">Meso tour funnel</a></th></tr>
-        <tr><th scope="row"><a href="{% url 'meso:product_analytics' %}">Meso product analytics</a></th></tr>
-      </table>
-    </div>
+    {% if request.user.is_superuser %}
+      <div class="module" id="dashboards-module">
+        <table>
+          <caption>Dashboards</caption>
+          <tr><th scope="row"><a href="{% url 'notifications:email_dashboard' %}">Email deliverability</a></th></tr>
+          <tr><th scope="row"><a href="{% url 'meso:usage_dashboard' %}">Meso usage</a></th></tr>
+          <tr><th scope="row"><a href="{% url 'meso:tour_funnel' %}">Meso tour funnel</a></th></tr>
+          <tr><th scope="row"><a href="{% url 'meso:product_analytics' %}">Meso product analytics</a></th></tr>
+        </table>
+      </div>
+    {% endif %}
     {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
   </div>
 {% endblock %}

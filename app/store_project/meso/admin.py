@@ -35,6 +35,7 @@ class CascadeLockDeleteMixin:
         # LOCK ORDER (#610) — a User selection can contain a coach and their
         # lower-pk demo athlete. Reserve selected coach mutexes before the
         # globally sorted cascade pass so it cannot invert against clear_demo.
+        # This assumes #614's precondition: a demo athlete is never itself a coach.
         if self.lock_delete_coach_mutexes:
             meso_demo.lock_coach_mutexes(pks)
         getattr(meso_demo, self.cascade_lock_helper)(pks)

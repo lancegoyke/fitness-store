@@ -13,7 +13,7 @@ message sent through the "Tracking" configuration set to an SNS topic, which
   with one we sent (a message SES was never asked to track, or one sent
   before this app existed, has no match — ``sent_email`` is then ``None``).
 
-Together they are the source data for the staff deliverability dashboard —
+Together they are the source data for the superuser deliverability dashboard —
 the second half of #507, built on top of this schema.
 """
 

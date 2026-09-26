@@ -1,6 +1,6 @@
 """Issue #507 part 2 — the deliverability-dashboard presenter.
 
-``presenters.email_dashboard`` is the pure aggregation the staff dashboard
+``presenters.email_dashboard`` is the pure aggregation the superuser dashboard
 view (``EmailDashboardView``) renders: window totals, a per-kind breakdown, a
 per-day trend, the most recent events, the problem (bounce/complaint) events,
 the current SES blacklist, and an optional recipient lookup. Everything is

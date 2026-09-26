@@ -499,6 +499,8 @@ the staff read-out of Meso usage, gated like the other staff dashboards
 (anonymous → login, non-staff → 403). `?days=7|30|90`, default 30, parsed like
 the email dashboard's. A row is in the window when `now - days <= ts <= now`.
 
+**Superseded by #613:** The gate is now `is_superuser`; `handle_no_permission` is unchanged, and the nav links plus `/backside/` Dashboards module use the same gate.
+
 **Sources.** A number comes from the table that already records the fact with
 a timestamp, and from `analytics.Event` only when nothing else does. Events
 exist only since the slice-1 deploy (2026-09-19), so an `Event`-sourced number
@@ -638,13 +640,44 @@ safe against every path that takes the coach row first — the segment loaders,
 `plan_create`'s draft path, the sandbox reap — and, as of #610, `UserAdmin` and
 `merge_users`: those delete paths first lock every selected coach ascending,
 while holding no athlete row, then run the ordinary sorted cascade pass. If
-`clear_demo(C)` owns C, that first pass holds nothing it needs; if the delete
-owns C, clear cannot pass its first lock. When C is not selected, neither path
-wants it and both take their shared athletes ascending. No cycle can form —
-provided a demo athlete is never itself a coach. They are created with an
-unusable password and no request path gives one a `CoachProfile` or a link as
-coach, so only a staff-made row breaks that; a coach that sorts below its own
-owner would be locked first and reopen the cycle (#614).
+`clear_demo(C)` owns selected owner C, that pass holds nothing it needs; if the
+delete owns C, clear cannot pass its first lock. With an unselected owner, both
+paths take their shared athletes ascending.
+
+**Precondition, not an enforced invariant (#614).** That no-cycle argument holds
+only while a demo athlete is never itself a coach (a `CoachProfile`, or the
+`coach` of a link). Nothing the app does can produce that state: demo athletes
+get an unusable password, every `CoachProfile.get_or_create` call site needs a
+logged-in request from that user, and no request path creates a link with a demo
+athlete as its coach. Only a raw-id admin write can, and when one does, two
+shapes deadlock against `clear_demo(owner)`:
+
+- **Shape 1:** selection `{owner, A}`, where demo athlete `A` is a coach and
+  `A.pk < owner.pk`. The admin delete locks `A → owner`; `clear_demo(owner)` locks
+  `owner → A`.
+- **Shape 2:** selection `{A, B}`, two demo athletes of an *unselected* owner,
+  where `A` is a coach and `A.pk > B.pk`. The admin delete locks `A → B` (coach
+  pre-pass, then the cascade pass); `clear_demo(owner)` locks `owner → B → A`.
+  Locking the owner first cannot help: the owner is not in the selection.
+
+Both were reproduced against real PostgreSQL on 2026-09-26 with throwaway race
+tests that pause the real `clear_demo` (not committed: they assert a deadlock, so
+they would go red the day someone fixes it). PostgreSQL aborts one side with
+`deadlock detected`, which is a 500 on the staff admin delete or on a "Remove
+demo data" click. Nothing is corrupted and a retry succeeds.
+
+**Accepted, not fixed.** Making the pre-pass dependency-aware, as #614 proposed,
+closes only shape 1. Shape 2 needs the pre-pass to know demo ownership outside
+the selection, i.e. a topological order over owner→athlete edges plus sibling
+order: a restructure of the riskiest lock code for a state the app cannot
+produce. Enforcing "a demo athlete is never a coach" in request code cannot see
+the raw-id write that creates it.
+`test_lock_coach_mutexes_orders_by_pk_not_by_demo_ownership_614` pins the
+disagreement (the pre-pass locks `A` before `owner`; `clear_demo` locks `owner`
+before `A`). If it fails because the pre-pass became dependency-aware, rewrite
+this section and remove the precondition rather than weakening the test. If a
+request path ever *can* make a demo athlete a coach, reopen #614: the fix is
+that topological pre-pass.
 
 Every path that takes two or more row locks takes them in that sequence,
 counting both `select_for_update` and the implicit exclusive lock an
@@ -756,7 +789,8 @@ restore's existing sequence a violation for no gain.
 - `demo.clear_demo` takes the coach mutex before reading its athlete set, then
   uses `demo.lock_cascade_parents`; `sandbox.expire_sandboxes` safely re-locks
   that same coach row inside its later delete transaction (#590).
-- `demo.lock_coach_mutexes` identifies selected coaches through unjoined
+- Under #614's precondition that no demo athlete is itself a coach,
+  `demo.lock_coach_mutexes` identifies selected coaches through unjoined
   subqueries and reserves their `User` mutex rows ascending before a multi-User
   hard delete's sorted cascade pass (#610).
 - `UserAdmin`, `CoachAthleteAdmin`, `PlanAdmin`, `AgentProposalBatchAdmin`, and
@@ -1680,6 +1714,7 @@ _(Append dated entries here as decisions land.)_
   (deferred — needs an Admin API key + live org access). Remaining Meso backlog
   otherwise unchanged: billing annual prices (blocked on the owner's annual
   numbers) + the group agent (LARGE owner-decision).
+  **Superseded by #613:** The gate is now `is_superuser`; `handle_no_permission` is unchanged, and the nav links plus `/backside/` Dashboards module use the same gate.
 - 2026-06-30 — **Group agent Phase 1 built: the AI agent edits the shared program**
   (PR #350, no migration). The proposal agent rejected a group plan with a `400`
   (its grounding dereferenced a single `plan.athlete`); now it grounds on the

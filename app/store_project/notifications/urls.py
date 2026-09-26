@@ -1,4 +1,4 @@
-"""Issue #507 part 2 — the staff email deliverability dashboard's URLs.
+"""Issue #507 part 2 — the superuser email deliverability dashboard's URLs.
 
 Mounted at ``backside/email/`` in ``config.urls`` (namespace ``notifications``),
 placed **before** ``path("backside/", admin.site.urls)`` — the bare admin

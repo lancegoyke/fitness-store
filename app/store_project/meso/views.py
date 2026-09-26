@@ -581,20 +581,20 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
 class UsageDashboardView(UserPassesTestMixin, TemplateView):
     """Owner-facing agent usage + margin dashboard (agent-usage Phase 4).
 
-    A **staff-gated**, all-coach view of the per-month usage report that Phases 1–3
-    capture, aggregate (``build_report``), and alert on (``margin_alerts``) — the
-    web read-out the ``meso_agent_usage_report`` command renders as text. Not
+    A **superuser-gated**, all-coach view of the per-month usage report that Phases
+    1–3 capture, aggregate (``build_report``), and alert on (``margin_alerts``) —
+    the web read-out the ``meso_agent_usage_report`` command renders as text. Not
     coach-scoped: it's the operator's cost/margin view across the whole tenant.
 
     Gate: an anonymous visitor bounces to login (``UserPassesTestMixin`` default);
-    an authenticated non-staff user gets a flat 403 (``handle_no_permission``), so
+    an authenticated non-superuser gets a flat 403 (``handle_no_permission``), so
     a logged-in coach can't probe org-wide spend.
     """
 
     template_name = "meso/usage_dashboard.html"
 
     def test_func(self):
-        return self.request.user.is_staff
+        return self.request.user.is_superuser
 
     def handle_no_permission(self):
         # Authenticated-but-unauthorized → 403 (not a pointless login bounce);
@@ -635,13 +635,13 @@ class UsageDashboardView(UserPassesTestMixin, TemplateView):
 class TourFunnelView(UserPassesTestMixin, TemplateView):
     """Owner-facing guided-tour funnel dashboard (#441 P3-6).
 
-    The staff read-out of the ``TourEvent`` funnel: per-kind totals, the
+    The superuser read-out of the ``TourEvent`` funnel: per-kind totals, the
     per-variant (sandbox vs. self) breakdown, the per-advance-step table, and a
     Started → Opt-in → Completed funnel — the web complement to reading the raw
     rows in the admin. Aggregation lives in ``presenters.tour_funnel``.
 
     Gate mirrors ``UsageDashboardView`` exactly: anonymous bounces to login
-    (``UserPassesTestMixin`` default); an authenticated non-staff user gets a
+    (``UserPassesTestMixin`` default); an authenticated non-superuser gets a
     flat 403, so a logged-in coach can't probe org-wide tour analytics.
 
     Optional ``?variant=sandbox|self`` narrows to one audience and ``?days=N``
@@ -651,7 +651,7 @@ class TourFunnelView(UserPassesTestMixin, TemplateView):
     template_name = "meso/tour_funnel.html"
 
     def test_func(self):
-        return self.request.user.is_staff
+        return self.request.user.is_superuser
 
     def handle_no_permission(self):
         if self.request.user.is_authenticated:
@@ -688,7 +688,7 @@ class TourFunnelView(UserPassesTestMixin, TemplateView):
 class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
     """Owner-facing product-analytics dashboard (#509 slice 2).
 
-    The staff read-out of first-party ``Event`` usage plus Meso's existing
+    The superuser read-out of first-party ``Event`` usage plus Meso's existing
     tables: active users, the invite→delivery→log activation funnel, feature
     adoption, and Meso's own transactional email — the web complement to
     querying ``Event`` directly in the admin. Aggregation lives in
@@ -696,7 +696,7 @@ class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
 
     Gate mirrors ``TourFunnelView``/``UsageDashboardView`` exactly: anonymous
     bounces to login (``UserPassesTestMixin`` default); an authenticated
-    non-staff user gets a flat 403.
+    non-superuser gets a flat 403.
 
     ``?days=7|30|90`` picks the report window (default 30; anything else
     degrades to 30 with a flashed warning), parsed exactly like
@@ -707,7 +707,7 @@ class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
     WINDOW_DAYS = (7, 30, 90)
 
     def test_func(self):
-        return self.request.user.is_staff
+        return self.request.user.is_superuser
 
     def handle_no_permission(self):
         if self.request.user.is_authenticated:
@@ -747,7 +747,7 @@ class CoachBillingView(LoginRequiredMixin, TemplateView):
 
     A coach's own plan/tier, the bill they owe (base + per active seat), the
     upgrade CTAs, and their AI-agent runs this month broken down per athlete
-    — the coach-scoped complement to the staff-only owner usage dashboard (which
+    — the coach-scoped complement to the superuser-only owner usage dashboard (which
     shows org-wide *cost*). A coach never sees the internal cost estimate here, only
     what they pay and how much they've used (``presenters.coach_billing``).
 
