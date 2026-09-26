@@ -14,6 +14,25 @@ How to read the status field:
 
 ---
 
+## Names and labels (#602)
+
+- `User.name` is a person's account name; unnamed users fall back to their email.
+- A coach's `CoachProfile.display_name` is their own chosen athlete-facing name,
+  so it wins over `User.name`.
+- `CoachAthlete.label` is a coach's guess for one athlete, so the athlete's own
+  `User.name` wins; the label only precedes the email fallback.
+- Labels are per relationship, invisible to other coaches, and inert once the
+  athlete sets their own name. `UserUpdateView` edits names only, never email.
+
+## Athlete record (#603)
+
+- Goals, notes, `training_started`, and contraindications are global athlete
+  data under D-b, visible to every coach and currently coach-written.
+- Athlete-side reading and editing of this record is not built; file that as a
+  follow-up rather than implying the athlete owns an editor today.
+- Clearing a contraindication marks it inactive and keeps the row on record.
+- The agent now reads goals, notes, training start, and active contraindications.
+
 ## Blockers (foundation — schema & architecture depend on these)
 
 ### B1 · Product shape & tenancy — single-coach or multi-coach?

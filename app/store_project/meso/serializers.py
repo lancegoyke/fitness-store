@@ -21,6 +21,7 @@ from django.db.models import Prefetch
 from django.urls import reverse
 
 from . import models
+from .names import link_athlete_name
 
 
 def initials(name):
@@ -767,7 +768,7 @@ def serialize_athlete_identity(plan):
                 "contraindications": [],
             }
         return None
-    name = athlete.display_name()
+    name = link_athlete_name(plan.relationship)
     return {
         "name": name,
         "initials": initials(name),

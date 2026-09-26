@@ -76,6 +76,39 @@ body.meso {
   color: #abb0b6;
 }
 
+/* A text input / textarea on a coach or account form — the roster invite
+   field's look, as a class, so the settings and profile forms match it. */
+.meso .meso-field {
+  appearance: none;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--rail);
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  padding: 8px 10px;
+  outline: none;
+}
+
+.meso .meso-field:focus {
+  border-color: var(--accent);
+}
+
+.meso textarea.meso-field {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+/* 16px on a phone: iOS Safari zooms the page on focusing a smaller input. */
+@media (max-width: 640px) {
+  .meso .meso-field {
+    font-size: 16px;
+  }
+}
+
 .meso *::-webkit-scrollbar {
   width: 11px;
   height: 11px;
@@ -665,6 +698,14 @@ button.meso-card:hover {
   border-color: var(--accent);
   color: var(--accent);
   box-shadow: 0 1px 6px rgba(49, 117, 157, 0.25);
+}
+/* The athlete PWA's chip is a link on a phone, so it meets the 44px tap target. */
+@media (max-width: 640px) {
+  .meso-avatar--tap {
+    width: 44px;
+    height: 44px;
+    font-size: 13px;
+  }
 }
 
 /* --- athlete rows / list --- */

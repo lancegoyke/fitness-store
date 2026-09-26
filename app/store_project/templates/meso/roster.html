@@ -147,7 +147,7 @@
             <div class="meso-row" style="cursor:default;">
               <div class="meso-avatar" style="background:var(--rail);color:var(--dim);">@</div>
               <div class="meso-row-main" style="min-width:0;">
-                <div class="meso-row-name">{{ inv.email }}</div>
+                <div class="meso-row-name">{% if inv.label %}{{ inv.label }} <span class="meso-row-meta">· {{ inv.email }}</span>{% else %}{{ inv.email }}{% endif %}</div>
                 {% if inv.is_expired %}
                   <div class="meso-row-meta">Invited {{ inv.when|date:"M j" }} · invite expired</div>
                 {% else %}
@@ -200,9 +200,10 @@
           {% else %}
             <details data-tour="roster-invite" style="border-top:1px solid var(--line-2);">
               <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent);">+ Invite an athlete</summary>
-              <form method="post" action="{% url 'meso:coach_invite' %}" style="display:flex;gap:9px;padding:4px 16px 16px;">
+              <form method="post" action="{% url 'meso:coach_invite' %}" style="display:flex;gap:9px;padding:4px 16px 16px;flex-wrap:wrap;">
                 {% csrf_token %}
-                <input name="email" type="email" required maxlength="254" placeholder="athlete@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
+                <input name="name" type="text" maxlength="255" placeholder="Name (optional)" style="flex:1;min-width:150px;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
+                <input name="email" type="email" required maxlength="254" placeholder="athlete@email.com" style="flex:1.5;min-width:210px;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
                 <button type="submit" class="meso-btn meso-btn--primary">Send invite</button>
               </form>
             </details>

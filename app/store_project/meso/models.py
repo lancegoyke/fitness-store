@@ -25,6 +25,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from . import parsing
+from .names import clean_name
 
 
 class Unit(models.TextChoices):
@@ -184,8 +185,8 @@ class TourEvent(models.Model):
 class AthleteProfile(models.Model):
     """Cross-coach attributes that belong to the athlete, not to any one plan (D-b).
 
-    Goals/focus live per-plan (added in a later slice); training history and
-    contraindications are global to the athlete and visible to every coach.
+    Goals, training history, notes, and contraindications are global to the
+    athlete and visible to every coach.
     """
 
     user = models.OneToOneField(
@@ -194,6 +195,7 @@ class AthleteProfile(models.Model):
         related_name="athlete_profile",
         verbose_name=_("User"),
     )
+    goals = models.TextField(_("Goals"), blank=True)
     training_started = models.DateField(_("Training started"), null=True, blank=True)
     notes = models.TextField(_("Notes"), blank=True)
     delivery_email_opt_out = models.BooleanField(
@@ -334,6 +336,9 @@ class CoachAthlete(models.Model):
     status = models.CharField(_("Status"), max_length=32, choices=Status.choices)
     invited_by = models.CharField(
         _("Invited by"), max_length=8, choices=InvitedBy.choices
+    )
+    label = models.CharField(
+        _("Coach's label for the athlete"), max_length=255, blank=True, default=""
     )
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     # A demo relationship (the coach-scoped first-run demo, ``meso/demo.py``):
@@ -673,6 +678,9 @@ class CoachInvite(models.Model):
         verbose_name=_("Coach"),
     )
     email = models.EmailField(_("Email"))
+    label = models.CharField(
+        _("Coach's label for the athlete"), max_length=255, blank=True, default=""
+    )
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     status = models.CharField(
         _("Status"), max_length=16, choices=Status.choices, default=Status.PENDING
@@ -748,7 +756,7 @@ class CoachInvite(models.Model):
         return timezone.now() + cls.INVITE_TTL
 
     @classmethod
-    def open_for(cls, *, coach, email):
+    def open_for(cls, *, coach, email, label=""):
         """Open a pending invite for ``email``, reusing the coach's open row if any.
 
         Returns ``(invite, created)``. The email is normalized so a differently
@@ -764,6 +772,7 @@ class CoachInvite(models.Model):
         See ``CoachAthlete._open`` for the caller-held parent-lock contract.
         """
         email = cls.normalize_email(email)
+        label = clean_name(label)
         invite = (
             cls.objects.filter(coach=coach, email=email)
             .filter(status__in=[cls.Status.PENDING, cls.Status.EXPIRED])
@@ -773,6 +782,9 @@ class CoachInvite(models.Model):
         if invite is not None:
             if not invite.is_claimable:
                 invite.resend()
+            if label and invite.label != label:
+                invite.label = label
+                invite.save(update_fields=["label"])
             return invite, False
         # No outstanding row — create one. ``get_or_create`` keeps the create
         # race-safe against the partial-unique constraint.
@@ -780,7 +792,7 @@ class CoachInvite(models.Model):
             coach=coach,
             email=email,
             status=cls.Status.PENDING,
-            defaults={"expires_at": cls._default_expiry()},
+            defaults={"expires_at": cls._default_expiry(), "label": label},
         )
 
     @property
@@ -846,6 +858,10 @@ class CoachInvite(models.Model):
             link = CoachAthlete.invite(coach=self.coach, athlete=user)
             if link.is_pending:
                 link.accept()
+            invite_label = clean_name(self.label)
+            if invite_label:
+                link.label = invite_label
+                link.save(update_fields=["label"])
             self.status = self.Status.ACCEPTED
             self.accepted_by = user
             self.accepted_link = link

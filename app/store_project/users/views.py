@@ -6,6 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView
 from django.views.generic import UpdateView
 
+from store_project.meso.names import clean_name
 from store_project.products.models import Book
 from store_project.products.models import Program
 
@@ -29,10 +30,7 @@ user_profile_view = UserProfileView.as_view()
 
 class UserUpdateView(LoginRequiredMixin, UpdateView):
     model = User
-    fields = [
-        "name",
-        "email",
-    ]
+    fields = ["name"]
     template_name = "users/profile_update.html"
 
     def get_success_url(self):
@@ -42,6 +40,7 @@ class UserUpdateView(LoginRequiredMixin, UpdateView):
         return User.objects.get(email=self.request.user.email)
 
     def form_valid(self, form):
+        form.instance.name = clean_name(form.cleaned_data["name"])
         messages.add_message(
             self.request, messages.INFO, _("Info successfully updated")
         )

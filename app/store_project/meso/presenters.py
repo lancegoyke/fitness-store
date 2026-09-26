@@ -61,6 +61,9 @@ from .models import hidden_parsed_set_pks
 from .models import line_displays
 from .models import newest_session_logs
 from .models import sub_line_warn_reason
+from .names import athlete_name
+from .names import coach_name
+from .names import link_athlete_name
 from .one_rm import key_str
 from .one_rm import one_rm_values
 from .personal_records import new_records_in
@@ -151,6 +154,7 @@ def _recency_tone(days):
 def roster_athlete(
     user,
     *,
+    label="",
     suspended=False,
     demo=False,
     self_link=False,
@@ -175,7 +179,7 @@ def roster_athlete(
     measure a percent against, so the roster shows a tone-coded "last trained"
     pill instead of the old per-week compliance meter.
     """
-    name = user.display_name()
+    name = athlete_name(user, label)
     meta_parts = [p for p in [_training_label(user)] if p]
     return {
         "id": user.pk,
@@ -195,9 +199,11 @@ def roster_athlete(
     }
 
 
-def profile_athlete(user):
+def profile_athlete(user, label=""):
     """The expanded athlete record behind the roster row."""
-    name = user.display_name()
+    name = athlete_name(user, label)
+    profile = getattr(user, "athlete_profile", None)
+    contraindications = _active_contraindications(user)
     subtitle_parts = [str(p) for p in [_age(user), _training_label(user)] if p]
     return {
         "id": user.pk,
@@ -205,9 +211,21 @@ def profile_athlete(user):
         "initials": initials(name),
         "tone": "neutral",
         "subtitle": " · ".join(subtitle_parts) or "Training experience not on file",
-        # Goals are per-plan (D-b); they arrive with the program schema (Phase 2).
-        "goals": [],
-        "contraindications": [c.text for c in _active_contraindications(user)],
+        "goals": profile.goals if profile else "",
+        "notes": profile.notes if profile else "",
+        "training_started": (
+            profile.training_started.isoformat()
+            if profile and profile.training_started
+            else None
+        ),
+        "has_profile_data": bool(
+            profile
+            and (profile.goals or profile.notes or profile.training_started is not None)
+        ),
+        "contraindications": [c.text for c in contraindications],
+        "active_contraindications": [
+            {"id": c.pk, "text": c.text} for c in contraindications
+        ],
         "has_program": False,
         "recency": "No sessions yet",
         "session_count_14d": 0,
@@ -324,8 +342,8 @@ def profile_program(link, working_plan):
     (``_profile_plan``). Unlike the old compliance-gated check, it no longer
     depends on there being a *measurable* week: cadence degrades gracefully
     (``None`` -> "No sessions yet") instead of needing to hide the whole
-    block. The goal still surfaces from the plan the coach is shaping so the
-    left rail isn't blank before any sessions exist.
+    block. The plan's goal surfaces as ``program_goal``, next to (never in place
+    of) the athlete-record ``goals`` that ``profile_athlete`` provides.
     """
     plan = _profile_plan(link)
     if plan is None:
@@ -338,7 +356,7 @@ def profile_program(link, working_plan):
                 "status": "",
                 "status_label": "",
                 "review_batch_id": None,
-                "goals": [goal] if goal else [],
+                "program_goal": goal,
             },
             "macrocycle": [],
             "results_summary": None,
@@ -369,7 +387,7 @@ def profile_program(link, working_plan):
             "status": status,
             "status_label": status_label,
             "review_batch_id": review_batch_id,
-            "goals": [goal] if goal else [],
+            "program_goal": goal,
         },
         "macrocycle": macrocycle,
         "results_summary": _profile_results(link),
@@ -460,9 +478,14 @@ def roster_activity(coach, *, limit=8):
     the athlete, the session they logged, and how long ago. Scoped to the coach's
     active links and *done* logs by ``adherence.recent_logs``.
     """
+    labels = dict(
+        CoachAthlete.objects.for_coach(coach)
+        .active()
+        .values_list("athlete_id", "label")
+    )
     events = []
     for log in adherence.recent_logs(coach, limit=limit):
-        name = log.athlete.display_name()
+        name = athlete_name(log.athlete, labels.get(log.athlete_id, ""))
         session_label = log.session.name or f"Day {log.session.day_number}"
         events.append(
             {
@@ -489,6 +512,7 @@ def pending_invite(invite):
     """
     return {
         "email": invite.email,
+        "label": invite.label,
         "token": invite.token,
         "when": invite.created_at,
         "is_expired": invite.status == CoachInvite.Status.EXPIRED or invite.is_expired,
@@ -501,7 +525,7 @@ def pending_request(link):
     The coach accepts/declines via the recipient token views, so the row carries
     the link's ``token`` to address them.
     """
-    name = link.athlete.display_name()
+    name = link_athlete_name(link)
     return {
         "name": name,
         "initials": initials(name),
@@ -545,7 +569,7 @@ def relationship_history(coach):
     )
     past, reconnecting = [], []
     for link in links:
-        name = link.athlete.display_name()
+        name = link_athlete_name(link)
         row = {
             "id": link.athlete_id,
             "name": name,
@@ -786,12 +810,12 @@ def athlete_pending(user):
     links = (
         CoachAthlete.objects.for_athlete(user)
         .pending()
-        .select_related("coach")
+        .select_related("coach", "coach__coach_profile")
         .order_by("-created_at")
     )
     invites, requests = [], []
     for link in links:
-        name = link.coach.display_name()
+        name = coach_name(link.coach)
         row = {
             "coach": name,
             "initials": initials(name),
@@ -878,7 +902,7 @@ def deliver_screen(plan, week=None):
             )
 
     week_count = len(weeks)
-    athlete = profile_athlete(plan.athlete)
+    athlete = profile_athlete(plan.athlete, plan.relationship.label)
     athlete["block"] = block.name if block else ""
     athlete["week"] = f"{week_count} week{'' if week_count == 1 else 's'}"
     return {
@@ -903,7 +927,7 @@ def review_changes(batch):
     """
     plan = batch.plan
     return {
-        "athlete": {"name": plan.athlete.display_name()},
+        "athlete": {"name": link_athlete_name(plan.relationship)},
         "changes": [serialize_proposed_change(c) for c in batch.changes.all()],
     }
 
@@ -1240,7 +1264,7 @@ def session_results(session):
         flag = ""
 
     return {
-        "athlete": {"name": athlete.display_name()},
+        "athlete": {"name": link_athlete_name(plan.relationship)},
         "plan_id": plan.pk,
         "rows": rows,
         "summary": {
@@ -1500,7 +1524,7 @@ def athlete_home(user, focus_week_id=None):
     plans = list(
         Plan.objects.for_athlete(user)
         .exclude(status=Plan.Status.ARCHIVED)
-        .select_related("relationship__coach")
+        .select_related("relationship__coach", "relationship__coach__coach_profile")
         .order_by("-modified")
     )
     default_plan_id = _athlete_default_plan_id(user, plans)
@@ -1520,7 +1544,7 @@ def athlete_home(user, focus_week_id=None):
                     "id": plan.pk,
                     "title": plan.title,
                     "goal": plan.goal,
-                    "coach": plan.coach.display_name(),
+                    "coach": coach_name(plan.coach),
                     "block": "",
                     "sessions": [],
                     "grid": None,
@@ -1561,7 +1585,7 @@ def athlete_home(user, focus_week_id=None):
                 "id": plan.pk,
                 "title": plan.title,
                 "goal": plan.goal,
-                "coach": plan.coach.display_name(),
+                "coach": coach_name(plan.coach),
                 "block": block.name,
                 "sessions": sessions,
                 "grid": _athlete_block_grid(block, focus.pk),

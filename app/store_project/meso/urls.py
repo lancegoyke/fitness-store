@@ -11,6 +11,7 @@ from .views import ChangeReviewView
 from .views import CoachBillingView
 from .views import DeliverView
 from .views import MesoDesignerView
+from .views import MesoSettingsView
 from .views import OfflineView
 from .views import RelationshipHistoryView
 from .views import ResultsView
@@ -21,6 +22,7 @@ from .views import UsageDashboardView
 app_name = "meso"
 urlpatterns = [
     path("", RosterView.as_view(), name="roster"),
+    path("settings/", MesoSettingsView.as_view(), name="settings"),
     # Past athletes — ended/declined relationships, with re-invite.
     path(
         "history/",
@@ -118,6 +120,26 @@ urlpatterns = [
     # ("self" isn't a UUID, so this never shadows ``athlete/<uuid:pk>/``).
     path("athlete/self/add/", views.roster_add_self, name="roster_add_self"),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
+    path(
+        "athlete/<uuid:pk>/label/",
+        views.athlete_label_update,
+        name="athlete_label",
+    ),
+    path(
+        "athlete/<uuid:pk>/record/",
+        views.athlete_record_update,
+        name="athlete_record",
+    ),
+    path(
+        "athlete/<uuid:pk>/contraindications/",
+        views.athlete_contraindication_add,
+        name="athlete_contraindication_add",
+    ),
+    path(
+        "athlete/<uuid:pk>/contraindications/<int:cid>/clear/",
+        views.athlete_contraindication_clear,
+        name="athlete_contraindication_clear",
+    ),
     # Create (or open) an individual program for an athlete (first-time-UX
     # Phase 1) — the "+ New program" / "Build a program" CTAs.
     path("athlete/<uuid:pk>/plan/new/", views.plan_create, name="plan_create"),

@@ -1,1 +1,1 @@
-{{ coach_name }} delivered a new training block
+{% autoescape off %}{{ coach_name }} delivered a new training block{% endautoescape %}

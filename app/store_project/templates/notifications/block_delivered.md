@@ -1,4 +1,4 @@
-Hi {{ athlete_name }},
+{% autoescape off %}Hi {{ athlete_name }},
 
 {{ coach_name }} just delivered a new block ({{ week_count }} week{{ week_count|pluralize }}) of "{{ plan_title }}" to your training app.
 
@@ -12,4 +12,4 @@ Mastering Fitness
 --
 You're getting this because {{ coach_name }} coaches you on Mastering Fitness.
 Unsubscribe from training-delivery emails: {{ unsubscribe_url }}
-{% endif %}
+{% endif %}{% endautoescape %}

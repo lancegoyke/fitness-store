@@ -1,9 +1,22 @@
+from django import forms as django_forms
 from django.contrib.auth import forms
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
 User = get_user_model()
+
+
+class SignupForm(django_forms.Form):
+    """Optional account name collected by allauth's regular signup flow."""
+
+    name = django_forms.CharField(label=_("Your name"), max_length=255, required=False)
+
+    def signup(self, request, user):
+        from store_project.meso.names import clean_name
+
+        user.name = clean_name(self.cleaned_data.get("name"))
+        user.save(update_fields=["name"])
 
 
 class UserChangeForm(forms.UserChangeForm):

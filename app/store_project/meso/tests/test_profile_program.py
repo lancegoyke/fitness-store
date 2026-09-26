@@ -1,8 +1,8 @@
 """The athlete-profile program block — ``presenters.profile_program`` + render.
 
-The profile's "Cadence / macrocycle / latest session" card and its left-rail
-goals shipped as a fully-built template fed dead placeholders (``profile_athlete``
-returned ``has_program=False``; the view hard-coded ``macrocycle=[]`` /
+The profile's "Cadence / macrocycle / latest session" card shipped as a
+fully-built template fed dead placeholders (``profile_athlete`` returned
+``has_program=False``; the view hard-coded ``macrocycle=[]`` /
 ``results_summary=None``). These pin the read-side that lights the block up:
 
 - programs are date-less (docs/meso/remove-current-week-plan.md §4a, decided
@@ -93,19 +93,22 @@ class TestEmptyState:
         assert program["athlete"]["recency"] == "No sessions yet"
         assert program["athlete"]["session_count_14d"] == 0
         assert program["athlete"]["status"] == ""
-        assert program["athlete"]["goals"] == []
+        assert program["athlete"]["program_goal"] == ""
+        assert "goals" not in program["athlete"]
         assert program["macrocycle"] == []
         assert program["results_summary"] is None
 
     def test_working_plan_built_but_undelivered(self):
         # A plan exists (goal set) but has no live WEEK yet → still the empty
-        # state, but the goal surfaces so the left rail isn't blank pre-delivery.
+        # state, but its goal surfaces as ``program_goal`` — separate from the
+        # global athlete-record ``goals``, which it never overwrites.
         rel = CoachAthleteFactory()
         plan = PlanFactory(relationship=rel, goal="Bench 315")
         MesocycleFactory(plan=plan, name="Base", order=0)
         program = presenters.profile_program(rel, plan)
         assert program["athlete"]["has_program"] is False
-        assert program["athlete"]["goals"] == ["Bench 315"]
+        assert program["athlete"]["program_goal"] == "Bench 315"
+        assert "goals" not in program["athlete"]
 
     def test_delivered_week_with_no_sessions_still_counts_as_a_program(self):
         # Re-based gate (§4a): "has_program" now means "the plan has any live
@@ -146,7 +149,8 @@ class TestProgramBlock:
         rel = CoachAthleteFactory()
         make_plan(rel, goal="Deadlift 500")
         athlete = presenters.profile_program(rel, None)["athlete"]
-        assert athlete["goals"] == ["Deadlift 500"]
+        assert athlete["program_goal"] == "Deadlift 500"
+        assert "goals" not in athlete
 
     def test_working_plan_goal_wins_over_delivered(self):
         # A coach who has since reset the goal on the working plan sees that one.
@@ -155,7 +159,8 @@ class TestProgramBlock:
         plan.goal = "New goal"
         plan.save(update_fields=["goal"])
         athlete = presenters.profile_program(rel, plan)["athlete"]
-        assert athlete["goals"] == ["New goal"]
+        assert athlete["program_goal"] == "New goal"
+        assert "goals" not in athlete
 
 
 # -- the macrocycle rail ---------------------------------------------------

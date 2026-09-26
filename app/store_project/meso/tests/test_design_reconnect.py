@@ -100,6 +100,7 @@ class TestSharedSiteNav:
         body = client.get(reverse("meso:roster")).content.decode()
         assert reverse("account_logout") in body
         assert reverse("users:profile") in body
+        assert reverse("meso:settings") in body
 
     def test_anonymous_landing_reconnects_to_the_site(self, client):
         # The public front door also carries the shared nav (cold visitor → site),

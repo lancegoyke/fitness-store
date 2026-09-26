@@ -13,6 +13,11 @@
   </p>
 
   <p>
+    Name: {% if user.name %}{{ user.name }}{% else %}Not set{% endif %}
+    · <a href="{% url 'users:update' %}">Edit name</a>
+  </p>
+
+  <p>
     <a href="{% url 'account_change_password' %}">Change Password</a> |
     <a href="{% url 'account_email' %}">Email Management</a> |
     <a href="{% url 'socialaccount_connections' %}">Social Accounts</a>
