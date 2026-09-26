@@ -161,6 +161,34 @@ def test_lock_coach_mutexes_empty_selection_issues_no_query():
     assert queries.captured_queries == []
 
 
+def test_lock_coach_mutexes_orders_by_pk_not_by_demo_ownership_614():
+    """Pin #614's documented precondition: a demo athlete is never a coach.
+
+    The two orders below disagree, which is a deadlock only when a staff-made
+    row violates that precondition. If this test fails because
+    ``lock_coach_mutexes`` became dependency-aware, update
+    ``docs/meso/decisions.md`` § Row-lock order and remove the precondition —
+    do not just edit the assertion.
+    """
+    athlete_coach = UserFactory(id=uuid.UUID(int=1))
+    CoachProfileFactory(user=athlete_coach)
+    owner = UserFactory(id=uuid.UUID(int=2))
+    CoachAthleteFactory(coach=owner, athlete=athlete_coach, is_demo=True)
+
+    with transaction.atomic():
+        assert demo.lock_coach_mutexes([owner.pk, athlete_coach.pk]) == [
+            athlete_coach.pk,
+            owner.pk,
+        ]
+        with CaptureQueriesContext(connection) as queries:
+            demo.clear_demo(owner)
+
+    locks = _user_lock_selects(queries.captured_queries)
+    assert len(locks) == 2
+    assert owner.pk.hex in locks[0]
+    assert athlete_coach.pk.hex in locks[1]
+
+
 def test_user_admin_bulk_delete_does_not_deadlock_with_clear_demo(monkeypatch):
     athlete = UserFactory(id=uuid.UUID(int=1))
     coach = UserFactory(id=uuid.UUID(int=2))

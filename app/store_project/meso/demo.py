@@ -313,6 +313,10 @@ def lock_coach_mutexes(user_ids):
     before ``lock_cascade_parents`` and its delete. Deliberately not
     ``@transaction.atomic`` for the same lock-lifetime reason as that helper.
 
+    PRECONDITION (#614): a demo athlete is never itself a coach. This is
+    documented, not enforced; see ``docs/meso/decisions.md`` § Row-lock order
+    and ``test_lock_coach_mutexes_orders_by_pk_not_by_demo_ownership_614``.
+
     The role checks stay in subqueries so the locking SELECT itself reads only
     ``users_user``. A joined lock would also lock the role/link rows, breaking
     the app-wide order, while ``DISTINCT`` cannot be combined with ``FOR UPDATE``.
