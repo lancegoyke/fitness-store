@@ -691,6 +691,7 @@ def _ensure_demo_log(athlete, plan, today):
                         set_number=set_number,
                         reps=reps,
                         load=load,
+                        unit=plan.unit,
                         rpe=rpe,
                     )
                 )

@@ -310,13 +310,17 @@ class TestBackfillMigration:
             executor.migrate([MESO_0051])
             captured = capsys.readouterr()
 
-            # Re-fetched via the REAL, current model (0051 is the leaf this
-            # branch's code matches) rather than `refresh_from_db()` on the
-            # historical instances above — those are frozen at their own
-            # migration state and have no `exercise_slot` attribute at all.
-            with_prescription = LoggedSet.objects.get(pk=with_prescription.pk)
-            without_prescription = LoggedSet.objects.get(pk=without_prescription.pk)
-            already_anchored = LoggedSet.objects.get(pk=already_anchored.pk)
+            # Re-fetched via the migrated 0051 model rather than the real,
+            # current model, which may have fields added after this historical
+            # migration state (and therefore columns that do not exist yet).
+            MigratedLoggedSet = executor.loader.project_state(
+                [MESO_0051]
+            ).apps.get_model("meso", "LoggedSet")
+            with_prescription = MigratedLoggedSet.objects.get(pk=with_prescription.pk)
+            without_prescription = MigratedLoggedSet.objects.get(
+                pk=without_prescription.pk
+            )
+            already_anchored = MigratedLoggedSet.objects.get(pk=already_anchored.pk)
 
             assert with_prescription.exercise_slot_id == slot_a.pk, (
                 "a row with a live prescription should be backfilled from it"

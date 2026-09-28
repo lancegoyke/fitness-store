@@ -2812,6 +2812,9 @@ class LoggedSet(models.Model):
     set_number = models.PositiveIntegerField(_("Set number"), default=1)
     reps = models.CharField(_("Reps"), max_length=32, blank=True)
     load = models.CharField(_("Load"), max_length=32, blank=True)
+    unit = models.CharField(
+        _("Unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
+    )
     rpe = models.CharField(_("RPE"), max_length=32, blank=True)
     # Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §4). Points at the
     # athlete-authored sub-line cell (line >= 1) whose freeform text
