@@ -28,6 +28,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso.billing import access
+from store_project.meso.factories import AthleteProfileFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.models import CoachAthlete
@@ -94,8 +95,17 @@ class TestScaffoldAndCreatePlan:
     def test_create_plan_uses_coach_default_unit(self):
         profile = CoachProfileFactory(default_unit=Unit.POUNDS)
         link = CoachAthleteFactory(coach=profile.user)
+        assert link.effective_unit() == Unit.POUNDS
         plan = link.create_plan()
         assert plan.unit == Unit.POUNDS
+
+    def test_create_plan_uses_athlete_override_before_coach_default(self):
+        profile = CoachProfileFactory(default_unit=Unit.KILOGRAMS)
+        link = CoachAthleteFactory(coach=profile.user)
+        AthleteProfileFactory(user=link.athlete, unit=Unit.POUNDS)
+
+        assert link.effective_unit() == Unit.POUNDS
+        assert link.create_plan().unit == Unit.POUNDS
 
     def test_create_plan_unit_falls_back_without_profile(self):
         link = CoachAthleteFactory()  # coach has no CoachProfile
