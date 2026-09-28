@@ -2265,9 +2265,10 @@ _(Append dated entries here as decisions land.)_
   `views.py`: `AthleteHomeView` + `AthleteProfileView` set
   `ctx["personal_records"]`. `_pr_list.html`: one shared partial (lift · est. 1RM ·
   provenance), self-hiding when empty, included below the live programs (athlete)
-  and in the left rail (coach). **Decision — unit is a per-PLAN property** (there is
-  no athlete-level unit preference), so each host shows one denomination (its
-  most-recently-active plan's unit) rather than pooling kg and lb; the coach reaches
+  and in the left rail (coach). **Decision — records are denominated by their
+  plan's unit**; an athlete preference only governs newly authored plans, so each
+  host shows one denomination (its most-recently-active plan's unit) rather than
+  pooling kg and lb; the coach reaches
   the panel only through an active link. Derive-on-read, nothing persisted, no new
   endpoints/URLs, no migration (stays `0042`). 11 tests (`test_pr_records_panel.py`);
   full meso suite 2009; Codex CLEAN. **The PR-surface slice is complete — the plan's
@@ -3133,3 +3134,37 @@ _(Append dated entries here as decisions land.)_
   exceptions remain the coach+demo-athlete bulk admin delete above, the unswept
   lock classes and creator entry points listed above, and #584's deliberately
   plain Prescription locks.
+- 2026-09-27 — **#600 load units — effective-unit rule and no-auto-convert.**
+  The prior "unit is a per-PLAN property, no athlete-level preference" claim
+  in this doc (PR-surface slice, above) was true only for *reading* a plan's
+  own denomination — it never followed that nothing should influence what
+  unit a *new* plan is created in. Root cause of #600: `CoachProfile.
+  default_unit` defaults to kilograms and nothing ever asked a coach to set
+  it, so a US coach's plans (and everything derived from them) were silently
+  kg. Settled, per Lance's two decision comments on #600: **the logged
+  set's own unit is authoritative, stamped at write time** — `LoggedSet.unit`
+  now snapshots the plan's unit at the moment a set is logged and is never
+  re-derived later, so changing `Plan.unit`/`CoachProfile.default_unit`/
+  `AthleteProfile.unit` afterward cannot reinterpret history that already
+  happened. **The effective unit for a relationship is the athlete's
+  `AthleteProfile.unit` override if set, else the coach's `CoachProfile.
+  default_unit`, else kilograms** (`CoachAthlete.effective_unit()`, the one
+  place this fallback is implemented) — because, in Lance's words, "the
+  athlete is the one with the gym and that's going to dictate if they have
+  lbs or kg available to them." `create_plan` uses it, so a coach's or
+  athlete's setting governs what a *newly authored* program is denominated
+  in — never an existing one. **No auto-convert, ever**: 225 lb is 102.06 kg,
+  not a loadable plate number, so changing a unit setting leaves every
+  existing `Prescription.text`/`LoggedSet.load` string byte-for-byte
+  unchanged; only new authoring picks up the new unit. The TARGET column
+  (previously a bare number) now suffixes a unit on any plain numeric load,
+  matching the LOGGED column beside it; a percentage or bodyweight load gets
+  no unit suffix (it isn't a weight). The agent's system prompt now states
+  what its JSON context's `unit` field means, so its own rationale text
+  states the unit when it states a load. **Left alone, deliberately:**
+  `Unit.KILOGRAMS` stays the model default on every field — `POUNDS` may be
+  the better default for this (US) audience, but changing it is a product
+  call plus a decision about existing rows, not something this ticket
+  decided unilaterally. Also left alone: any conversion/rounding pass on a
+  unit switch (Lance may ask for it later), and the shared-cell logging
+  model (#578) — orthogonal, not touched.

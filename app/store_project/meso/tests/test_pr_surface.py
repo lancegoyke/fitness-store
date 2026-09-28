@@ -36,6 +36,7 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
+from store_project.meso.factories import AthleteProfileFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
@@ -44,6 +45,7 @@ from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
+from store_project.meso.models import Unit
 from store_project.meso.presenters import session_results
 from store_project.users.factories import UserFactory
 
@@ -53,13 +55,18 @@ from ._helpers import presc as make_presc
 pytestmark = pytest.mark.django_db
 
 
-def seed(*, coach=None, athlete=None):
+def seed(*, coach=None, athlete=None, athlete_unit=""):
     """A coach's owned, delivered session with two prescriptions (no log yet)."""
     coach = coach or UserFactory()
     athlete = athlete or UserFactory(name="Maya Okonkwo")
     rel = CoachAthleteFactory(coach=coach, athlete=athlete)
+    if athlete_unit:
+        AthleteProfileFactory(user=athlete, unit=athlete_unit)
     plan = PlanFactory(
-        relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
+        relationship=rel,
+        title="Hypertrophy Block",
+        status=Plan.Status.ACTIVE,
+        unit=rel.effective_unit() if athlete_unit else Unit.KILOGRAMS,
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=2, delivered_at=timezone.now())
@@ -166,6 +173,18 @@ class TestAthleteLogNewRecords:
         assert len(prs) == 1
         assert prs[0]["is_first"] is True
         assert prs[0]["value"] == "140"  # 120 * (1 + 5/30) = 140
+
+    def test_athlete_override_flows_through_the_lb_pr_toast(self, client):
+        s = seed(athlete_unit=Unit.POUNDS)
+        client.force_login(s.athlete)
+        resp = post_log(
+            client,
+            s.session,
+            {"status": "done", "sets": [squat_set(s.squat.pk, "5", "120")]},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["new_records"][0]["unit"] == Unit.POUNDS
 
     def test_pr_reports_delta_over_previous_best(self, client):
         s = seed()

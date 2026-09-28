@@ -222,6 +222,9 @@ SYSTEM_PROMPT = (
     "alternative and name it in introduces_exercise.\n"
     "- Anchor load progressions to the values already in the plan; prefer small, "
     "defensible steps from one week to the next.\n"
+    '- The plan context\'s unit field ("kg" or "lb") denominates every load '
+    "number in the context, including recent_logs; when your rationale or summary "
+    "states a load, state the unit explicitly.\n"
     "- Use the 'add' kind to introduce a NEW exercise into a day: target the day "
     "by session_id, give the exercise in new_name, and set new_sets/new_reps/"
     "new_rpe (and new_load only if you want a starting weight). This is how you "

@@ -337,11 +337,12 @@ class LoggedSetInline(admin.TabularInline):
     # introduced here — ``main`` produces an equally uncountable row from the
     # same blank add — just a gap this field doesn't close either.
     #
+    # ``unit`` is the immutable write-time denomination of this historical set.
     # ``reclaimed_line`` is an internal hint for the restore lookup (#541),
     # not something to edit either. It has no DB constraint, so it can
     # outlive its cell; as an editable field that stale id would fail
     # validation and block saving the whole log.
-    readonly_fields = ("exercise_slot", "reclaimed_line")
+    readonly_fields = ("exercise_slot", "unit", "reclaimed_line")
 
 
 @admin.register(SessionLog)

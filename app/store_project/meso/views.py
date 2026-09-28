@@ -94,6 +94,7 @@ from .models import SandboxSession
 from .models import Session
 from .models import SessionLog
 from .models import SessionSlot
+from .models import Unit
 from .models import Week
 from .models import WeekDelivery
 from .models import display_line_id
@@ -512,6 +513,7 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
                         getattr(profile, "programming_style", []) or []
                     ),
                     "avoid_rules": getattr(profile, "avoid_rules", ""),
+                    "unit": getattr(profile, "default_unit", Unit.KILOGRAMS),
                 }
             )
             ctx["coach_name"] = coach_name(self.request.user)
@@ -535,11 +537,13 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
                 profile.display_name = form.cleaned_data["display_name"]
                 profile.programming_style = form.cleaned_data["programming_style"]
                 profile.avoid_rules = form.cleaned_data["avoid_rules"]
+                profile.default_unit = form.cleaned_data["unit"]
                 profile.save(
                     update_fields=[
                         "display_name",
                         "programming_style",
                         "avoid_rules",
+                        "default_unit",
                         "modified",
                     ]
                 )
@@ -658,6 +662,13 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
         ctx["athlete_label"] = link.label
         ctx["athlete_has_own_name"] = bool(clean_name(link.athlete.name))
+        athlete_profile = getattr(link.athlete, "athlete_profile", None)
+        athlete_unit = athlete_profile.unit if athlete_profile else ""
+        ctx["athlete_record_form"] = AthleteRecordForm(initial={"unit": athlete_unit})
+        ctx["effective_unit"] = link.effective_unit()
+        ctx["effective_unit_source"] = (
+            "their own setting" if athlete_unit else "coach default"
+        )
         ctx["relationship"] = {
             "token": link.token,
             "can_end": not link.is_self and not link.is_demo,
@@ -2236,6 +2247,7 @@ def athlete_log_session(request, pk):
                     set_number=cs["set_number"],
                     reps=cs["reps"],
                     load=cs["load"],
+                    unit=locked_plan.unit,
                     rpe=cs["rpe"],
                     reclaimed_line_id=_consume_carried_link(
                         carried_links, cs, identified, live_rows
@@ -2487,7 +2499,9 @@ def athlete_cell_write(request, pk):
         # queue (#529) queue behind the same lock. Accepted: a plan is one
         # athlete's, so the wait is against their own coach editing that very
         # plan, and the alternative is a deadlock that 500s one of them.
-        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
+        locked_plan = (
+            Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
+        )
         # Serialize the WHOLE write on the session row, before anything is read.
         #
         # `(session, athlete)` has no uniqueness, so two overlapping blurs can
@@ -2568,6 +2582,7 @@ def athlete_cell_write(request, pk):
                 line_zero[exercise_id],
                 cell,
                 previous_text=previous_text,
+                unit=locked_plan.unit,
             )
         )
         # Bump `last_activity_at` (5b, settle.py) — but ONLY on a real edit.
@@ -2725,7 +2740,9 @@ def _line_sets(session, athlete, cell):
     )
 
 
-def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=""):
+def _upsert_parsed_set(
+    session, athlete, line_zero_cell, cell, *, previous_text="", unit=None
+):
     """Parse ``cell``'s just-committed text and upsert its derivative ``LoggedSet``.
 
     Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §5): the freeform
@@ -2763,6 +2780,8 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
     savepoint, so a DB failure here rolls back only the upsert and leaves the
     cell write intact.
     """
+    if unit is None:
+        unit = session.week.mesocycle.plan.unit
     new_records = []
     try:
         with transaction.atomic():  # savepoint — see the docstring
@@ -3072,6 +3091,7 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                                 exercise_slot_id=line_zero_cell.exercise_slot_id,
                                 source_line=cell,
                                 set_number=number,
+                                unit=unit,
                                 **values,
                             )
                             is_new_set = previous is None

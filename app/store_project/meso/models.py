@@ -196,6 +196,7 @@ class AthleteProfile(models.Model):
         verbose_name=_("User"),
     )
     goals = models.TextField(_("Goals"), blank=True)
+    unit = models.CharField(_("Unit"), max_length=2, choices=Unit, blank=True)
     training_started = models.DateField(_("Training started"), null=True, blank=True)
     notes = models.TextField(_("Notes"), blank=True)
     delivery_email_opt_out = models.BooleanField(
@@ -570,16 +571,25 @@ class CoachAthlete(models.Model):
             .first()
         )
 
+    def effective_unit(self):
+        """The athlete override, coach default, or kilograms as a final fallback."""
+        athlete_profile = getattr(self.athlete, "athlete_profile", None)
+        if athlete_profile and athlete_profile.unit:
+            return athlete_profile.unit
+        coach_profile = getattr(self.coach, "coach_profile", None)
+        if coach_profile and coach_profile.default_unit:
+            return coach_profile.default_unit
+        return Unit.KILOGRAMS
+
     def create_plan(self, *, title="New program", goal="", unit=None, status=None):
         """Create an individual program rooted at this relationship, with a scaffold.
 
         A starter ``Plan`` plus ``Plan.scaffold``'s minimal-but-usable tree, so
         the designer opens onto an editable, deliverable grid. ``unit`` defaults
-        to the coach's preferred unit; ``status`` to a draft.
+        to this relationship's effective unit; ``status`` to a draft.
         """
         if unit is None:
-            profile = getattr(self.coach, "coach_profile", None)
-            unit = profile.default_unit if profile else Unit.KILOGRAMS
+            unit = self.effective_unit()
         plan = Plan.objects.create(
             relationship=self,
             title=title,
@@ -2802,6 +2812,9 @@ class LoggedSet(models.Model):
     set_number = models.PositiveIntegerField(_("Set number"), default=1)
     reps = models.CharField(_("Reps"), max_length=32, blank=True)
     load = models.CharField(_("Load"), max_length=32, blank=True)
+    unit = models.CharField(
+        _("Unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
+    )
     rpe = models.CharField(_("RPE"), max_length=32, blank=True)
     # Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §4). Points at the
     # athlete-authored sub-line cell (line >= 1) whose freeform text

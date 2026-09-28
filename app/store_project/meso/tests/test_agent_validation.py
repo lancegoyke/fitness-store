@@ -591,6 +591,11 @@ class TestPercentAwarePrompt:
         # P4: the agent is grounded on the whole block, not just the current week.
         assert "block" in client.SYSTEM_PROMPT.lower()
 
+    def test_system_prompt_defines_the_plan_unit_for_all_loads(self):
+        assert 'unit field ("kg" or "lb")' in client.SYSTEM_PROMPT
+        assert "recent_logs" in client.SYSTEM_PROMPT
+        assert "state the unit" in client.SYSTEM_PROMPT
+
 
 class TestAddKind:
     """The ``add`` kind introduces a NEW exercise row into a session.

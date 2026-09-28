@@ -1219,6 +1219,7 @@ def _logged_sets_from_cells(log, prescriptions):
     sub-lines up front, keyed by ``(exercise_slot_id, week_id)``, instead of
     one query per cell (N+1).
     """
+    unit = log.session.week.mesocycle.plan.unit
     sub_lines_by_cell = {}
     if prescriptions:
         slot_ids = {p.exercise_slot_id for p in prescriptions}
@@ -1264,6 +1265,7 @@ def _logged_sets_from_cells(log, prescriptions):
                     set_number=set_number,
                     reps=reps_text,
                     load=load,
+                    unit=unit,
                     rpe=rpe,
                 )
             )
@@ -1684,6 +1686,7 @@ class Command(BaseCommand):
                             set_number=set_number,
                             reps=reps,
                             load=load,
+                            unit=plan.unit,
                             rpe=rpe,
                         )
                     )

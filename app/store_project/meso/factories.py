@@ -222,6 +222,9 @@ try:
         set_number = factory.Sequence(lambda n: n + 1)
         reps = "10"
         load = "60"
+        unit = factory.LazyAttribute(
+            lambda o: o.session_log.session.week.mesocycle.plan.unit
+        )
         rpe = "7"
 
     class AthleteOneRmFactory(DjangoModelFactory):
