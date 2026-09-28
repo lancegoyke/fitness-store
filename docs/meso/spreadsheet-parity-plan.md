@@ -510,9 +510,10 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
    plan (`_records_unit_plan`). `views.py`: `AthleteHomeView` + `AthleteProfileView`
    set `ctx["personal_records"]`. `_pr_list.html`: one shared partial
    (lift · est. 1RM · provenance), self-hiding when empty; included below the live
-   programs (athlete) and in the left rail (coach). **Unit is a per-PLAN property**
-   (there is no athlete-level unit preference) so each host shows one denomination
-   (its most-recently-active plan's unit) rather than pooling kg and lb.
+   programs (athlete) and in the left rail (coach). **Records are denominated by
+   their plan's unit**; an athlete preference only governs newly authored plans,
+   so each host shows one denomination (its most-recently-active plan's unit)
+   rather than pooling kg and lb.
    Derive-on-read, nothing persisted, no new endpoints/URLs, no migration (stays
    `0042`). 11 tests (`test_pr_records_panel.py`); full meso suite green (2009).
    **The PR-surface slice is complete — the runway is now parse-at-commit → agent.**

@@ -18,6 +18,7 @@ from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import Contraindication
 from store_project.meso.models import Plan
+from store_project.meso.models import Unit
 from store_project.meso.serializers import serialize_athlete_identity
 from store_project.users.factories import UserFactory
 
@@ -100,6 +101,28 @@ class TestAthleteRecord:
         profile.refresh_from_db()
         assert profile.goals == unsafe
         assert profile.training_started == started
+
+    def test_unit_override_can_be_set_and_cleared(self, client):
+        link = CoachAthleteFactory(coach=UserFactory(), athlete=UserFactory())
+        CoachProfile.objects.create(user=link.coach, default_unit=Unit.KILOGRAMS)
+        client.force_login(link.coach)
+        url = route("athlete_record", pk=link.athlete_id)
+
+        assert client.post(url, {"unit": Unit.POUNDS}).status_code == 302
+        profile = AthleteProfile.objects.get(user=link.athlete)
+        assert profile.unit == Unit.POUNDS
+        body = client.get(
+            reverse("meso:athlete", kwargs={"pk": link.athlete_id})
+        ).content.decode()
+        assert "Currently lb (their own setting)" in body
+
+        assert client.post(url, {"unit": ""}).status_code == 302
+        profile.refresh_from_db()
+        assert profile.unit == ""
+        body = client.get(
+            reverse("meso:athlete", kwargs={"pk": link.athlete_id})
+        ).content.decode()
+        assert "Currently kg (coach default)" in body
 
     @pytest.mark.parametrize("delivered", [False, True])
     def test_athlete_goals_and_the_plans_goal_are_both_shown(self, client, delivered):
@@ -265,6 +288,7 @@ class TestCoachingSettings:
                     " Compound-first, RPE-based load, compound-FIRST, Mobility "
                 ),
                 "avoid_rules": "  Machine-only days\nUntracked progressions  ",
+                "unit": Unit.KILOGRAMS,
             },
         )
         assert response.status_code == 302
@@ -294,6 +318,30 @@ class TestCoachingSettings:
         assert f'href="{reverse("meso:settings")}"' in body
         assert "Avoid:</span>" not in body
 
+    def test_default_unit_round_trips_through_coaching_settings(self, client):
+        link = CoachAthleteFactory()
+        CoachProfile.objects.create(user=link.coach)
+        client.force_login(link.coach)
+
+        settings_body = client.get(reverse("meso:settings")).content.decode()
+        assert 'name="unit"' in settings_body
+        assert 'value="kg"' in settings_body
+        assert 'value="lb"' in settings_body
+
+        response = client.post(
+            reverse("meso:settings"),
+            {
+                "section": "coaching",
+                "display_name": "Coach Jo",
+                "programming_style": "Compound-first",
+                "avoid_rules": "",
+                "unit": Unit.POUNDS,
+            },
+        )
+        assert response.status_code == 302
+        link.coach.coach_profile.refresh_from_db()
+        assert link.coach.coach_profile.default_unit == Unit.POUNDS
+
     @pytest.mark.parametrize(
         ("style", "error"),
         [
@@ -314,6 +362,7 @@ class TestCoachingSettings:
                 "display_name": "Coach",
                 "programming_style": style,
                 "avoid_rules": "Keep this",
+                "unit": Unit.KILOGRAMS,
             },
         )
         assert response.status_code == 200

@@ -398,10 +398,11 @@ def profile_program(link, working_plan):
 #
 # The persistent "records book" — best e1RM per lift with provenance — shared by
 # the athlete's training home and the coach's athlete-profile, both fed by the 4b
-# derive-on-read engine (``personal_records``); nothing is persisted. Unit is a
-# per-PLAN property (there is no athlete-level preference), so each host scopes to
-# a single plan's unit rather than pooling kg and lb: the athlete's / this link's
-# most-recently-active plan. An empty row list hides the panel (the templates
+# derive-on-read engine (``personal_records``); nothing is persisted. Records are
+# denominated by their plan's unit; the athlete preference only governs newly
+# authored plans. Each host therefore scopes to one plan's unit rather than pooling
+# kg and lb: the athlete's / this link's most-recently-active plan. An empty row
+# list hides the panel (the templates
 # guard), so a lifter with no numeric-parseable best sees no empty chrome.
 
 
@@ -967,8 +968,8 @@ def _text_label(text):
     return " · ".join(_text_lines(text)) or "—"
 
 
-def _results_target_label(prescription, recovered_rpe=None):
-    """The prescribed target — the cell's freeform text, verbatim.
+def _results_target_label(prescription, recovered_rpe=None, unit=""):
+    """The prescribed target, with unit on a plain numeric load.
 
     ``recovered_rpe`` is appended (``3 x 12`` -> ``3 x 12, RPE 9``) when the
     target RPE used for the over-target flag/``avg_rpe_delta`` came from a
@@ -981,8 +982,21 @@ def _results_target_label(prescription, recovered_rpe=None):
     only pass a value here that line 0 didn't already yield (see
     ``_exercise_result``/``_avg_rpe_delta``'s callers) — this function does
     not re-check that itself.
+
+    The unit is appended to line 0 specifically (the only line
+    ``parse_prescription`` ever reads a load from) before the lines fold
+    together — never to the already-folded string, which would misattach it
+    to a trailing prose line instead (``3 x 6, 70`` plus a ``Pause at the
+    bottom`` sub-line must read ``70 kg``, not ``bottom kg``).
     """
-    label = _text_label(prescription.text)
+    lines = _text_lines(prescription.text)
+    if not lines:
+        label = "—"
+    else:
+        parsed_load = (prescription.parsed() or {}).get("load")
+        if _num(parsed_load) is not None and unit:
+            lines = [f"{lines[0]} {unit}", *lines[1:]]
+        label = " · ".join(lines)
     if not recovered_rpe:
         return label
     return f"RPE {recovered_rpe}" if label == "—" else f"{label}, RPE {recovered_rpe}"
@@ -1114,7 +1128,7 @@ def _exercise_result(prescription, logged_sets, unit, sub_lines_by_slot):
         note = ""
     row = {
         "name": prescription.name,
-        "target": _results_target_label(prescription, recovered_rpe),
+        "target": _results_target_label(prescription, recovered_rpe, unit),
         "logged": _logged_label(logged_sets, unit) if logged_sets else "—",
         "rpe": _fmt_num(top_rpe) if top_rpe is not None else "—",
         "rpe_state": "over" if overshoot is not None and overshoot > 0 else "on",

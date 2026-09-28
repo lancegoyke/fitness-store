@@ -2,6 +2,7 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from .models import Unit
 from .names import clean_name
 
 
@@ -42,6 +43,12 @@ class CoachDisplayNameForm(forms.Form):
             attrs={"class": "meso-field", "maxlength": "2000", "rows": "4"}
         ),
     )
+    unit = forms.ChoiceField(
+        label="Default load unit",
+        choices=Unit.choices,
+        required=True,
+        widget=forms.Select(attrs={"class": "meso-field"}),
+    )
 
     def clean_display_name(self):
         return clean_name(self.cleaned_data["display_name"])
@@ -73,6 +80,11 @@ class AthleteRecordForm(forms.Form):
     goals = forms.CharField(max_length=2000, required=False)
     training_started = forms.DateField(required=False)
     notes = forms.CharField(max_length=5000, required=False)
+    unit = forms.ChoiceField(
+        choices=[("", "Coach default"), *Unit.choices],
+        required=False,
+        widget=forms.Select(attrs={"class": "meso-field"}),
+    )
 
     def clean_goals(self):
         return self.cleaned_data["goals"].strip()

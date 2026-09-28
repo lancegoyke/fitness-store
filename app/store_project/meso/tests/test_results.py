@@ -20,6 +20,7 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
+from store_project.meso.factories import AthleteProfileFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
@@ -29,6 +30,7 @@ from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
+from store_project.meso.models import Unit
 from store_project.meso.presenters import session_results
 from store_project.users.factories import UserFactory
 
@@ -39,13 +41,18 @@ from ._helpers import sub_line
 pytestmark = pytest.mark.django_db
 
 
-def seed(*, coach=None, athlete=None):
+def seed(*, coach=None, athlete=None, athlete_unit=""):
     """A coach's owned, delivered session with two prescriptions (no log yet)."""
     coach = coach or UserFactory()
     athlete = athlete or UserFactory(name="Maya Okonkwo")
     rel = CoachAthleteFactory(coach=coach, athlete=athlete)
+    if athlete_unit:
+        AthleteProfileFactory(user=athlete, unit=athlete_unit)
     plan = PlanFactory(
-        relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
+        relationship=rel,
+        title="Hypertrophy Block",
+        status=Plan.Status.ACTIVE,
+        unit=rel.effective_unit() if athlete_unit else Unit.KILOGRAMS,
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=2, delivered_at=timezone.now())
@@ -236,7 +243,7 @@ class TestSessionResultsPresenter:
         assert ctx["athlete"]["name"] == "Maya Okonkwo"
         assert ctx["plan_id"] == s.plan.pk
         rows = {r["name"]: r for r in ctx["rows"]}
-        assert rows["Box Squat"]["target"] == "3 x 6, RPE 7, 70"
+        assert rows["Box Squat"]["target"] == "3 x 6, RPE 7, 70 kg"
         assert rows["Box Squat"]["logged"] == "3×6 @ 70 kg"
         assert rows["Box Squat"]["rpe"] == "9"  # the hardest set
         assert rows["Box Squat"]["rpe_state"] == "over"
@@ -262,6 +269,34 @@ class TestSessionResultsPresenter:
         )
         rows = {r["name"]: r for r in session_results(s.session)["rows"]}
         assert rows["Box Squat"]["logged"] == "2×6, 1×4 @ 70 kg"
+
+    def test_lb_plan_labels_plain_numeric_target_and_logged_load(self):
+        s = seed(athlete_unit=Unit.POUNDS)
+        percentage = make_presc(
+            s.session, name="Percent Squat", order=2, text="3 x 6, 70%"
+        )
+        bodyweight = make_presc(s.session, name="Pull-up", order=3, text="3 x 6, BW")
+        log_session(s, squat_sets=[("6", "70", "7")] * 3)
+
+        rows = {row["name"]: row for row in session_results(s.session)["rows"]}
+        assert rows["Box Squat"]["target"] == "3 x 6, RPE 7, 70 lb"
+        assert rows["Box Squat"]["logged"] == "3×6 @ 70 lb"
+        assert rows[percentage.name]["target"] == "3 x 6, 70%"
+        assert rows[bodyweight.name]["target"] == "3 x 6, BW"
+
+    def test_unit_attaches_to_the_load_not_a_trailing_note_line(self):
+        # A multi-line cell's later lines are prose (a cue, a substitution) —
+        # the unit must land on line 0's load, not get folded onto whatever
+        # line happens to end up last.
+        s = seed(athlete_unit=Unit.POUNDS)
+        cued = make_presc(
+            s.session,
+            name="Cued Squat",
+            order=2,
+            text="3 x 6, 70\nPause at the bottom",
+        )
+        rows = {row["name"]: row for row in session_results(s.session)["rows"]}
+        assert rows[cued.name]["target"] == "3 x 6, 70 lb · Pause at the bottom"
 
     def test_partial_completion_and_shortfall_note(self):
         s = seed()
@@ -300,7 +335,7 @@ class TestSessionResultsPresenter:
         rows = {r["name"]: r for r in ctx["rows"]}
         assert rows["Box Squat"]["logged"] == "—"
         # Targets still render so the coach sees what was prescribed.
-        assert rows["Box Squat"]["target"] == "3 x 6, RPE 7, 70"
+        assert rows["Box Squat"]["target"] == "3 x 6, RPE 7, 70 kg"
 
     def test_load_range_when_loads_vary(self):
         s = seed()
@@ -351,7 +386,7 @@ class TestSessionResultsRecoversSubLineRpe:
         row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
         # The label surfaces the recovered RPE — otherwise the flag below
         # would be incoherent (a flag with no RPE visible on the target).
-        assert row["target"] == "3 x 6, 70, RPE 7"
+        assert row["target"] == "3 x 6, 70 kg, RPE 7"
         assert row["rpe_state"] == "over"
         assert "Box Squat" in ctx["summary"]["flag"]
         assert ctx["summary"]["avg_rpe_delta"] == "+2.0"
@@ -367,7 +402,7 @@ class TestSessionResultsRecoversSubLineRpe:
         row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
         # Label unchanged — line 0's text already shows the (correct) RPE, so
         # nothing is appended (that would duplicate it).
-        assert row["target"] == "3 x 6, RPE 7, 70"
+        assert row["target"] == "3 x 6, RPE 7, 70 kg"
         assert row["rpe_state"] == "over"
         # 9 - 7 (line 0's RPE), not 9 - 2 (the sub-line's) → the same +1.0
         # mean this scenario yields without any sub-line at all.
@@ -380,7 +415,7 @@ class TestSessionResultsRecoversSubLineRpe:
         )
         ctx = session_results(s.session)
         row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
-        assert row["target"] == "3 x 6, 70"
+        assert row["target"] == "3 x 6, 70 kg"
         assert row["rpe_state"] == "on"  # nothing to compare against, not a crash
         assert ctx["summary"]["avg_rpe_delta"] == "—"
         assert ctx["summary"]["flag_count"] == 0
@@ -394,7 +429,7 @@ class TestSessionResultsRecoversSubLineRpe:
         log_session(s, squat_sets=[("6", "70", "8")] * 3)
         ctx = session_results(s.session)
         row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
-        assert row["target"] == "3 x 6, 70, RPE 8"
+        assert row["target"] == "3 x 6, 70 kg, RPE 8"
         assert "135" not in row["target"]
         assert row["rpe_state"] == "on"
 
@@ -412,7 +447,7 @@ class TestSessionResultsRecoversSubLineRpe:
         log_session(s, squat_sets=[("6", "70", "9")] * 3)
         ctx = session_results(s.session)
         row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
-        assert row["target"] == "3 x 6, 70"  # the athlete's line isn't a target
+        assert row["target"] == "3 x 6, 70 kg"  # athlete line isn't a target
         assert row["rpe_state"] == "on"
         assert ctx["summary"]["avg_rpe_delta"] == "—"
 

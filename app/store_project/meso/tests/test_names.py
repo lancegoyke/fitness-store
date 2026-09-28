@@ -386,7 +386,11 @@ class TestMesoSettings:
 
         client.post(
             reverse("meso:settings"),
-            {"section": "coaching", "display_name": "  Coach\tMaya "},
+            {
+                "section": "coaching",
+                "display_name": "  Coach\tMaya ",
+                "unit": "kg",
+            },
         )
         coach.coach_profile.refresh_from_db()
         assert coach.coach_profile.display_name == "Coach Maya"
