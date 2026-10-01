@@ -194,6 +194,11 @@ urlpatterns = [
         views.relationship_reinvite,
         name="relationship_reinvite",
     ),
+    path(
+        "relationship/<uuid:token>/restore/",
+        views.relationship_restore,
+        name="relationship_restore",
+    ),
     # Athlete → coach requests (N4 Phase 2): the athlete asks, then may withdraw.
     path("request/", views.athlete_request_coach, name="athlete_request_coach"),
     path(

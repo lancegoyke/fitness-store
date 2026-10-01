@@ -136,7 +136,7 @@
               </a>
             {% empty %}
               <div class="meso-row" style="color:var(--dim);">
-                {% if active_pending_invites|length == 1 %}No athletes yet — {{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% elif active_pending_invites %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% else %}No athletes yet. Invite one to get started.{% endif %}
+                {% if active_pending_invites|length == 1 %}No athletes yet — {{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% elif active_pending_invites %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% elif has_history %}No active athletes right now.{% else %}No athletes yet. Invite one to get started.{% endif %}
               </div>
             {% endfor %}
           </div>

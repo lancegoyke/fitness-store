@@ -329,6 +329,9 @@ class CoachAthlete(models.Model):
     PENDING_STATUSES = (Status.PENDING_COACH_INVITE, Status.PENDING_ATHLETE_REQUEST)
     # Statuses a fresh invite/request may reopen from.
     CLOSED_STATUSES = (Status.DECLINED, Status.ENDED)
+    # How long after a coach ends a link it can be restored without a re-invite
+    # (#651); past that the coach re-invites and the athlete re-accepts.
+    RESTORE_WINDOW = timedelta(days=30)
 
     coach = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -458,7 +461,17 @@ class CoachAthlete(models.Model):
             link.status = cls.Status.ACTIVE
             link.responded_at = timezone.now()
             link.ended_at = None
-            link.save(update_fields=["status", "responded_at", "ended_at"])
+            link.ended_by = ""
+            link.ended_archived_plans = {}
+            link.save(
+                update_fields=[
+                    "status",
+                    "responded_at",
+                    "ended_at",
+                    "ended_by",
+                    "ended_archived_plans",
+                ]
+            )
         return link
 
     @classmethod
@@ -485,6 +498,8 @@ class CoachAthlete(models.Model):
             link.token = uuid.uuid4()
             link.responded_at = None
             link.ended_at = None
+            link.ended_by = ""
+            link.ended_archived_plans = {}
             link.save(
                 update_fields=[
                     "status",
@@ -492,6 +507,8 @@ class CoachAthlete(models.Model):
                     "token",
                     "responded_at",
                     "ended_at",
+                    "ended_by",
+                    "ended_archived_plans",
                 ]
             )
         return link
@@ -525,24 +542,48 @@ class CoachAthlete(models.Model):
         self.save(update_fields=["status", "responded_at"])
         return self
 
-    def end(self):
+    def end(self, by=None):
         """Either party ends an active link → ``ended``.
 
         Ending archives this coach's plans for the athlete (never deletes), and
         leaves the athlete's other coaches untouched (D-c). The relationship
         and its plans move together, so a failed archive cannot leave an ended
-        link pointing at live plans (#592).
+        link pointing at live plans (#592). ``by`` ("coach"/"athlete") and the
+        ``{plan_id: status_before}`` of exactly the plans archived are recorded
+        so a coach-ended link can be restored (#651).
         """
         if self.status != self.Status.ACTIVE:
             raise InvalidTransition(f"Cannot end a link that is {self.status}.")
-        self.status = self.Status.ENDED
-        self.ended_at = timezone.now()
         with transaction.atomic():
-            self.save(update_fields=["status", "ended_at"])
-            self.plans.exclude(status=Plan.Status.ARCHIVED).update(
+            to_archive = list(self.plans.exclude(status=Plan.Status.ARCHIVED))
+            self.status = self.Status.ENDED
+            self.ended_at = timezone.now()
+            self.ended_by = by or ""
+            self.ended_archived_plans = {str(p.pk): p.status for p in to_archive}
+            self.save(
+                update_fields=[
+                    "status",
+                    "ended_at",
+                    "ended_by",
+                    "ended_archived_plans",
+                ]
+            )
+            Plan.objects.filter(pk__in=[p.pk for p in to_archive]).update(
                 status=Plan.Status.ARCHIVED
             )
         return self
+
+    @property
+    def can_restore(self):
+        """A coach-ended, real, still-in-window link may be restored (#651)."""
+        return (
+            self.status == self.Status.ENDED
+            and self.ended_by == self.InvitedBy.COACH
+            and not self.is_self
+            and not self.is_demo
+            and self.ended_at is not None
+            and self.ended_at >= timezone.now() - self.RESTORE_WINDOW
+        )
 
     @property
     def is_active(self):

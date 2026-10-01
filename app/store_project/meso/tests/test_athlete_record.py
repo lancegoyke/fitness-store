@@ -461,7 +461,7 @@ class TestEndRelationship:
         ).content.decode()
         assert f'action="{normal_url}"' in normal_body
         assert "End coaching relationship" in normal_body
-        assert "They move to Past athletes; their programs are archived" in normal_body
+        assert "End coaching with Past Athlete?" in normal_body
 
         for hidden in (self_link, demo):
             body = client.get(
@@ -472,7 +472,7 @@ class TestEndRelationship:
             )
             assert f'action="{hidden_url}"' not in body
 
-        response = client.post(normal_url)
+        response = client.post(normal_url, {"confirm": "1"})
         assert response.status_code == 302
         normal.refresh_from_db()
         assert normal.status == CoachAthlete.Status.ENDED

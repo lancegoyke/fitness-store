@@ -119,13 +119,20 @@
         {% include "meso/_pr_list.html" with records_owner="their" %}
 
         {% if relationship.can_end %}
-          <div style="padding:2px 4px;">
-            <form method="post" action="{% url 'meso:relationship_end' relationship.token %}" onsubmit="return confirm('End this coaching relationship?');" style="margin:0;">
+          {# Two-step end (#651): a keyboard-accessible disclosure, no JS needed, no native confirm. #}
+          <details style="padding:2px 4px;">
+            <summary class="meso-btn meso-btn--ghost" style="display:inline-block;cursor:pointer;">End coaching relationship</summary>
+            <form method="post" action="{% url 'meso:relationship_end' relationship.token %}" style="margin:10px 0 0;">
               {% csrf_token %}
-              <button type="submit" class="meso-btn meso-btn--ghost">End coaching relationship</button>
+              <input type="hidden" name="confirm" value="1" />
+              <p class="meso-sub" style="margin:0 0 9px;color:var(--ink);">{{ relationship.end_consequence }}</p>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="submit" class="meso-btn" style="background:var(--danger);color:#fff;border-color:var(--danger);">End coaching</button>
+                <button type="button" class="meso-btn meso-btn--ghost" onclick="this.closest('details').removeAttribute('open')">Cancel</button>
+              </div>
             </form>
-            <p class="meso-sub" style="margin:7px 0 0;">They move to Past athletes; their programs are archived, not deleted.</p>
-          </div>
+            <p class="meso-sub" style="margin:7px 0 0;">Their programs are archived, not deleted, and you can restore them for 30 days.</p>
+          </details>
         {% endif %}
       </div>
 
