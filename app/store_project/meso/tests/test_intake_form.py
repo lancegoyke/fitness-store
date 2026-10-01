@@ -172,7 +172,8 @@ class TestAthleteRecordSavesEverything:
         response = client.post(
             record_url(link), {"label": "x" * 256, "goals": "Squat 315"}
         )
-        assert response.status_code == 302
+        # Re-rendered with the typed values (#657), not redirected.
+        assert response.status_code == 200
         assert not AthleteProfile.objects.filter(
             user=link.athlete, goals="Squat 315"
         ).exists()

@@ -190,6 +190,11 @@ urlpatterns = [
         name="relationship_end",
     ),
     path(
+        "relationship/<uuid:token>/leave/",
+        views.relationship_leave,
+        name="relationship_leave",
+    ),
+    path(
         "relationship/<uuid:token>/reinvite/",
         views.relationship_reinvite,
         name="relationship_reinvite",

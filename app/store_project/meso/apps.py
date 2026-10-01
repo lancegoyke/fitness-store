@@ -8,4 +8,6 @@ class MesoConfig(AppConfig):
 
     def ready(self):
         # Registers the CoachSubscription post_save receiver (#649).
+        # Clears the invite-claim flag on an unrelated login (#670).
+        from . import claim_session  # noqa: F401
         from .billing import activation  # noqa: F401

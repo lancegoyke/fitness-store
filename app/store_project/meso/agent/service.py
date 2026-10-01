@@ -261,7 +261,37 @@ def _still_resolvable(batch, expect_status, *, discarding):
     return False
 
 
-def _persist_result(batch, result, *, model, duration_ms=None, expect_status=None):
+LINK_ENDED_MESSAGE = (
+    "This coaching relationship is no longer active, so the agent did not run."
+)
+
+
+def _link_is_active(batch, *, lock=False):
+    """Is the batch plan still on an ACTIVE relationship (#658)?
+
+    A self-coaching plan sits on the coach's own ``is_self`` link, which is
+    ACTIVE, so it passes. A plan with no relationship (a template) is not gated
+    here. ``lock=True`` takes the link ``no_key`` (``CoachAthlete`` sits before
+    ``AgentProposalBatch`` in the lock order) and must run inside a transaction.
+    """
+    rel_id = batch.plan.relationship_id
+    if rel_id is None:
+        return True
+    qs = models.CoachAthlete.objects.filter(pk=rel_id)
+    if lock:
+        qs = qs.select_for_update(no_key=True)
+    return qs.filter(status=models.CoachAthlete.Status.ACTIVE).exists()
+
+
+def _persist_result(
+    batch,
+    result,
+    *,
+    model,
+    duration_ms=None,
+    expect_status=None,
+    require_active_link=False,
+):
     """Validate the model's candidates and persist the clean ones onto ``batch``.
 
     Flips the batch to ``pending`` in one transaction — writing the run's token
@@ -296,6 +326,17 @@ def _persist_result(batch, result, *, model, duration_ms=None, expect_status=Non
     rejected = []
 
     with transaction.atomic():
+        # #658: the link may have ended while the provider call was in flight;
+        # nobody should be shown a proposal for an athlete no longer coached.
+        if require_active_link and not _link_is_active(batch, lock=True):
+            _fail(
+                batch,
+                LINK_ENDED_MESSAGE,
+                model=model,
+                duration_ms=duration_ms,
+                expect_status=expect_status,
+            )
+            return []
         # Check FIRST, before a single ``ProposedChange`` is written, so a
         # discarded run leaves nothing behind to clean up. A filtered
         # ``update(status=PENDING)`` at the end would work equally well for the
@@ -420,6 +461,10 @@ def run_proposal_job(batch_id, *, client=None):
     # cannot quietly skip it.
     drafting = models.AgentProposalBatch.Status.DRAFTING
     try:
+        # #658: a job queued while the link was active must not run (and send the
+        # athlete's data to the provider) once it has ended or been parked.
+        if not _link_is_active(batch):
+            return _fail(batch, LINK_ENDED_MESSAGE, expect_status=drafting)
         client = client or client_module.get_default_client()
         if client is None:
             return _fail(
@@ -452,6 +497,10 @@ def run_proposal_job(batch_id, *, client=None):
         # Network call outside any DB transaction; wrap provider failures. Time it
         # for the usage ledger — recorded on both the success and the failure path.
         started = time.monotonic()
+        # Re-check as late as possible: the window between the first check and
+        # the provider call (client init, status read) is where a link could end.
+        if not _link_is_active(batch):
+            return _fail(batch, LINK_ENDED_MESSAGE, expect_status=drafting)
         try:
             result = client.propose(
                 context=build_context(batch.plan, batch.mesocycle),
@@ -477,6 +526,7 @@ def run_proposal_job(batch_id, *, client=None):
             model=model,
             duration_ms=duration_ms,
             expect_status=drafting,
+            require_active_link=True,
         )
         return batch, rejected
     except Exception:  # never leave a batch stuck drafting
