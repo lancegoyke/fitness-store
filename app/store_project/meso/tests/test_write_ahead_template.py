@@ -198,7 +198,14 @@ class TestCoachEmailedOnAccept:
         url = reverse("meso:invite_claim", kwargs={"token": invite.token})
         client.get(url)  # anonymous landing remembers the claim in the session
         athlete = UserFactory(name="Jordan Ellis")
-        client.force_login(athlete)
+        athlete.set_password("pw-12345-xyz")
+        athlete.save()
+        # A real allauth login back to the claim page keeps the flag; a bare
+        # ``force_login`` is a non-claim-bound login and clears it (#677).
+        client.post(
+            reverse("account_login"),
+            {"login": athlete.email, "password": "pw-12345-xyz", "next": url},
+        )
 
         with django_capture_on_commit_callbacks(execute=True):
             client.get(url)
