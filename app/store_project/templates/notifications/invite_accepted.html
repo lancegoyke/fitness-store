@@ -1,0 +1,9 @@
+<p>Hi,</p>
+
+<p><strong>{{ athlete_name }}</strong> accepted your invite on Mastering Fitness
+  and is ready to train with you.{% if template_title %} The template you wrote,
+    <strong>{{ template_title }}</strong>, is ready to start for them.{% endif %}</p>
+
+<p><a href="{{ roster_url }}">{% if template_title %}Open your roster and start {{ template_title }}{% else %}Open your roster to build their first program{% endif %}</a>.</p>
+
+<p>Train hard,<br>Mastering Fitness</p>

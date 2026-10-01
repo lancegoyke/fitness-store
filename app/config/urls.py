@@ -10,6 +10,7 @@ from store_project.notifications.views import ScopedSESEventWebhookView
 from store_project.pages.sitemaps import PageSitemap
 from store_project.products.sitemaps import BookSitemap
 from store_project.products.sitemaps import ProgramSitemap
+from store_project.users.views import account_signup
 
 from config.sitemaps import StaticViewSitemap
 
@@ -51,6 +52,9 @@ urlpatterns = [
     path("payments/", include("store_project.payments.urls")),
     path("users/", include("store_project.users.urls")),
     path("feed/", include("store_project.feed.urls")),
+    # Before allauth's own include so this signup view (invite-aware, #642)
+    # wins the `account_signup` name and path.
+    path("accounts/signup/", account_signup, name="account_signup"),
     path("accounts/", include("allauth.urls")),
     # SES → SNS event webhook (#507): send/delivery/open/click/bounce/complaint
     # notifications for the "Tracking" configuration set, restricted to the

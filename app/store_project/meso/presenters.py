@@ -161,6 +161,7 @@ def roster_athlete(
     self_link=False,
     has_working_plan=False,
     recency_days=None,
+    start_template=None,
 ):
     """A row in the coach's roster list.
 
@@ -179,6 +180,9 @@ def roster_athlete(
     are date-less (§4a, decided 2026-07-18): there is no "current week" to
     measure a percent against, so the roster shows a tone-coded "last trained"
     pill instead of the old per-week compliance meter.
+    ``start_template`` is ``{"id", "title"}`` of the template the coach wrote for
+    this athlete's invite (#643) when they have no program yet — the row then
+    offers a one-click "Start <title>".
     """
     name = athlete_name(user, label)
     meta_parts = [p for p in [_training_label(user)] if p]
@@ -198,6 +202,7 @@ def roster_athlete(
         "is_demo": demo,
         "is_self": self_link,
         "has_working_plan": has_working_plan,
+        "start_template": start_template,
     }
 
 
@@ -866,7 +871,8 @@ def athlete_pending(user):
 
     Splits the athlete's pending links into ``invites`` (a coach invited them —
     they accept/decline) and ``requests`` (they asked a coach — awaiting, with a
-    withdraw). Each row names the coach and carries the link ``token`` for the
+    withdraw), plus ``coaches`` (active links) and ``waiting`` (accepted, no seat
+    yet). Each row names the coach and carries the link ``token`` for the
     accept/decline/withdraw forms.
     """
     links = (
@@ -897,7 +903,31 @@ def athlete_pending(user):
         .select_related("coach", "coach__coach_profile")
         .order_by("responded_at", "pk")
     ]
-    return {"invites": invites, "requests": requests, "waiting": waiting}
+    # The coaches actually training the athlete (#640): this panel is "who is
+    # coaching me", so it lists ACTIVE links too — the accept path leaves a link
+    # ``active`` (not pending), which the pending-only query above never saw. A
+    # self-coaching link is the coach's own, not a coach "of" them.
+    coaches = [
+        {
+            "coach": (name := coach_name(link.coach)),
+            "initials": initials(name),
+            "since": link.responded_at or link.created_at,
+        }
+        for link in CoachAthlete.objects.for_athlete(user)
+        .active()
+        .exclude(is_self=True)
+        .select_related("coach", "coach__coach_profile")
+        .order_by("responded_at", "pk")
+    ]
+    return {
+        "invites": invites,
+        "requests": requests,
+        "waiting": waiting,
+        "coaches": coaches,
+        # Active or accepted-waiting: drives the collapsed request form and the
+        # "Are you a coach?" cross-sell (#640/#641).
+        "has_coach": bool(coaches or waiting),
+    }
 
 
 def deliver_screen(plan, week=None):

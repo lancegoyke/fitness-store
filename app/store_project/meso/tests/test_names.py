@@ -95,7 +95,7 @@ class TestDeliveryNames:
             seed_plan(coach=coach, athlete=athlete, label="Coach's guess"),
             django_capture_on_commit_callbacks,
         )
-        assert "Hi Jordan Ellis," in email.body
+        assert email.body.startswith("Hi Jordan,")
         assert "Coach Maya just delivered" in email.body
 
     def test_relationship_label_is_the_unnamed_athletes_greeting(
@@ -114,9 +114,9 @@ class TestDeliveryNames:
         assert plan.relationship.label == "Jordan Ellis"
 
         email = deliver(client, plan, django_capture_on_commit_callbacks)
-        assert "Hi Jordan Ellis," in email.body
+        assert email.body.startswith("Hi Jordan,")
 
-    def test_email_prefix_is_the_final_greeting_fallback(
+    def test_no_name_greets_plain_hi_never_the_email_prefix(
         self, client, django_capture_on_commit_callbacks
     ):
         athlete = UserFactory(name="", email="jordan.uat@example.com")
@@ -125,7 +125,8 @@ class TestDeliveryNames:
             seed_plan(coach=UserFactory(name="Maya"), athlete=athlete),
             django_capture_on_commit_callbacks,
         )
-        assert "Hi jordan.uat," in email.body
+        assert email.body.startswith("Hi,")
+        assert "jordan.uat" not in email.body.split("\n")[0]
 
     def test_plain_text_names_are_not_html_escaped(
         self, client, django_capture_on_commit_callbacks
@@ -146,7 +147,7 @@ class TestDeliveryNames:
             seed_plan(coach=coach, athlete=athlete),
             django_capture_on_commit_callbacks,
         )
-        assert "Hi Jordan O'Brien & Co," in delivery.body
+        assert delivery.body.startswith("Hi Jordan,")
         assert "&#x27;" not in delivery.body
         assert "&amp;" not in delivery.body
 

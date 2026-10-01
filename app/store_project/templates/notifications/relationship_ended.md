@@ -1,4 +1,4 @@
-{% autoescape off %}Hi {{ athlete_name }},
+{% autoescape off %}Hi{% if greeting_name %} {{ greeting_name }}{% endif %},
 
 {{ coach_name }} has ended your coaching on Meso. Your training history stays in your account.
 

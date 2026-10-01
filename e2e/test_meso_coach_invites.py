@@ -13,7 +13,6 @@ athlete can't open a second invite.
 
 import re
 import secrets
-from urllib.parse import urlparse
 
 import pytest
 from django.core import mail
@@ -121,7 +120,7 @@ def _invitee_follows_link_and_signs_up(invitee_page, press, shot, claim_url, ema
 
     press(invitee_page.get_by_role("link", name="Create account"))
     expect(
-        invitee_page.get_by_role("heading", name="Create your account")
+        invitee_page.get_by_role("heading", name="Join Casey Coach on Meso")
     ).to_be_visible()
     # A sitewide newsletter form in the page footer also has an "Email" field,
     # so scope to the signup form itself rather than `get_by_label`.
@@ -142,7 +141,7 @@ def _invitee_follows_link_and_signs_up(invitee_page, press, shot, claim_url, ema
 def test_new_athlete_signs_up_from_an_invite(
     page, viewport, shot, press, login, new_page, subscribed_coach
 ):
-    """The whole journey: invite, sign up, accept, and show up on the roster."""
+    """The whole journey: invite, sign up (which accepts), and show up on the roster."""
     login(subscribed_coach.coach)
     claim_url = _coach_sends_invite_and_gets_claim_url(page, press, shot, INVITEE_EMAIL)
 
@@ -151,19 +150,8 @@ def test_new_athlete_signs_up_from_an_invite(
         invitee_page, press, shot, claim_url, INVITEE_EMAIL
     )
 
-    # Fail fast: `wait_for_url` above already resolved where signup sent them,
-    # so this is a direct check, not another `expect()` waiting out a timeout.
-    claim_path = urlparse(claim_url).path
-    landed_path = urlparse(invitee_page.url).path
-    assert landed_path == claim_path, (
-        f"expected the invitee back on the claim page ({claim_path}), "
-        f"landed on {invitee_page.url!r} instead"
-    )
-    expect(
-        invitee_page.get_by_role("heading", name="Casey Coach invited you to train")
-    ).to_be_visible()
-
-    press(invitee_page.get_by_role("button", name="Accept invite"))
+    # Signing up from the claim link IS the acceptance (#642): no second
+    # Accept click, straight to the training home.
     expect(invitee_page).to_have_url(
         re.compile(re.escape(reverse("meso:athlete_home")) + r"$")
     )

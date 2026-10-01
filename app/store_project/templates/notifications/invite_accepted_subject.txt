@@ -1,0 +1,1 @@
+{% autoescape off %}{{ athlete_name }} accepted your invite{% if template_title %} — {{ template_title }} is ready to start{% endif %}.{% endautoescape %}

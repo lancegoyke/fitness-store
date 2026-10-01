@@ -232,8 +232,7 @@ class TestBackfillMigration:
             # `CoachAthlete` gained `label` after this historical state, so it
             # joins `LoggedSet` in using the migration registry. The remaining
             # models are unchanged by 0050–0052 and can use their normal
-            # factories; pass the relationship pk so the current Plan model
-            # never tries to hydrate the historical relationship instance.
+            # factories.
             coach = UserFactory()
             athlete = UserFactory()
             old_apps = executor.loader.project_state([MESO_0049]).apps
@@ -244,12 +243,18 @@ class TestBackfillMigration:
                 status="active",
                 invited_by="coach",
             )
-            plan = Plan.objects.create(
-                relationship_id=rel.pk,
-                title="Migration fixture",
-                goal="Hypertrophy",
-                status="draft",
-                unit="kg",
+            # Plan gained ``for_invite`` (#643) after this state, so it is
+            # written through the historical model too; the current ``Plan``
+            # is then only a pk handle for the factories below.
+            OldPlan = old_apps.get_model("meso", "Plan")
+            plan = Plan(
+                pk=OldPlan.objects.create(
+                    relationship_id=rel.pk,
+                    title="Migration fixture",
+                    goal="Hypertrophy",
+                    status="draft",
+                    unit="kg",
+                ).pk
             )
             meso = MesocycleFactory(plan=plan, name="Block 1", order=0)
             week = WeekFactory(mesocycle=meso, index=1)

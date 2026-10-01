@@ -1,4 +1,4 @@
-{% autoescape off %}Hi,
+{% autoescape off %}Hi{% if greeting_name %} {{ greeting_name }}{% endif %},
 
 Just a reminder — {{ coach_name }} invited you to train with them on Mastering
 Fitness, and that invite is about to expire.

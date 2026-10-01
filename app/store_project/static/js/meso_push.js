@@ -64,7 +64,11 @@
     const cta = document.getElementById("meso-push-cta");
     if (!cta) return;
     // Only offer the prompt when push is usable and the user hasn't decided yet.
-    cta.hidden = !(supported() && Notification.permission === "default");
+    // The card wrapper (data-prompt-priority) is what hides; the prompt
+    // coordinator in meso_onboarding.js decides whether it is the one shown.
+    const box = cta.closest("[data-prompt-priority]") || cta;
+    box.hidden = !(supported() && Notification.permission === "default");
+    window.dispatchEvent(new Event("meso:prompts-changed"));
   }
 
   // One answer, one run. Chrome's permission prompt is a non-modal omnibox

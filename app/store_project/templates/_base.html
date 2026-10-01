@@ -35,7 +35,7 @@
 
   <body>
 
-    {% include '_nav.html' %}
+    {% if not claim_invite %}{% include '_nav.html' %}{% endif %}
 
   <!-- THE CONTENT -->
     <main class="content">
@@ -53,7 +53,7 @@
   <!-- .content -->
 
     <div class="stack-page">
-      {% include '_newsletter.html' %}
+      {% if not claim_invite %}{% include '_newsletter.html' %}{% endif %}
       {% include '_footer.html' %}
     </div>
 
