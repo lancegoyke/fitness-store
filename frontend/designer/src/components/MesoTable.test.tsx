@@ -140,6 +140,75 @@ describe("layout", () => {
   });
 });
 
+describe("keyboard after Escape (#656)", () => {
+  // Two squat rows × two weeks, so Tab / arrows have somewhere to go.
+  const twoByTwo = () =>
+    grid({
+      weeks: [week({ id: 1 }), week({ id: 2, index: 1, label: "Wk 2" })],
+      days: [
+        day({
+          rows: [
+            row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100 }), "2": cell({ prescription_id: 101 }) } }),
+            row({
+              exercise_slot_id: 10,
+              name: "Bench",
+              cells: { "1": cell({ prescription_id: 102 }), "2": cell({ prescription_id: 103 }) },
+            }),
+          ],
+        }),
+      ],
+    });
+
+  async function cancelCell(user: ReturnType<typeof userEvent.setup>, id: number) {
+    await user.click(screen.getByTestId(`cell-text-${id}`));
+    await user.keyboard("zz{Escape}");
+    expect(screen.getByTestId(`cell-text-${id}`).closest("td")).toHaveFocus();
+  }
+
+  it("Tab moves to the NEXT cell, not back into the cancelled editor", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: twoByTwo() })} />);
+    await cancelCell(user, 100);
+    await user.tab();
+    expect(screen.getByTestId("cell-text-101")).toHaveFocus();
+  });
+
+  it("Shift+Tab moves to the previous column's cell", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: twoByTwo() })} />);
+    await cancelCell(user, 101);
+    await user.tab({ shift: true });
+    expect(screen.getByTestId("cell-text-100")).toHaveFocus();
+  });
+
+  it("arrows move as they would from the editor", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: twoByTwo() })} />);
+    await cancelCell(user, 100);
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByTestId("cell-text-101")).toHaveFocus();
+    await cancelCell(user, 101);
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByTestId("cell-text-100")).toHaveFocus();
+    await cancelCell(user, 100);
+    await user.keyboard("{ArrowDown}"); // the row's next stop: its ghost "+ line"
+    expect(screen.getByTestId("cell-line-new-100")).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("cell-text-102")).toHaveFocus();
+    await cancelCell(user, 102);
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByTestId("cell-line-new-100")).toHaveFocus();
+  });
+
+  it("Enter still re-opens the cancelled cell's editor", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: twoByTwo() })} />);
+    await cancelCell(user, 100);
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("cell-text-100")).toHaveFocus();
+  });
+});
+
 describe("week columns", () => {
   it("renders each week's label and deload marker (no current-week highlight — programs are date-less)", () => {
     render(

@@ -128,6 +128,8 @@ export interface UseTableNavResult {
    * back PAST the committed write, desyncing it from the server. (Blur
    * commits don't need this — the next focus reseeds the baseline.) */
   setRevertBaseline(rowId: number, weekId: number | null, field: TableColumn, value: string, line?: number): void;
+  /** Tab / arrows for a cell `<td>` that holds focus after Escape (#656). */
+  cellKeyDown(event: KeyboardEvent<HTMLElement>): void;
 }
 
 export interface UseTableNavOptions {
@@ -547,6 +549,108 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grid]);
 
+  /** Horizontal step from a cell (the arrow-key body, minus the input-only
+   * caret gate). Skids past holes; `event.preventDefault()` only once there is
+   * an adjacent column to handle. */
+  function stepHorizontal(from: TableCellId, step: 1 | -1, event: { preventDefault(): void }) {
+    const { rowId, weekId, field, line } = from;
+    const colIdx = columns.findIndex((c) => c.weekId === weekId && c.field === field);
+    let nextColIdx = colIdx + step;
+    let candidateCol = columns[nextColIdx];
+    if (candidateCol === undefined) return; // absolute row extreme: no adjacent column at all, nothing to prevent.
+    // There IS an adjacent column position, so this key is being
+    // handled from here on — preventDefault even if every remaining
+    // position turns out to be a hole (below) and the anchor doesn't
+    // actually move.
+    event.preventDefault();
+    // Skid past any column with no rendered cell for THIS row — a
+    // hole (an add-this-week row's missing week) or a skipped cell
+    // (em-dash + Unskip, no GridCellEditor) both leave no
+    // `data-grid-cell` node, so arrowing across one jumps straight to
+    // the next editable cell instead of stranding the anchor on a
+    // coordinate nothing renders. A sub-line move clamps to each
+    // candidate's nearest stop (see nearestLineStop).
+    while (candidateCol !== undefined) {
+      const candLine = clampLine(flat.rowsById.get(rowId), candidateCol, line);
+      if (cellExists(rowId, candidateCol.weekId, candidateCol.field, candLine)) {
+        commitAnchor({ rowId, weekId: candidateCol.weekId, field: candidateCol.field, line: candLine }, flat, true);
+        return;
+      }
+      nextColIdx += step;
+      candidateCol = columns[nextColIdx];
+    }
+    return; // ran out of columns while skidding past holes: stay put, key already handled.
+  }
+
+  /** Spreadsheet Tab from a cell: next/previous column unconditionally,
+   * wrapping rows at the ends. Shared by the inputs and by a cell `<td>` that
+   * holds focus after Escape (#656). */
+  function stepTab(from: TableCellId, step: 1 | -1, event: { preventDefault(): void }) {
+    const { rowId, weekId, field, line } = from;
+    const colIdx = columns.findIndex((c) => c.weekId === weekId && c.field === field);
+    const rowIdx = flat.rowOrder.indexOf(rowId);
+    if (colIdx === -1 || rowIdx === -1) return;
+    let r = rowIdx;
+    let c = colIdx + step;
+    let ln = line;
+    for (;;) {
+      if (c < 0) {
+        r -= 1;
+        c = columns.length - 1;
+        ln = 0;
+      } else if (c >= columns.length) {
+        r += 1;
+        c = 0;
+        ln = 0;
+      }
+      const rowAt = flat.rowOrder[r];
+      const col = columns[c];
+      if (rowAt === undefined || col === undefined) return; // ran off the table: native Tab leaves the grid.
+      const candLine = clampLine(flat.rowsById.get(rowAt), col, ln);
+      if (cellExists(rowAt, col.weekId, col.field, candLine)) {
+        event.preventDefault();
+        commitAnchor({ rowId: rowAt, weekId: col.weekId, field: col.field, line: candLine }, flat, true);
+        return;
+      }
+      c += step;
+    }
+  }
+
+  /** Keyboard for a cell `<td>` that itself holds focus (#656): after Escape
+   * parks focus there, Tab / Shift+Tab / arrows move on from the cancelled
+   * cell exactly as they would from its editor (no caret gate — there is no
+   * caret). The cell is the anchor when the anchor sits inside this `<td>`,
+   * else the first editor the `<td>` holds. Keys bubbling up from inputs are
+   * not ours (target check); Enter/F2/Escape stay the caller's. */
+  function cellKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.target !== event.currentTarget) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.shiftKey && event.key !== "Tab") return;
+    if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Tab"].includes(event.key)) return;
+    const td = event.currentTarget;
+    const a = anchorRef.current;
+    const anchored = a ? td.querySelector(cellSelector(a.rowId, a.weekId, a.field, a.line)) : null;
+    const key = (anchored ?? td.querySelector("[data-grid-cell]"))?.getAttribute("data-grid-cell");
+    if (!key) return; // a hole / skipped cell: nothing to move from.
+    const [rowPart, weekPart, field, linePart] = key.split(":");
+    const from: TableCellId = {
+      rowId: Number(rowPart),
+      weekId: weekPart === "row" ? null : Number(weekPart),
+      field: field as TableColumn,
+      line: linePart === undefined ? 0 : Number(linePart),
+    };
+    commitAnchor(from, flat, false);
+    if (event.key === "Tab") {
+      stepTab(from, event.shiftKey ? -1 : 1, event);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      stepHorizontal(from, event.key === "ArrowRight" ? 1 : -1, event);
+    } else {
+      event.preventDefault();
+      const next = stepVertical(from, event.key === "ArrowDown" ? 1 : -1);
+      if (next !== undefined) commitAnchor(next, flat, true);
+    }
+  }
+
   function cellProps(
     rowId: number,
     weekId: number | null,
@@ -595,33 +699,8 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
           const atBoundary =
             event.key === "ArrowRight" ? el.selectionStart === el.value.length : el.selectionStart === 0;
           if (!collapsed || !atBoundary) return; // let the caret move natively.
-          const colIdx = columns.findIndex((c) => c.weekId === weekId && c.field === field);
-          const step = event.key === "ArrowRight" ? 1 : -1;
-          let nextColIdx = colIdx + step;
-          let candidateCol = columns[nextColIdx];
-          if (candidateCol === undefined) return; // absolute row extreme: no adjacent column at all, nothing to prevent.
-          // There IS an adjacent column position, so this key is being
-          // handled from here on — preventDefault even if every remaining
-          // position turns out to be a hole (below) and the anchor doesn't
-          // actually move.
-          event.preventDefault();
-          // Skid past any column with no rendered cell for THIS row — a
-          // hole (an add-this-week row's missing week) or a skipped cell
-          // (em-dash + Unskip, no GridCellEditor) both leave no
-          // `data-grid-cell` node, so arrowing across one jumps straight to
-          // the next editable cell instead of stranding the anchor on a
-          // coordinate nothing renders. A sub-line move clamps to each
-          // candidate's nearest stop (see nearestLineStop).
-          while (candidateCol !== undefined) {
-            const candLine = clampLine(flat.rowsById.get(rowId), candidateCol, line);
-            if (cellExists(rowId, candidateCol.weekId, candidateCol.field, candLine)) {
-              commitAnchor({ rowId, weekId: candidateCol.weekId, field: candidateCol.field, line: candLine }, flat, true);
-              return;
-            }
-            nextColIdx += step;
-            candidateCol = columns[nextColIdx];
-          }
-          return; // ran out of columns while skidding past holes: stay put, key already handled.
+          stepHorizontal({ rowId, weekId, field, line }, event.key === "ArrowRight" ? 1 : -1, event);
+          return;
         }
         case "Tab": {
           // Spreadsheet Tab: next/previous column unconditionally (no caret
@@ -629,34 +708,8 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
           // previous row's first/last column at the row's ends. Only
           // preventDefault once a landable target is found, so tabbing off
           // the table's edge falls back to the browser's native order.
-          const step = event.shiftKey ? -1 : 1;
-          const colIdx = columns.findIndex((c) => c.weekId === weekId && c.field === field);
-          const rowIdx = flat.rowOrder.indexOf(rowId);
-          if (colIdx === -1 || rowIdx === -1) return;
-          let r = rowIdx;
-          let c = colIdx + step;
-          let ln = line;
-          for (;;) {
-            if (c < 0) {
-              r -= 1;
-              c = columns.length - 1;
-              ln = 0;
-            } else if (c >= columns.length) {
-              r += 1;
-              c = 0;
-              ln = 0;
-            }
-            const rowAt = flat.rowOrder[r];
-            const col = columns[c];
-            if (rowAt === undefined || col === undefined) return; // ran off the table: native Tab leaves the grid.
-            const candLine = clampLine(flat.rowsById.get(rowAt), col, ln);
-            if (cellExists(rowAt, col.weekId, col.field, candLine)) {
-              event.preventDefault();
-              commitAnchor({ rowId: rowAt, weekId: col.weekId, field: col.field, line: candLine }, flat, true);
-              return;
-            }
-            c += step;
-          }
+          stepTab({ rowId, weekId, field, line }, event.shiftKey ? -1 : 1, event);
+          return;
         }
         case "Enter": {
           event.preventDefault();
@@ -716,5 +769,5 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
     focusValuesRef.current[tableCellDomKey(rowId, weekId, field, line)] = value;
   }
 
-  return { anchor, cellProps, setRevertBaseline };
+  return { anchor, cellProps, cellKeyDown, setRevertBaseline };
 }

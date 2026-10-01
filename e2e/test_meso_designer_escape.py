@@ -55,6 +55,32 @@ def test_escape_cancels_the_edit_and_closes_the_editor(
 
 
 @pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
+def test_tab_after_escape_moves_to_the_next_cell(page, live_server, login, block_plan):
+    login(block_plan.coach)
+    _open_designer(page, live_server, block_plan.plan)
+    slot = ExerciseSlot.objects.get(
+        session_slot__mesocycle__plan=block_plan.plan,
+        name="Back Squat",
+        deleted_at__isnull=True,
+    )
+    week1 = Prescription.objects.get(exercise_slot=slot, week__index=1, line=0)
+    week2 = Prescription.objects.get(exercise_slot=slot, week__index=2, line=0)
+
+    page.get_by_test_id(f"cell-text-{week1.pk}").click()
+    page.keyboard.type("9x9 @ 999")
+    page.keyboard.press("Escape")
+    assert _active_tag(page) == "TD"
+
+    # #656: Tab leaves the cancelled cell for the next one (it used to re-enter
+    # the same editor), and Shift+Tab comes back.
+    page.keyboard.press("Tab")
+    expect(page.get_by_test_id(f"cell-text-{week2.pk}")).to_be_focused()
+    page.keyboard.press("Escape")
+    page.keyboard.press("Shift+Tab")
+    expect(page.get_by_test_id(f"cell-text-{week1.pk}")).to_be_focused()
+
+
+@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
 def test_add_exercise_then_type_gives_exactly_the_typed_name(
     page, live_server, login, block_plan
 ):
