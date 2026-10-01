@@ -7,6 +7,7 @@ from django.urls import NoReverseMatch
 from django.urls import reverse
 from django.utils import timezone
 
+from store_project.meso import presenters
 from store_project.meso.agent import service
 from store_project.meso.factories import AthleteProfileFactory
 from store_project.meso.factories import CoachAthleteFactory
@@ -158,6 +159,61 @@ class TestAthleteRecord:
     def test_goals_field_defaults_to_empty_string(self):
         assert hasattr(AthleteProfile, "goals"), "AthleteProfile.goals is missing"
         assert AthleteProfile(user=UserFactory()).goals == ""
+
+    def test_athlete_home_shows_read_only_on_file_profile_data(self, client):
+        athlete = UserFactory()
+        AthleteProfileFactory(
+            user=athlete,
+            goals="Pull-up\nPain-free running",
+            training_started=previous_month_start(),
+            notes="Sensitive <script>alert(1)</script>\nMorning sessions",
+        )
+        Contraindication.objects.create(athlete=athlete, text="Active hip note")
+        Contraindication.objects.create(
+            athlete=athlete, text="Resolved ankle note", active=False
+        )
+        client.force_login(athlete)
+
+        body = client.get(reverse("meso:athlete_home")).content.decode()
+        section = body[
+            body.index("What your coach has on file") : body.index("Are you a coach?")
+        ]
+
+        assert "Pull-up<br>" in section
+        assert "Pain-free running" in section
+        assert "1 mo training" in section
+        assert "Active hip note" in section
+        assert "Resolved ankle note" not in section
+        assert "Sensitive &lt;script&gt;alert(1)&lt;/script&gt;<br>" in section
+        assert "Morning sessions" in section
+        assert "<form" not in section
+        assert "<textarea" not in section
+        assert "<input" not in section
+
+    def test_athlete_home_hides_empty_on_file_card(self, client):
+        athlete = UserFactory()
+        AthleteProfileFactory(user=athlete)
+        client.force_login(athlete)
+
+        body = client.get(reverse("meso:athlete_home")).content.decode()
+
+        assert presenters.athlete_on_file(athlete) is None
+        assert "What your coach has on file" not in body
+
+    def test_coach_profile_notes_field_labels_visibility(self, client):
+        link = CoachAthleteFactory()
+        client.force_login(link.coach)
+
+        body = client.get(
+            reverse("meso:athlete", kwargs={"pk": link.athlete_id})
+        ).content.decode()
+
+        assert (
+            '<label for="athlete-notes" class="meso-row-meta">'
+            "Notes — visible to the athlete and to their other coaches</label>"
+        ) in body
+        assert '<textarea id="athlete-notes" name="notes"' in body
+        assert 'placeholder="Injury history, preferences, context"' in body
 
 
 class TestContraindications:

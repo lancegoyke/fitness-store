@@ -60,6 +60,7 @@ from store_project.users.factories import UserFactory
 
 from ._helpers import day
 from ._helpers import presc
+from ._helpers import sub_line
 
 pytestmark = pytest.mark.django_db
 
@@ -120,6 +121,20 @@ def patch(client, plan, cell, **fields):
     return resp
 
 
+def fill_url(plan, cell):
+    return reverse(
+        "meso:api_prescription_fill", kwargs={"plan_id": plan.pk, "pk": cell.pk}
+    )
+
+
+def cell_state(exercise_slot, week):
+    return list(
+        Prescription.objects.filter(exercise_slot=exercise_slot, week=week)
+        .order_by("line")
+        .values_list("line", "text", "athlete_authored")
+    )
+
+
 def undo_actions(plan):
     return PlanAction.objects.filter(plan=plan, stack=PlanAction.Stack.UNDO)
 
@@ -135,6 +150,115 @@ def _envelope_keys(body):
 def _live_exercise_ids(plan, week=None):
     data = serialize_plan(plan, week=week)
     return [e["id"] for day in data["program"] for e in day["exercises"]]
+
+
+class TestPrescriptionFillAthleteLines:
+    def _filled_plan(self):
+        rel = CoachAthleteFactory()
+        plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
+        meso = MesocycleFactory(plan=plan, name="Block", order=0)
+        week1 = WeekFactory(mesocycle=meso, index=1)
+        week2 = WeekFactory(mesocycle=meso, index=2)
+        week3 = WeekFactory(mesocycle=meso, index=3)
+        session1 = day(week1, day_number=1, name="Lower")
+        day(week2, session_slot=session1.session_slot)
+        day(week3, session_slot=session1.session_slot)
+        source = presc(session1, name="Squat", text="coach base")
+        sub_line(source, "athlete source line", line=1, athlete_authored=True)
+        sub_line(source, "coach source line 2", line=2)
+        return plan, source, week2, week3
+
+    def test_fill_skips_source_and_target_athlete_lines_but_blanks_stale_coach_lines(
+        self, client
+    ):
+        plan, source, week2, week3 = self._filled_plan()
+        slot = source.exercise_slot
+        Prescription.objects.create(
+            exercise_slot=slot,
+            week=week2,
+            line=1,
+            text="athlete target line 1",
+            athlete_authored=True,
+        )
+        Prescription.objects.create(
+            exercise_slot=slot,
+            week=week2,
+            line=2,
+            text="athlete target line 2",
+            athlete_authored=True,
+        )
+        Prescription.objects.create(
+            exercise_slot=slot, week=week2, line=3, text="stale coach line"
+        )
+        Prescription.objects.create(
+            exercise_slot=slot,
+            week=week2,
+            line=4,
+            text="stale athlete line",
+            athlete_authored=True,
+        )
+        Prescription.objects.create(
+            exercise_slot=slot, week=week3, line=0, text="old coach base"
+        )
+        client.force_login(plan.relationship.coach)
+
+        response = post_json(
+            client, fill_url(plan, source), {"week_ids": [week2.pk, week3.pk]}
+        )
+
+        assert response.status_code == 200
+        assert cell_state(slot, week2) == [
+            (0, "coach base", False),
+            (1, "athlete target line 1", True),
+            (2, "athlete target line 2", True),
+            (3, "", False),
+            (4, "stale athlete line", True),
+        ]
+        assert cell_state(slot, week3) == [
+            (0, "coach base", False),
+            (2, "coach source line 2", False),
+        ]
+
+    def test_fill_then_undo_restores_target_weeks_including_athlete_flags(self, client):
+        plan, source, week2, week3 = self._filled_plan()
+        slot = source.exercise_slot
+        Prescription.objects.create(
+            exercise_slot=slot, week=week2, line=0, text="old coach base"
+        )
+        Prescription.objects.create(
+            exercise_slot=slot,
+            week=week2,
+            line=1,
+            text="athlete target line",
+            athlete_authored=True,
+        )
+        Prescription.objects.create(
+            exercise_slot=slot, week=week2, line=3, text="old coach extra"
+        )
+        Prescription.objects.create(
+            exercise_slot=slot, week=week3, line=2, text="old coach line 2"
+        )
+        Prescription.objects.create(
+            exercise_slot=slot,
+            week=week3,
+            line=4,
+            text="athlete extra",
+            athlete_authored=True,
+        )
+        before = {week.pk: cell_state(slot, week) for week in (week2, week3)}
+        client.force_login(plan.relationship.coach)
+
+        response = post_json(
+            client, fill_url(plan, source), {"week_ids": [week2.pk, week3.pk]}
+        )
+        assert response.status_code == 200
+        assert cell_state(slot, week2) != before[week2.pk]
+        assert cell_state(slot, week3) != before[week3.pk]
+
+        response = post_json(client, undo_url(plan), {})
+
+        assert response.status_code == 200
+        assert {week.pk: cell_state(slot, week) for week in (week2, week3)} == before
 
 
 # ---------------------------------------------------------------------------

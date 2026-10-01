@@ -44,7 +44,7 @@
       <span class="meso-mono" style="font-size:12px;font-weight:700;color:var(--ink);" x-text="doneSets + '/' + totalSets"></span>
       {% comment %} The count is checked-off Set rows only; a typed line never
          ticks it. So it says "checked off", not "logged". {% endcomment %}
-      <span class="meso-row-meta">sets checked off. When you're done, tap <strong>Log session</strong>.</span>
+      <span class="meso-row-meta">sets checked off. <span data-testid="log-instruction" x-show="status !== 'done'">When you're done, tap <strong>Log session</strong>.</span></span>
     </div>
 
     <!-- New-PR celebration (Phase 4c): populated from the log response; dismissible. -->

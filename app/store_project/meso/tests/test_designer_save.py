@@ -77,13 +77,16 @@ class TestDesignerLoad:
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 404
 
-    def test_bare_designer_redirects_when_no_plan(self, client):
-        # Phase 5 retired the client-side fixtures: the bare URL no longer
-        # renders — it redirects to the coach's working plan (or the roster).
+    def test_bare_designer_renders_empty_state_when_no_plan(self, client):
+        # A brand-new coach gets useful next actions instead of bouncing away.
         client.force_login(UserFactory())
         resp = client.get(reverse("meso:designer"))
-        assert resp.status_code == 302
-        assert resp.url == reverse("meso:roster")
+        body = resp.content.decode()
+        assert resp.status_code == 200
+        assert "Create a template" in body
+        assert f'action="{reverse("meso:template_create")}"' in body
+        assert "Add yourself as an athlete" in body
+        assert f'action="{reverse("meso:roster_add_self")}"' in body
 
 
 class TestPrescriptionPatch:

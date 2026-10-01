@@ -67,7 +67,8 @@
             {% csrf_token %}
             <label for="athlete-training-started" class="meso-row-meta">Training since</label>
             <input id="athlete-training-started" type="date" name="training_started" class="meso-field" value="{{ athlete.training_started|default_if_none:'' }}" />
-            <textarea name="notes" class="meso-field" maxlength="5000" rows="4" aria-label="Notes" placeholder="Notes: injury history, preferences, context">{{ athlete.notes }}</textarea>
+            <label for="athlete-notes" class="meso-row-meta">Notes — visible to the athlete and to their other coaches</label>
+            <textarea id="athlete-notes" name="notes" class="meso-field" maxlength="5000" rows="4" placeholder="Injury history, preferences, context">{{ athlete.notes }}</textarea>
             <label for="{{ athlete_record_form.unit.id_for_label }}" class="meso-row-meta">Load unit</label>
             {{ athlete_record_form.unit }}
             <p class="meso-row-meta" style="margin:0;">Currently {{ effective_unit }} ({{ effective_unit_source }})</p>

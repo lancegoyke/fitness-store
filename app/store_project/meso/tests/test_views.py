@@ -165,10 +165,9 @@ class TestScreensRender:
 class TestBareDesignerDeliver:
     """The bare ``/designer/`` and ``/deliver/`` URLs resolve to a real plan.
 
-    Phase 5 retired the client-side fixtures: with no ``plan_id`` the view
-    redirects to the coach's working plan, or back to the roster if they have
-    none. (The ``<plan_id>`` forms are covered in ``test_designer_save`` /
-    ``test_deliver``.)
+    Phase 5 retired the client-side fixtures: with no ``plan_id`` the views
+    redirect to the coach's working plan. Deliver still bounces to the roster
+    without one; designer renders its own empty state.
     """
 
     def _working_plan(self, coach):
@@ -186,10 +185,21 @@ class TestBareDesignerDeliver:
         assert resp.status_code == 302
         assert resp.url == reverse(f"meso:{target}", kwargs={"plan_id": plan.pk})
 
-    @pytest.mark.parametrize("bare", ["designer", "deliver"])
-    def test_redirects_to_roster_without_a_plan(self, client, bare):
+    def test_designer_without_a_plan_renders_empty_state(self, client):
         client.force_login(UserFactory())
-        resp = client.get(reverse(f"meso:{bare}"))
+        resp = client.get(reverse("meso:designer"))
+        body = resp.content.decode()
+
+        assert resp.status_code == 200
+        assert "Create a template" in body
+        assert f'action="{reverse("meso:template_create")}"' in body
+        assert "Add yourself as an athlete" in body
+        assert f'action="{reverse("meso:roster_add_self")}"' in body
+        assert 'class="meso-navlink is-active" href="/meso/designer/"' in body
+
+    def test_deliver_redirects_to_roster_without_a_plan(self, client):
+        client.force_login(UserFactory())
+        resp = client.get(reverse("meso:deliver"))
         assert resp.status_code == 302
         assert resp.url == reverse("meso:roster")
 
@@ -200,7 +210,11 @@ class TestBareDesignerDeliver:
         PlanFactory(relationship=rel, status=Plan.Status.ARCHIVED)
         client.force_login(coach)
         resp = client.get(reverse(f"meso:{bare}"))
-        assert resp.url == reverse("meso:roster")  # archived → no working plan
+        if bare == "designer":
+            assert resp.status_code == 200
+            assert "Create a template" in resp.content.decode()
+        else:
+            assert resp.url == reverse("meso:roster")  # archived -> no working plan
 
     def _plan_with_prescription(self, coach):
         plan = self._working_plan(coach)

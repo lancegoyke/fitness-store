@@ -1,0 +1,32 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Designer · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page meso-coach">
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Coach workspace</p>
+        <h1 class="meso-h1">Designer</h1>
+        <p class="meso-sub">Start with a reusable template, or add yourself as an athlete and build a live program.</p>
+      </div>
+    </div>
+
+    <div class="meso-card meso-card--pad" style="max-width:620px;display:flex;flex-direction:column;gap:14px;">
+      <div>
+        <p class="meso-eyebrow" style="margin:0 0 4px;">Nothing open yet</p>
+        <p class="meso-sub" style="margin:0;">The designer opens your most recent active program once you have one.</p>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <form method="post" action="{% url 'meso:template_create' %}" style="margin:0;">
+          {% csrf_token %}
+          <button type="submit" class="meso-btn meso-btn--primary">Create a template</button>
+        </form>
+        <form method="post" action="{% url 'meso:roster_add_self' %}" style="margin:0;">
+          {% csrf_token %}
+          <button type="submit" class="meso-btn meso-btn--ghost">Add yourself as an athlete</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endblock %}

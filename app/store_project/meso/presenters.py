@@ -236,6 +236,23 @@ def profile_athlete(user, label=""):
     }
 
 
+def athlete_on_file(user):
+    """Read-only athlete-facing view of profile data their coaches can see."""
+    profile = getattr(user, "athlete_profile", None)
+    contraindications = _active_contraindications(user)
+    goals = profile.goals if profile else ""
+    notes = profile.notes if profile else ""
+    training = _training_label(user)
+    if not any([goals, training, contraindications, notes]):
+        return None
+    return {
+        "goals": goals,
+        "training": training,
+        "contraindications": [c.text for c in contraindications],
+        "notes": notes,
+    }
+
+
 def _profile_status(link, working_plan, delivered_plan):
     """The program block's status badge — the athlete's most actionable state.
 

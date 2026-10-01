@@ -260,8 +260,8 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
     A self-contained, full-screen coach tool. The view serializes a real, owned
     plan into the page and the Alpine front-end hydrates from it (then autosaves
     edits to the API endpoints below). The bare URL has no fixtures anymore — it
-    redirects to the coach's working plan (or the roster). The agent column is
-    live (agent slice) and its conversation is persisted: ``chat_thread``
+    redirects to the coach's working plan, or renders a coach empty state when
+    there is no plan yet. The agent column is live (agent slice) and its conversation is persisted: ``chat_thread``
     rebuilds the thread from the plan's proposal batches so it survives a reload.
     """
 
@@ -273,8 +273,9 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
                 request.user, plans=Plan.objects.editable_by(request.user)
             )
             if plan is None:
-                messages.info(request, "Pick an athlete to start a program.")
-                return redirect("meso:roster")
+                return render(
+                    request, "meso/designer_empty.html", {"active": "designer"}
+                )
             return redirect("meso:designer_plan", plan_id=plan.pk)
         return super().get(request, *args, **kwargs)
 
@@ -1674,6 +1675,7 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         ctx["plans"] = presenters.athlete_home(
             self.request.user, focus_week_id=focus_week_id
         )
+        ctx["on_file"] = presenters.athlete_on_file(self.request.user)
         # Pending coach links (N4 Phase 2): invites awaiting my reply + requests
         # I've sent + the request-a-coach form all live on this surface.
         ctx["pending"] = presenters.athlete_pending(self.request.user)
@@ -3833,7 +3835,10 @@ def manifest_webmanifest(request):
 #     re-posting a line tinted only because its set is on the day a coach moved
 #     the exercise from (#572). A cached logger ignores the new key and keeps
 #     re-posting, which is what mints a second LoggedSet for one performance.
-PWA_CACHE_VERSION = "meso-pwa-v7"
+# v8: athlete_session.html hides the "tap Log session" instruction after a
+#     session is already logged (#608/605.4). Navigation responses are cached,
+#     so installed clients need a fresh cache namespace.
+PWA_CACHE_VERSION = "meso-pwa-v8"
 
 
 @require_GET
@@ -5977,14 +5982,14 @@ def exercise_slot_patch(request, plan_id, slot_id):
 @login_required
 @require_POST
 def prescription_fill(request, plan_id, pk):
-    """Copy a cell's text stack to sibling weeks of the same row (P2, #440).
+    """Copy a coach-authored text stack to sibling weeks of the same row (P2, #440).
 
     Body OPTIONAL ``{"week_ids": [<int>...]}`` — the target weeks; absent or
     empty means every OTHER live week of this cell's ``exercise_slot``. Copies
-    the row's whole freeform stack for the source week (line 0 + sub-lines,
-    Phase 2a) — never a target's ``skipped``, which stays whatever one-week
-    exception it was. A target week's stale higher sub-lines are blanked in
-    place (spreadsheet semantics), never deleted.
+    the row's coach-owned freeform stack for the source week (line 0 + sub-lines,
+    Phase 2a); athlete-authored source lines are ignored, and athlete-authored
+    target lines are never overwritten or blanked. A target week's stale higher
+    coach sub-lines are blanked in place (spreadsheet semantics), never deleted.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -6015,7 +6020,9 @@ def prescription_fill(request, plan_id, pk):
     source_lines = {
         c.line: c.text
         for c in Prescription.objects.filter(
-            exercise_slot_id=cell.exercise_slot_id, week_id=cell.week_id
+            exercise_slot_id=cell.exercise_slot_id,
+            week_id=cell.week_id,
+            athlete_authored=False,
         )
     }
     max_source_line = max(source_lines) if source_lines else 0
@@ -6027,6 +6034,8 @@ def prescription_fill(request, plan_id, pk):
                 target, _created = Prescription.objects.get_or_create(
                     exercise_slot_id=cell.exercise_slot_id, week=week, line=line
                 )
+                if target.athlete_authored:
+                    continue
                 if target.text != text:
                     target.text = text
                     target.save(update_fields=["text"])
@@ -6034,7 +6043,7 @@ def prescription_fill(request, plan_id, pk):
                 exercise_slot_id=cell.exercise_slot_id,
                 week=week,
                 line__gt=max_source_line,
-            ).exclude(text="").update(text="")
+            ).exclude(athlete_authored=True).exclude(text="").update(text="")
         _touch_plan(plan)
     return JsonResponse(
         {

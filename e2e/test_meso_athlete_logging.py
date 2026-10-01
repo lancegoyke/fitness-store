@@ -80,9 +80,11 @@ def test_athlete_logs_a_typed_set(page, viewport, shot, press, login, delivered_
         press(page.get_by_test_id("session-log"))
     assert log_response_info.value.ok
     expect(page.get_by_test_id("session-status")).to_have_text("Logged")
+    expect(page.get_by_test_id("log-instruction")).not_to_be_visible()
     shot("04-logged")
 
     page.reload()
     expect(page.get_by_test_id("session-status")).to_have_text("Logged")
+    expect(page.get_by_test_id("log-instruction")).not_to_be_visible()
     card = _box_squat_card(page)
     expect(card.get_by_test_id("sub-line-input").first).to_have_value("100 x 5")
