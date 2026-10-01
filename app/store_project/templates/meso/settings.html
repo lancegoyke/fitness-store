@@ -1,5 +1,5 @@
 {% extends "meso/_meso_base.html" %}
-{% load static %}
+{% load static meso_extras %}
 
 {% block title %}Settings · Meso{% endblock %}
 
@@ -21,6 +21,7 @@
       {# One form, one Save (#646): the name and coaching cards are both inside it. #}
       <form method="post" data-dirty-guard style="display:flex;flex-direction:column;gap:14px;">
         {% csrf_token %}
+        {% for f, v in initials.items %}{% initial_input f v %}{% endfor %}
         <section class="meso-card meso-card--pad">
           <p class="meso-eyebrow">Your name</p>
           <div style="display:flex;flex-direction:column;gap:9px;">

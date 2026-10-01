@@ -537,10 +537,26 @@ class CoachAthlete(models.Model):
             and self.status != self.Status.ACCEPTED_WAITING
         ):
             raise InvalidTransition(f"Cannot decline a link that is {self.status}.")
+        was_waiting = self.status == self.Status.ACCEPTED_WAITING
         self.status = self.Status.DECLINED
         self.responded_at = timezone.now()
         self.save(update_fields=["status", "responded_at"])
+        if was_waiting:
+            self._activate_waiting_after_commit()
         return self
+
+    def _activate_waiting_after_commit(self):
+        """Seat the coach's next waiting athlete once this change commits (#659).
+
+        The one place a seat-opening transition (end, a waiting row leaving)
+        reaches ``activate_waiting``: after the surrounding transaction commits,
+        never failing the request, and taking the locks in the documented order
+        inside ``activate_waiting`` itself. Restore is not a seat opener.
+        """
+        from store_project.meso.billing.activation import _activate_after_commit
+
+        coach_id = self.coach_id
+        transaction.on_commit(lambda: _activate_after_commit(coach_id))
 
     def end(self, by=None):
         """Either party ends an active link → ``ended``.
@@ -552,14 +568,14 @@ class CoachAthlete(models.Model):
         ``{plan_id: status_before}`` of exactly the plans archived are recorded
         so a coach-ended link can be restored (#651).
         """
-        if self.status != self.Status.ACTIVE:
+        endable = (self.Status.ACTIVE, self.Status.ACCEPTED_WAITING)
+        if self.status not in endable:
             raise InvalidTransition(f"Cannot end a link that is {self.status}.")
         with transaction.atomic():
             # A stale instance must not overwrite who ended the link (#651): the
-            # in-memory status above can lag a concurrent end.
-            if not CoachAthlete.objects.filter(
-                pk=self.pk, status=self.Status.ACTIVE
-            ).exists():
+            # in-memory status above can lag a concurrent end. A waiting link
+            # (#659: the athlete leaving) ends like an active one, with no plans.
+            if not CoachAthlete.objects.filter(pk=self.pk, status=self.status).exists():
                 raise InvalidTransition("Cannot end a link that is no longer active.")
             to_archive = list(self.plans.exclude(status=Plan.Status.ARCHIVED))
             self.status = self.Status.ENDED
@@ -577,6 +593,8 @@ class CoachAthlete(models.Model):
             Plan.objects.filter(pk__in=[p.pk for p in to_archive]).update(
                 status=Plan.Status.ARCHIVED
             )
+            # A seat just opened (#659).
+            self._activate_waiting_after_commit()
         return self
 
     @property

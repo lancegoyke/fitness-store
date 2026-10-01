@@ -116,7 +116,7 @@ def test_identity_helper_quotes_commas_and_encodes_non_ascii():
 
     name, address = parseaddr(identity["from_email"])
     name = str(make_header(decode_header(name)))
-    assert name == 'Sam, "The Tank" Ríos via Mastering Fitness'
+    assert name == "Sam, The Tank Ríos via Mastering Fitness"  # quotes stripped
     assert address == _address()
     assert identity["reply_to"] == ["sam@coach.test"]
 
@@ -216,3 +216,46 @@ class TestUnchangedEmails:
                 message.extra_headers["List-Unsubscribe-Post"]
                 == "List-Unsubscribe=One-Click"
             )
+
+
+# -- #671: the coach's free-text name must not spoof the sender -------------
+
+
+def _from_name(coach):
+    name, address = parseaddr(
+        mail.EmailMessage(**client_email_identity(coach)).message()["From"]
+    )
+    assert address == _address()
+    return str(make_header(decode_header(name))), name
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "support@paypal.com",
+        '"><b>x',
+        "Sam <evil@x.test> Rivera",
+        "Sam\x00\x07\x1b[31m\r\nBcc: a@b.test Rivera",
+    ],
+)
+def test_hostile_display_name_is_neutralised(raw):
+    decoded, _ = _from_name(_coach(name=raw))
+    assert decoded.endswith(" via Mastering Fitness")
+    for bad in '<>@"\r\n\x00\x07\x1b':
+        assert bad not in decoded
+
+
+def test_display_name_is_capped_at_64_chars():
+    decoded, _ = _from_name(_coach(name="A" * 200))
+    assert decoded == "A" * 64 + " via Mastering Fitness"
+
+
+def test_empty_after_sanitising_falls_back_to_account_name_then_generic():
+    from store_project.meso.factories import CoachProfileFactory
+
+    coach = _coach(name="Sam Rivera")
+    CoachProfileFactory(user=coach, display_name='<>@"')
+    assert _from_name(coach)[0] == "Sam Rivera via Mastering Fitness"
+
+    nameless = _coach(name='<>@"', email="x@coach.test")
+    assert _from_name(nameless)[0] == "Your coach via Mastering Fitness"

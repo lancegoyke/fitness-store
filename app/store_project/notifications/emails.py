@@ -194,6 +194,24 @@ def first_name(full) -> str:
     return cleaned.split(" ", 1)[0] if cleaned else ""
 
 
+DISPLAY_NAME_MAX = 64
+
+
+def _safe_display_name(raw) -> str:
+    """A coach's free-text name made safe for a From display (#671).
+
+    Drops ``<>@"`` (so a name like ``support@paypal.com`` cannot pose as the
+    sender's address) and every control character, folds whitespace, and caps the
+    length. May return ``""``; the caller falls back.
+    """
+    kept = "".join(
+        ch
+        for ch in str(raw or "")
+        if ch not in '<>@"' and (ch.isspace() or ch.isprintable())
+    )
+    return clean_name(kept)[:DISPLAY_NAME_MAX].strip()
+
+
 def client_email_identity(coach) -> dict:
     """From + Reply-To kwargs for an email a coach's action sends to a client.
 
@@ -204,8 +222,11 @@ def client_email_identity(coach) -> dict:
     name cannot inject headers. A coach with no email gets no Reply-To.
     """
     address = parseaddr(settings.DEFAULT_FROM_EMAIL)[1]
-    # Drop remaining control characters (clean_name only folds whitespace).
-    name = "".join(ch for ch in coach_name(coach) if ch.isprintable())
+    name = (
+        _safe_display_name(coach_name(coach))
+        or _safe_display_name(getattr(coach, "name", ""))
+        or "Your coach"
+    )
     identity = {"from_email": formataddr((f"{name} via Mastering Fitness", address))}
     identity["reply_to"] = [coach.email] if coach.email else []
     return identity

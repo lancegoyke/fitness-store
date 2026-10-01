@@ -130,6 +130,9 @@ from .serializers import serialize_proposed_change
 from .serializers import serialize_session
 from .serializers import serialize_session_log
 from .serializers import serialize_week_snapshot
+from .stale_form import classify
+from .stale_form import conflict_message
+from .stale_form import rerender_state
 from .unsubscribe import athlete_opted_out
 from .unsubscribe import make_unsubscribe_token
 from .unsubscribe import resolve_unsubscribe_user
@@ -598,6 +601,27 @@ class RosterView(TemplateView):
         return ctx
 
 
+SETTINGS_LABELS = {
+    "name": "Your name",
+    "display_name": "Display name",
+    "programming_style": "Programming style",
+    "avoid_rules": "Avoid rules",
+    "unit": "Default load unit",
+}
+COACH_SETTINGS = ("display_name", "programming_style", "avoid_rules", "unit")
+
+
+def _settings_current(user, profile):
+    """The settings' stored values as strings, as the page renders them."""
+    return {
+        "name": user.name,
+        "display_name": getattr(profile, "display_name", ""),
+        "programming_style": ", ".join(getattr(profile, "programming_style", []) or []),
+        "avoid_rules": getattr(profile, "avoid_rules", ""),
+        "unit": getattr(profile, "default_unit", Unit.POUNDS),
+    }
+
+
 class MesoSettingsView(LoginRequiredMixin, TemplateView):
     """Account naming and coach-facing identity settings for Meso."""
 
@@ -606,85 +630,103 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         is_coach = _is_coach(self.request.user)
-        profile = getattr(self.request.user, "coach_profile", None)
+        profile = CoachProfile.objects.filter(user=self.request.user).first()
+        current = _settings_current(self.request.user, profile)
+        # A failed save re-renders the typed values (#657); otherwise the page
+        # renders what is stored, twice: the box and its hidden ``initial_``.
+        values, initials = kwargs.get("state") or (current, current)
         ctx["name_form"] = kwargs.get("name_form") or UserNameForm(
-            initial={"name": self.request.user.name}
+            initial={"name": values["name"]}
         )
         ctx["is_coach"] = is_coach
+        shown = ["name", *COACH_SETTINGS] if is_coach else ["name"]
+        ctx["initials"] = {f: initials[f] for f in shown}
         if is_coach:
             ctx["coach_form"] = kwargs.get("coach_form") or CoachDisplayNameForm(
-                initial={
-                    "display_name": getattr(profile, "display_name", ""),
-                    "programming_style": ", ".join(
-                        getattr(profile, "programming_style", []) or []
-                    ),
-                    "avoid_rules": getattr(profile, "avoid_rules", ""),
-                    "unit": getattr(profile, "default_unit", Unit.POUNDS),
-                }
+                initial={f: values[f] for f in COACH_SETTINGS}
             )
             ctx["coach_name"] = coach_name(self.request.user)
         return ctx
 
-    def _save_name(self, request, form):
-        request.user.name = form.cleaned_data["name"]
-        request.user.save(update_fields=["name"])
-
-    def _save_coaching(self, request, form):
-        profile, _ = CoachProfile.objects.get_or_create(user=request.user)
-        profile.display_name = form.cleaned_data["display_name"]
-        profile.programming_style = form.cleaned_data["programming_style"]
-        profile.avoid_rules = form.cleaned_data["avoid_rules"]
-        profile.default_unit = form.cleaned_data["unit"]
-        profile.save(
-            update_fields=[
-                "display_name",
-                "programming_style",
-                "avoid_rules",
-                "default_unit",
-                "modified",
-            ]
-        )
-
     def post(self, request, *args, **kwargs):
         section = request.POST.get("section")
-        if section is None:
-            # The page is one form with one Save (#646): validate every form,
-            # and save all of them or none, so typed input is never half-lost.
-            name_form = UserNameForm(request.POST)
-            coach_form = (
-                CoachDisplayNameForm(request.POST) if _is_coach(request.user) else None
+        is_coach = _is_coach(request.user)
+        if section not in (None, "name", "coaching") or (
+            section == "coaching" and not is_coach
+        ):
+            raise Http404("Unknown settings section")
+        # The page is one form with one Save (#646): validate every form, and
+        # save all of them or none, so typed input is never half-lost.
+        use_coach = is_coach and section != "name"
+        fields = [
+            *(["name"] if section != "coaching" else []),
+            *(COACH_SETTINGS if use_coach else ()),
+        ]
+        done = {
+            None: "Your settings were updated.",
+            "name": "Your name was updated.",
+            "coaching": "Your coaching settings were updated.",
+        }[section]
+        state = rerender = None
+        conflicts = []
+        with transaction.atomic():
+            # Lock order: User → CoachProfile (docs/meso/decisions.md).
+            user = User.objects.select_for_update(no_key=True).get(pk=request.user.pk)
+            profile = (
+                CoachProfile.objects.select_for_update(no_key=True)
+                .filter(user=user)
+                .first()
             )
-            valid = name_form.is_valid()
-            if coach_form is not None:
-                valid = coach_form.is_valid() and valid
-            if not valid:
-                return self.render_to_response(
-                    self.get_context_data(name_form=name_form, coach_form=coach_form)
+            current = _settings_current(user, profile)
+            # Fields the POST omits take their stored value for validation and
+            # are never written.
+            data = {**current, **request.POST.dict()}
+            name_form = UserNameForm(data) if "name" in fields else None
+            coach_form = CoachDisplayNameForm(data) if use_coach else None
+            forms = [f for f in (name_form, coach_form) if f is not None]
+            if not all([f.is_valid() for f in forms]):
+                state = rerender_state(
+                    data, current, SETTINGS_LABELS, shown=fields, initial_from_post=True
                 )
-            with transaction.atomic():
-                self._save_name(request, name_form)
-                if coach_form is not None:
-                    self._save_coaching(request, coach_form)
-            messages.success(request, "Your settings were updated.")
+                rerender = {"name_form": name_form, "coach_form": coach_form}
+            else:
+                apply, conflicts = classify(request.POST, current, fields)
+                if "name" in apply:
+                    user.name = name_form.cleaned_data["name"]
+                    user.save(update_fields=["name"])
+                coach_apply = [f for f in apply if f != "name"]
+                if coach_apply:
+                    profile, _ = CoachProfile.objects.get_or_create(user=user)
+                    for field in coach_apply:
+                        attr = "default_unit" if field == "unit" else field
+                        setattr(profile, attr, coach_form.cleaned_data[field])
+                    profile.save(
+                        update_fields=[
+                            *(
+                                "default_unit" if f == "unit" else f
+                                for f in coach_apply
+                            ),
+                            "modified",
+                        ]
+                    )
+                if conflicts:
+                    state = rerender_state(
+                        data,
+                        _settings_current(user, profile),
+                        SETTINGS_LABELS,
+                        shown=[*apply, *conflicts],
+                    )
+        if state is None:
+            messages.success(request, done)
             return redirect("meso:settings")
-
-        if section == "name":
-            form = UserNameForm(request.POST)
-            if form.is_valid():
-                self._save_name(request, form)
-                messages.success(request, "Your name was updated.")
-                return redirect("meso:settings")
-            return self.render_to_response(self.get_context_data(name_form=form))
-
-        if section == "coaching" and _is_coach(request.user):
-            form = CoachDisplayNameForm(request.POST)
-            if form.is_valid():
-                self._save_coaching(request, form)
-                messages.success(request, "Your coaching settings were updated.")
-                return redirect("meso:settings")
-            return self.render_to_response(self.get_context_data(coach_form=form))
-
-        raise Http404("Unknown settings section")
+        if conflicts:
+            messages.success(request, done)
+            for field in conflicts:
+                messages.error(request, conflict_message(SETTINGS_LABELS[field]))
+        request.user = user
+        return self.render_to_response(
+            self.get_context_data(state=state, **(rerender or {}))
+        )
 
 
 class RelationshipHistoryView(LoginRequiredMixin, TemplateView):
@@ -807,11 +849,16 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # Whether to offer "Draft with AI" on the create CTA — the same agent
         # allowance gate the endpoint enforces (the draft *is* an agent run).
         ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
-        ctx["athlete_label"] = link.label
         ctx["athlete_has_own_name"] = bool(clean_name(link.athlete.name))
         athlete_profile = getattr(link.athlete, "athlete_profile", None)
         athlete_unit = athlete_profile.unit if athlete_profile else ""
-        record_form = AthleteRecordForm(initial={"unit": athlete_unit})
+        current = _intake_current(link, athlete_profile)
+        # A failed save re-renders the typed values (#657); otherwise the page
+        # renders what is stored, twice: the box and its hidden ``initial_``.
+        values, initials = kwargs.get("intake_state") or (current, current)
+        ctx["intake"] = {**values, "new_contraindication": kwargs.get("new_text", "")}
+        ctx["intake_initials"] = initials
+        record_form = AthleteRecordForm(initial={"unit": values["unit"]})
         # The unit select renders inside a card, away from the intake <form>
         # (#646), so it joins that form by id.
         record_form.fields["unit"].widget.attrs["form"] = "athlete-intake"
@@ -863,6 +910,30 @@ def _locked_active_coached_athlete(request, pk):
     return athlete
 
 
+INTAKE_LABELS = {
+    "label": "Name",
+    "goals": "Goals",
+    "training_started": "Training since",
+    "notes": "Notes",
+    "unit": "Load unit",
+}
+
+
+def _intake_current(link, profile):
+    """The intake's stored values as strings, as the page renders them."""
+    return {
+        "label": link.label,
+        "goals": profile.goals if profile else "",
+        "training_started": (
+            profile.training_started.isoformat()
+            if profile and profile.training_started
+            else ""
+        ),
+        "notes": profile.notes if profile else "",
+        "unit": profile.unit if profile else "",
+    }
+
+
 def _first_form_error(form):
     return str(next(iter(form.errors.values()))[0])
 
@@ -905,46 +976,70 @@ def athlete_record_update(request, pk):
     for key in ("goals", "notes", "label", "new_contraindication"):
         if key in post:
             post[key] = post[key].replace("\r\n", "\n").replace("\r", "\n")
+    state = flash = error = None
+    conflicts = []
     with transaction.atomic():
         athlete = _locked_active_coached_athlete(request, pk)
+        profile, _ = AthleteProfile.objects.get_or_create(user=athlete)
+        # Lock order: User → CoachAthlete (docs/meso/decisions.md).
+        link = CoachAthlete.objects.select_for_update(no_key=True).get(
+            coach=request.user, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        current = _intake_current(link, profile)
+        fields = list(INTAKE_LABELS)
         form = AthleteRecordForm(post)
         if not form.is_valid():
-            messages.error(request, _first_form_error(form))
-            return redirect("meso:athlete", pk=pk)
-
-        label = None
-        if "label" in post:
-            label = clean_name(post["label"])
-            if len(label) > 255:
-                messages.error(request, "Name must be 255 characters or fewer.")
-                return redirect("meso:athlete", pk=pk)
-
+            error = _first_form_error(form)
+        elif len(clean_name(post.get("label", ""))) > 255:
+            error = "Name must be 255 characters or fewer."
         new_text = None
-        if post.get("new_contraindication", "").strip():
+        if error is None and post.get("new_contraindication", "").strip():
             text_form = ContraindicationForm({"text": post["new_contraindication"]})
-            if not text_form.is_valid():
-                messages.error(request, _first_form_error(text_form))
-                return redirect("meso:athlete", pk=pk)
-            new_text = text_form.cleaned_data["text"]
+            if text_form.is_valid():
+                new_text = text_form.cleaned_data["text"]
+            else:
+                error = _first_form_error(text_form)
 
-        received = form.fields.keys() & post.keys()
-        profile, _ = AthleteProfile.objects.get_or_create(user=athlete)
-        for field in received:
-            setattr(profile, field, form.cleaned_data[field])
-        if received:
-            profile.save(update_fields=[*sorted(received), "modified"])
-
-        if label is not None:
-            # Lock order: User → CoachAthlete (docs/meso/decisions.md).
-            link = CoachAthlete.objects.select_for_update(no_key=True).get(
-                coach=request.user, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        if error is not None:
+            messages.error(request, error)
+            state = rerender_state(
+                post, current, fields, shown=fields, initial_from_post=True
             )
-            link.label = label
-            link.save(update_fields=["label"])
-
-        flash = (
-            _apply_contraindication(athlete, new_text) if new_text is not None else None
+        else:
+            apply, conflicts = classify(post, current, fields)
+            profile_fields = [f for f in apply if f != "label"]
+            for field in profile_fields:
+                setattr(profile, field, form.cleaned_data[field])
+            if profile_fields:
+                profile.save(update_fields=[*sorted(profile_fields), "modified"])
+            if "label" in apply:
+                link.label = clean_name(post["label"])
+                link.save(update_fields=["label"])
+            flash = (
+                _apply_contraindication(athlete, new_text)
+                if new_text is not None
+                else None
+            )
+            if conflicts:
+                current = _intake_current(link, profile)
+                state = rerender_state(
+                    post, current, fields, shown=[*apply, *conflicts]
+                )
+    if state is not None:
+        view = AthleteProfileView()
+        view.setup(request, pk=pk)
+        ctx = view.get_context_data(
+            pk=pk,
+            intake_state=state,
+            new_text=post.get("new_contraindication", "") if error else "",
         )
+        if error is None:
+            messages.success(request, "Athlete record updated.")
+            if flash is not None:
+                messages.add_message(request, *flash)
+            for field in conflicts:
+                messages.error(request, conflict_message(INTAKE_LABELS[field]))
+        return view.render_to_response(ctx)
     messages.success(request, "Athlete record updated.")
     if flash is not None:
         messages.add_message(request, *flash)
@@ -4341,6 +4436,37 @@ def relationship_end(request, token):
     return redirect("meso:roster")
 
 
+@login_required
+@require_POST
+def relationship_leave(request, token):
+    """The athlete leaves a coach whose acceptance is still waiting (#659).
+
+    Only that athlete, only on a waiting link, only with the confirm step's
+    ``confirm=1``. Ends the link as athlete-ended (nothing to archive: a waiting
+    link has no plans) and sends no email. Lock order User → CoachAthlete.
+    """
+    link = get_object_or_404(CoachAthlete, token=token)
+    if request.user != link.athlete or not link.is_waiting:
+        return HttpResponseForbidden("You cannot leave this coach.")
+    if request.POST.get("confirm") != "1":
+        messages.info(request, "Nothing changed. Confirm to leave.")
+        return redirect("meso:athlete_home")
+    with transaction.atomic():
+        list(
+            User.objects.select_for_update(no_key=True)
+            .filter(pk__in={link.coach_id, link.athlete_id})
+            .order_by("pk")
+        )
+        link = get_object_or_404(
+            CoachAthlete.objects.select_for_update(no_key=True).waiting(),
+            token=token,
+            athlete=request.user,
+        )
+        link.end(by="athlete")
+    messages.success(request, "You've left this coach.")
+    return redirect("meso:athlete_home")
+
+
 def _notify_athlete_relationship_ended(request, link):
     """Best-effort email telling the athlete their coach ended the coaching (#651).
 
@@ -4927,6 +5053,13 @@ def _accept_claim(request, invite):
             athlete=request.user,
             status=CoachAthlete.Status.ACCEPTED_WAITING,
         ).exists()
+        # #671: a second invite from a coach the athlete already trains with
+        # opens nothing, so the coach is not told "X accepted" again.
+        already_active = CoachAthlete.objects.filter(
+            coach_id=invite.coach_id,
+            athlete=request.user,
+            status=CoachAthlete.Status.ACTIVE,
+        ).exists()
         try:
             link = invite.accept(request.user, waiting=waiting)
         except InvalidTransition as exc:
@@ -4940,7 +5073,8 @@ def _accept_claim(request, invite):
         else:
             # A successful, non-waiting accept completes HERE (#643: tell the
             # coach their athlete joined).
-            _notify_coach_invite_accepted(request, link, invite)
+            if not already_active:
+                _notify_coach_invite_accepted(request, link, invite)
             messages.success(
                 request,
                 f"You're now training with {coach_name(invite.coach)}.",
@@ -6816,6 +6950,19 @@ def template_create(request):
     except (ValidationError, ValueError):
         invite = None
     with transaction.atomic():
+        if invite is not None:
+            # #668: the lookup above is unlocked, so the invite may have been
+            # revoked, answered or deleted since. Re-read it under the lock (the
+            # coach ``User`` first, then the invite, as in ``_accept_claim``) and
+            # link only a still-pending one; otherwise write an unlinked template.
+            list(User.objects.select_for_update(no_key=True).filter(pk=request.user.pk))
+            invite = (
+                CoachInvite.objects.select_for_update(no_key=True)
+                .for_coach(request.user)
+                .pending()
+                .filter(pk=invite.pk)
+                .first()
+            )
         plan = Plan.objects.create(
             owner=request.user,
             relationship=None,

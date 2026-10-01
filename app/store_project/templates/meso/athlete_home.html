@@ -286,6 +286,16 @@
             <div class="meso-row-name">{{ w.coach }}</div>
             <div class="meso-row-meta">You're connected to {{ w.coach }}. They'll have your program ready soon.</div>
           </div>
+          <div class="meso-spacer"></div>
+          <details>
+            <summary class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;cursor:pointer;">Leave</summary>
+            <form method="post" action="{% url 'meso:relationship_leave' token=w.token %}" style="margin:8px 0 0;">
+              {% csrf_token %}
+              <input type="hidden" name="confirm" value="1" />
+              <p class="meso-row-meta" style="margin:0 0 8px;">Leave {{ w.coach }}? You can be invited again later.</p>
+              <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Yes, leave</button>
+            </form>
+          </details>
         </div>
       {% endfor %}
 

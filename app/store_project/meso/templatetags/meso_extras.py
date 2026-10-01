@@ -1,9 +1,11 @@
 from django import template
 
+from .. import stale_form
 from .. import tour as meso_tour
 from ..serializers import initials as _initials
 
 register = template.Library()
+register.simple_tag(stale_form.initial_input)
 
 
 @register.filter
