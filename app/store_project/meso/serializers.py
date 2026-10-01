@@ -1002,7 +1002,11 @@ def week_readouts(weeks, exercise_slot_ids, cells_by_key, unit="kg"):
                 total += parsed["sets"] * reps
                 parsed_any = True
             # ``3x8 BW @8`` parses with load "8": that is an RPE, not a load.
-            if parsed.get("unit") == "bw":
+            # An explicit unit ("BW @ 20kg") is real added weight, so it stays.
+            if (
+                parsed.get("unit") == "bw"
+                and not _split_suffix(parsed.get("load") or "")[1]
+            ):
                 continue
             load = _load_value(parsed.get("load"), unit)
             if load is not None:

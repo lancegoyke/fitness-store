@@ -350,3 +350,14 @@ class TestLoadTokenEdges:
         meso, _, _ = _block({"Squat": ["3x5 @ " + "9" * 400] * 4})
         wk = serialize_mesocycle_grid(meso)["weeks"]
         assert all(w["inten"] is None for w in wk)
+
+    def test_weighted_bodyweight_load_still_counts_when_the_lift_is_skipped(self):
+        meso, _, _ = _block(
+            {
+                "Squat": ["3x5 @ 40", "3x5 @ 80", "", ""],
+                "Pull-up": ["3x8 BW @ 20kg", "skip", "", ""],
+            },
+            unit=Unit.KILOGRAMS,
+        )
+        wk = serialize_mesocycle_grid(meso)["weeks"]
+        assert (wk[0]["inten"], wk[1]["inten"]) == (75, 50)
