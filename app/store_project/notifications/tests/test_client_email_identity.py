@@ -259,3 +259,10 @@ def test_empty_after_sanitising_falls_back_to_account_name_then_generic():
 
     nameless = _coach(name='<>@"', email="x@coach.test")
     assert _from_name(nameless)[0] == "Your coach via Mastering Fitness"
+
+
+def test_encoded_word_name_cannot_smuggle_an_address():
+    from store_project.notifications.emails import _safe_display_name
+
+    name = _safe_display_name("=?utf-8?b?c3VwcG9ydEBwYXlwYWwuY29t?=")
+    assert "=?" not in name and "?=" not in name

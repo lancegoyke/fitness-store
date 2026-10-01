@@ -209,6 +209,9 @@ def _safe_display_name(raw) -> str:
         for ch in str(raw or "")
         if ch not in '<>@"' and (ch.isspace() or ch.isprintable())
     )
+    # An RFC 2047 encoded word (``=?utf-8?b?...?=``) would be decoded by mail
+    # clients back into the ``@`` this function just removed.
+    kept = kept.replace("=?", "").replace("?=", "")
     return clean_name(kept)[:DISPLAY_NAME_MAX].strip()
 
 
