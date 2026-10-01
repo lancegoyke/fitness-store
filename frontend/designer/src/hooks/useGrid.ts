@@ -48,6 +48,10 @@ interface GridHistoryCarrier {
   };
 }
 
+interface PlanTitleCarrier extends GridHistoryCarrier {
+  plan?: { title?: string };
+}
+
 const EMPTY_GRID_HISTORY: GridHistory = {
   can_undo: false,
   can_redo: false,
@@ -269,6 +273,31 @@ export function useGrid(options: UseGridOptions) {
       write.finally(() => pendingWritesRef.current.delete(write));
     },
     [grid, planId, csrf, adoptGridHistory],
+  );
+
+  const renamePlan = useCallback(
+    (title: string) => {
+      setGrid((prev) =>
+        prev?.plan ? { ...prev, plan: { ...prev.plan, title } } : prev,
+      );
+      const write = apiPost(`/meso/api/plan/${planId}/title/`, { title }, csrf)
+        .then((data) => {
+          const reply = data as PlanTitleCarrier;
+          if (typeof reply.plan?.title === "string") {
+            const returnedTitle = reply.plan.title;
+            setGrid((prev) =>
+              prev?.plan
+                ? { ...prev, plan: { ...prev.plan, title: returnedTitle } }
+                : prev,
+            );
+          }
+          adoptGridHistory(reply);
+        })
+        .catch((err) => console.error("Rename program failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
+    },
+    [planId, csrf, adoptGridHistory],
   );
 
   // Phase 2a: write one freeform (week × line) sub-line of a row's stack —
@@ -547,6 +576,7 @@ export function useGrid(options: UseGridOptions) {
     history,
     busy,
     patchCell,
+    renamePlan,
     renameExercise,
     writeCellLine,
     patchRowColumns,

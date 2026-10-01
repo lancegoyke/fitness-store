@@ -200,6 +200,8 @@ export function DesignerRoot() {
   return (
     <div className="meso-designer-root">
       <TopBar
+        planTitle={grid?.plan?.title ?? ""}
+        onRenamePlan={gridState.renamePlan}
         view={view}
         onSelectView={selectView}
         cycleLabel={cycleLabel}

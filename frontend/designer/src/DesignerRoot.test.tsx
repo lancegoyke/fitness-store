@@ -124,6 +124,51 @@ describe("hydration: full payload", () => {
     expect(screen.getByTestId("week-col-1")).toBeInTheDocument();
   });
 
+  it("renames the program from the header and refreshes that title after undo", async () => {
+    const user = userEvent.setup();
+    jsonScript("meso-grid-data", gridPayload({
+      plan: { id: 7, title: "Old program", goal: "Strength", status: "active", unit: "kg" },
+    }));
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+
+    const undoGrid = gridPayload({
+      plan: { id: 7, title: "Old program", goal: "Strength", status: "active", unit: "kg" },
+      history: { can_undo: false, can_redo: true, undo_label: null, redo_label: "Renamed program" },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          plan: { title: "New program title" },
+          history: { can_undo: true, can_redo: false, undo_label: "Renamed program", redo_label: null },
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true, ...undoGrid }) });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    await user.click(screen.getByRole("button", { name: /Edit program title/ }));
+    await user.clear(screen.getByRole("textbox", { name: "Program title" }));
+    await user.type(screen.getByRole("textbox", { name: "Program title" }), "New program title{Enter}");
+
+    await waitFor(() => expect(screen.getByTestId("grid-undo")).toBeEnabled());
+    expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/title/", expect.anything());
+    await user.click(screen.getByTestId("grid-undo"));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Edit program title/ })).toHaveTextContent(
+        "Old program",
+      ),
+    );
+    expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/");
+  });
+
   it("hydrates the chat thread from #meso-chat-thread when present", () => {
     jsonScript("meso-grid-data", gridPayload());
     jsonScript("meso-chat-thread", [{ id: 1, role: "agent", text: "Persisted greeting" }]);

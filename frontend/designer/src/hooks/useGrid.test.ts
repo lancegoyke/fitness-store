@@ -169,6 +169,39 @@ describe("patchCell", () => {
   });
 });
 
+describe("renamePlan", () => {
+  it("optimistically updates grid.plan, applies the reply, and adopts history", async () => {
+    const { result } = setup(
+      grid({ plan: { id: 7, title: "Old title", goal: "Strength" } }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: true,
+        plan: { title: "Server title" },
+        history: {
+          can_undo: true,
+          can_redo: false,
+          undo_label: "Renamed program",
+          redo_label: null,
+        },
+      }),
+    ) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.renamePlan("New title");
+    });
+
+    expect(result.current.grid?.plan?.title).toBe("New title");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/meso/api/plan/7/title/",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(sentBody()).toEqual({ title: "New title" });
+    await waitFor(() => expect(result.current.grid?.plan?.title).toBe("Server title"));
+    expect(result.current.history.undo_label).toBe("Renamed program");
+  });
+});
+
 describe("renameExercise", () => {
   it("POSTs {name} to the row's FIRST live week's cell (the identity cell), optimistically updating row.name", async () => {
     // Phase 2a: the one-week swap fields are gone, so identity is always the

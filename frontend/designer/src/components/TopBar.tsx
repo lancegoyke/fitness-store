@@ -5,9 +5,12 @@
 // rail's), the standalone "Preview as athlete" button was dropped (the
 // segmented "Athlete view" is the one canonical switch), and the canvas's own
 // 49px segmented-control band folded up here.
+import { useState } from "react";
 import type { ViewMode } from "../DesignerRoot";
 
 export interface TopBarProps {
+  planTitle: string;
+  onRenamePlan(title: string): void;
   view: ViewMode;
   onSelectView(view: ViewMode): void;
   cycleLabel: string;
@@ -36,6 +39,8 @@ const VIEW_TABS: { id: ViewMode; label: string }[] = [
 ];
 
 export function TopBar({
+  planTitle,
+  onRenamePlan,
   view,
   onSelectView,
   cycleLabel,
@@ -49,6 +54,28 @@ export function TopBar({
   onUndo,
   onRedo,
 }: TopBarProps) {
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(planTitle);
+
+  const beginTitleEdit = () => {
+    setTitleDraft(planTitle);
+    setEditingTitle(true);
+  };
+  const cancelTitleEdit = () => {
+    setTitleDraft(planTitle);
+    setEditingTitle(false);
+  };
+  const commitTitleEdit = () => {
+    const title = titleDraft.trim();
+    setEditingTitle(false);
+    if (!title) {
+      setTitleDraft(planTitle);
+      return;
+    }
+    setTitleDraft(title);
+    if (title !== planTitle) onRenamePlan(title);
+  };
+
   return (
     <div className="meso-topbar">
       <a href="/meso/" title="Back to roster" className="meso-topbar-brand">
@@ -57,6 +84,38 @@ export function TopBar({
         </span>
         <span className="meso-topbar-title">Meso</span>
       </a>
+      <div className="meso-topbar-divider" />
+
+      {editingTitle ? (
+        <input
+          autoFocus
+          aria-label="Program title"
+          className="meso-program-title-input"
+          maxLength={255}
+          value={titleDraft}
+          onChange={(event) => setTitleDraft(event.target.value)}
+          onBlur={commitTitleEdit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commitTitleEdit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              cancelTitleEdit();
+            }
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          className="meso-program-title"
+          aria-label={`Edit program title: ${planTitle}`}
+          title="Rename program"
+          onClick={beginTitleEdit}
+        >
+          {planTitle}
+        </button>
+      )}
       <div className="meso-topbar-divider" />
 
       <button

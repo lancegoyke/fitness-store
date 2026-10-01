@@ -17,9 +17,11 @@ P0 fixed-lineup cutover's ``Prescription`` **cell** has no ``deleted_at`` of
 its own (it's live iff its ``ExerciseSlot`` *and* its ``Week`` are both live),
 so a cell's row is written back by pk like the others, but a stray one absent
 from the snapshot is hard-deleted rather than soft-deleted — see
-``restore_plan_snapshot``. Deliberately excluded: ``delivered_at``,
-``WeekDelivery``, ``SessionLog``/``LoggedSet``, ``AthleteOneRm``, and
-mesocycle fields — undo must never touch delivery stamps or athlete data.
+``restore_plan_snapshot``. The plan title is captured alongside those child
+rows so a program rename participates in the same undo stack. Deliberately
+excluded: ``delivered_at``, ``WeekDelivery``, ``SessionLog``/``LoggedSet``,
+``AthleteOneRm``, and mesocycle fields — undo must never touch delivery stamps
+or athlete data.
 """
 
 import logging
@@ -94,6 +96,7 @@ def serialize_plan_snapshot(plan):
         week__mesocycle__plan=plan, athlete_authored=False
     )
     return {
+        "plan": {"title": plan.title},
         "weeks": [
             {
                 "pk": w.pk,
@@ -230,6 +233,13 @@ def restore_plan_snapshot(plan, snapshot):
     stray), which is safe precisely because the pk-upsert makes a later redo
     able to recreate it.
     """
+    # Older stored snapshots predate plan-level fields. Only restore the title
+    # when that key is present; omitting it must leave the current title alone.
+    plan_row = snapshot.get("plan")
+    if isinstance(plan_row, dict) and "title" in plan_row:
+        plan.title = plan_row["title"]
+        plan.save(update_fields=["title"])
+
     week_rows = {row["pk"]: row for row in snapshot.get("weeks", [])}
     slot_rows = {row["pk"]: row for row in snapshot.get("session_slots", [])}
     exercise_slot_rows = {row["pk"]: row for row in snapshot.get("exercise_slots", [])}

@@ -9,6 +9,8 @@ import type { ViewMode } from "../DesignerRoot";
 
 function baseProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}) {
   return {
+    planTitle: "Maya's program",
+    onRenamePlan: vi.fn(),
     view: "table" as ViewMode,
     onSelectView: vi.fn(),
     cycleLabel: "Hypertrophy · Wk 2 / 4",
@@ -26,6 +28,53 @@ function baseProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}) {
 }
 
 describe("TopBar", () => {
+  it("edits the program title inline and commits a trimmed value with Enter", async () => {
+    const user = userEvent.setup();
+    const onRenamePlan = vi.fn();
+    render(<TopBar {...baseProps({ onRenamePlan })} />);
+
+    const editButton = screen.getByRole("button", { name: /Edit program title/ });
+    editButton.focus();
+    await user.keyboard("{Enter}");
+    const input = screen.getByRole("textbox", { name: "Program title" });
+    await user.clear(input);
+    await user.type(input, "  Fall strength  {Enter}");
+
+    expect(onRenamePlan).toHaveBeenCalledWith("Fall strength");
+    expect(screen.getByRole("button", { name: /Edit program title/ })).toHaveTextContent(
+      "Maya's program",
+    );
+  });
+
+  it("commits on blur, while Escape and an empty draft revert without saving", async () => {
+    const user = userEvent.setup();
+    const onRenamePlan = vi.fn();
+    const { rerender } = render(<TopBar {...baseProps({ onRenamePlan })} />);
+
+    await user.click(screen.getByRole("button", { name: /Edit program title/ }));
+    await user.clear(screen.getByRole("textbox", { name: "Program title" }));
+    await user.type(screen.getByRole("textbox", { name: "Program title" }), "Power phase");
+    await user.tab();
+    expect(onRenamePlan).toHaveBeenCalledWith("Power phase");
+
+    rerender(<TopBar {...baseProps({ planTitle: "Power phase", onRenamePlan })} />);
+    await user.click(screen.getByRole("button", { name: /Edit program title/ }));
+    await user.clear(screen.getByRole("textbox", { name: "Program title" }));
+    await user.type(screen.getByRole("textbox", { name: "Program title" }), "Discard me{Escape}");
+    expect(onRenamePlan).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: /Edit program title/ })).toHaveTextContent(
+      "Power phase",
+    );
+
+    await user.click(screen.getByRole("button", { name: /Edit program title/ }));
+    await user.clear(screen.getByRole("textbox", { name: "Program title" }));
+    await user.tab();
+    expect(onRenamePlan).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: /Edit program title/ })).toHaveTextContent(
+      "Power phase",
+    );
+  });
+
   it("shows Review changes + Deliver", () => {
     render(<TopBar {...baseProps()} />);
     expect(screen.getByTestId("review-link")).toBeInTheDocument();
