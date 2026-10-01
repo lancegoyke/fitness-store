@@ -406,14 +406,16 @@ button.meso-card,
 
 /* Review card footer: the "Honors:" pill and the Approve/Reject control. The
    pill wraps (a long honors line must not shove the control past the card's
-   edge) and the control drops beneath it when the row is too narrow. */
+   edge) and the control drops beneath it when the row is too narrow. The
+   compound selector is load-bearing: `.meso-badge` (later in this file) sets
+   `white-space: nowrap` and would beat a lone class. */
 .meso-review-foot {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
 }
-.meso-review-honors {
+.meso-badge.meso-review-honors {
   min-width: 0;
   max-width: 100%;
   white-space: normal;

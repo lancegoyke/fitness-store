@@ -28,7 +28,9 @@ def test_review_footer_row_wraps_at_every_width():
 
 
 def test_honors_pill_can_shrink_and_wrap():
-    body = _rule(_css(), ".meso-review-honors")
+    # Compound: a lone class loses to the later `.meso-badge { white-space: nowrap }`
+    # (found in the browser at 1512px: the text ran out of the pill).
+    body = _rule(_css(), ".meso-badge.meso-review-honors")
     assert "min-width: 0" in body
     assert "overflow-wrap: anywhere" in body
     assert "white-space: normal" in body
@@ -44,3 +46,14 @@ def test_review_template_uses_the_layout_classes():
     source = get_template("meso/review.html").template.source
     assert "meso-review-foot" in source
     assert "meso-review-honors" in source
+
+
+def test_athlete_marker_wraps_so_the_miss_tail_stays_visible():
+    """#688: the designer marker's "· 1 miss" must not be ellipsized away."""
+    css = (
+        Path(__file__).resolve().parents[4]
+        / "frontend/designer/src/styles/designer-mesotable.css"
+    ).read_text()
+    body = _rule(css, ".meso-athlete-marker")
+    assert "white-space: normal" in body
+    assert "text-overflow" not in body

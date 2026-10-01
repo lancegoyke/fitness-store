@@ -502,8 +502,8 @@ function GridCellEditor({
             className="meso-athlete-marker"
             data-testid={`cell-athlete-marker-${cellId}`}
             aria-expanded={athleteOpen}
-            // The cell column is narrow and the marker ellipsizes; the title
-            // carries the full roll-up when it is clipped.
+            // The cell column is narrow, so the marker wraps; the title
+            // carries the full roll-up as a tooltip.
             title={athleteMarkerText}
             aria-label={`${athleteSetsLabel} — ${athleteOpen ? "hide" : "show"} lines`}
             onClick={() => {
