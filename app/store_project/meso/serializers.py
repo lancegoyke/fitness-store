@@ -1043,28 +1043,41 @@ def athlete_line_summary(lines, unit, log_id=None):
 
     ``{"sets": n, "load": "225", "unit": "lb", "rpe": "9"}`` -- the top set's
     own load number and unit. The top set is the heaviest by kg-equivalent, but
-    the display is never converted. A LoggedSet-derived set is shown in the unit
-    stamped on it (#630) -- a typed suffix ("225lb") only has its text stripped;
-    only the text fallback (no LoggedSet) lets a suffix decide the unit, else
-    the plan's. ``log_id`` is the cell session's newest ``SessionLog`` (see
-    ``models.newest_session_log_ids``): sets from any older log are ignored. With
-    no numeric top set, a "BW" set is the summary.
+    the display is never converted. A %1RM set is never compared with an
+    absolute one (no 1RM to convert by, #663): if any set carries an absolute
+    load the top is chosen among those alone; a %-only log shows its top % as
+    the load text ("90%", no unit). A LoggedSet-derived set is shown in the
+    unit stamped on it (#630) -- a typed suffix ("225lb") only has its text
+    stripped; only the text fallback (no LoggedSet) lets a suffix decide the
+    unit, else the plan's.
+
+    A set stands behind a line by the same rule as ``models.display_line_id``
+    (its ``source_line``, else the ``reclaimed_line`` a "Log session" left,
+    #665), so the line needs ``parsed_sets`` and ``reclaimed_sets`` prefetched.
+    ``log_id`` is the cell session's newest ``SessionLog`` (see
+    ``models.newest_session_log_ids``): sets from any older log are ignored.
+    With no numeric top set, a "BW" set is the summary.
     """
     logged = [lc for lc in lines if lc.athlete_authored and lc.text.strip()]
     if not logged:
         return None
-    best = None  # (kg-equivalent, load text, unit, rpe)
+    best = {"abs": None, "pct": None}  # kind -> (value, load text, unit, rpe)
     bodyweight = None  # (load text, rpe)
     for lc in logged:
+        behind = [
+            s
+            for s in (*lc.parsed_sets.all(), *lc.reclaimed_sets.all())
+            if models.display_line_id(s) == lc.pk
+        ]
         candidates = []  # (load text, unit, rpe)
-        for s in lc.parsed_sets.all():
+        for s in behind:
             if not s.load or s.session_log_id != log_id:
                 continue
             text, suffix = _split_suffix(s.load)
             candidates.append((text, s.unit or suffix or "", s.rpe))
         # Text fallback only for a line no LoggedSet was ever derived from: a
         # line whose sets all belong to an older log is that log's, not ours.
-        if not candidates and not any(s.load for s in lc.parsed_sets.all()):
+        if not candidates and not behind:
             parsed = parsing.parse_performed(lc.text) or {}
             if parsed.get("load"):
                 text, suffix = _split_suffix(parsed["load"])
@@ -1075,11 +1088,18 @@ def athlete_line_summary(lines, unit, log_id=None):
                     bodyweight = (text, rpe)
                 continue
             value = _load_value(text, set_unit or unit)
-            if value is not None and (best is None or value[0] > best[0]):
-                best = (value[0], text, set_unit, rpe)
+            if value is None:
+                continue
+            kind = value[1]
+            if kind == "pct":
+                set_unit = ""  # "90%" is the whole display
+            top = best[kind]
+            if top is None or value[0] > top[0]:
+                best[kind] = (value[0], text, set_unit, rpe)
+    top = best["abs"] or best["pct"]
     summary = {"sets": len(logged), "load": "", "unit": "", "rpe": ""}
-    if best:
-        summary.update(load=best[1], unit=best[2] or "", rpe=best[3] or "")
+    if top:
+        summary.update(load=top[1], unit=top[2] or "", rpe=top[3] or "")
     elif bodyweight:
         summary.update(load="BW", unit="", rpe=bodyweight[1] or "")
     return summary
@@ -1154,7 +1174,7 @@ def serialize_mesocycle_grid(mesocycle):
             exercise_slot_id__in=exercise_slot_ids, week_id__in=week_ids
         )
         .select_related("exercise_slot")
-        .prefetch_related("parsed_sets")
+        .prefetch_related("parsed_sets", "reclaimed_sets")
         .order_by("line")
     ):
         if cell.line == 0:

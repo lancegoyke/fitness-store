@@ -81,6 +81,33 @@ def test_tab_after_escape_moves_to_the_next_cell(page, live_server, login, block
 
 
 @pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
+def test_tab_from_a_skipped_cell_td_moves_to_the_next_editable_cell(
+    page, live_server, login, block_plan
+):
+    """#664: Tab from a skipped cell's <td> reaches the next editable cell.
+
+    A skipped cell has no editor; Tab used to fall into its Unskip button.
+    """
+    slot = ExerciseSlot.objects.get(
+        session_slot__mesocycle__plan=block_plan.plan,
+        name="Back Squat",
+        deleted_at__isnull=True,
+    )
+    week1 = Prescription.objects.get(exercise_slot=slot, week__index=1, line=0)
+    week2 = Prescription.objects.get(exercise_slot=slot, week__index=2, line=0)
+    Prescription.objects.filter(pk=week1.pk).update(skipped=True)
+    login(block_plan.coach)
+    _open_designer(page, live_server, block_plan.plan)
+
+    td = page.get_by_test_id(f"cell-{slot.pk}-{week1.week_id}")
+    td.click(position={"x": 4, "y": 4})
+    assert _active_tag(page) == "TD"
+    page.keyboard.press("Tab")
+    expect(page.get_by_test_id(f"cell-text-{week2.pk}")).to_be_focused()
+    page.screenshot(path="e2e/screenshots/tab_from_a_skipped_cell_td.png")
+
+
+@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
 def test_tab_after_escape_off_the_table_edge_leaves_the_grid(
     page, live_server, login, block_plan
 ):

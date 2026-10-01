@@ -849,7 +849,7 @@ function TableRow({
         const testId = `cell-${row.exercise_slot_id}-${week.id}`;
         if (!cell) return <td key={week.id} data-testid={testId} />;
         return (
-          <td key={week.id} data-testid={testId} className="meso-table-cell" tabIndex={-1} onKeyDown={(event) => cellKeyDown(event, tableNav)}>
+          <td key={week.id} data-testid={testId} className="meso-table-cell" tabIndex={-1} data-grid-td={cell.skipped ? tableCellDomKey(row.exercise_slot_id, week.id, "text") : undefined} onKeyDown={(event) => cellKeyDown(event, tableNav)}>
             {cell.skipped ? (
               <>
                 <span className="meso-table-skipped" data-testid={`cell-skipped-${cell.prescription_id}`}>

@@ -630,8 +630,12 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
     const td = event.currentTarget;
     const a = anchorRef.current;
     const anchored = a ? td.querySelector(cellSelector(a.rowId, a.weekId, a.field, a.line)) : null;
-    const key = (anchored ?? td.querySelector("[data-grid-cell]"))?.getAttribute("data-grid-cell");
-    if (!key) return; // a hole / skipped cell: nothing to move from.
+    const childKey = (anchored ?? td.querySelector("[data-grid-cell]"))?.getAttribute("data-grid-cell");
+    // A skipped cell has no editor, so its <td> carries its own grid identity
+    // (`data-grid-td`, same key format, line 0): Tab / arrows still move on
+    // from it instead of falling to native Tab into its Unskip button (#664).
+    const key = childKey ?? td.getAttribute("data-grid-td");
+    if (!key) return; // a hole: nothing to move from.
     const [rowPart, weekPart, field, linePart] = key.split(":");
     const from: TableCellId = {
       rowId: Number(rowPart),
@@ -639,13 +643,22 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
       field: field as TableColumn,
       line: linePart === undefined ? 0 : Number(linePart),
     };
-    commitAnchor(from, flat, false);
+    // A skipped <td> has no rendered cell: committing it as the anchor would
+    // zero the table out of the tab order, so leave the anchor alone (every
+    // successful move below commits the destination).
+    if (childKey) commitAnchor(from, flat, false);
     if (event.key === "Tab") {
       stepTab(from, event.shiftKey ? -1 : 1, event);
       // Off the table's edge: native Tab must leave the grid as it would from
-      // the editor, not step from the <td> INTO its own input. Park focus on
-      // the editor first; the browser resumes the traversal from there.
-      if (!event.defaultPrevented) td.querySelector<HTMLElement>("[data-grid-cell]")?.focus();
+      // the editor, not step from the <td> INTO its own input (or, for a
+      // skipped cell, its Unskip button). Going forward, park focus on the
+      // last focusable inside; the browser resumes the traversal from there.
+      // Shift+Tab already leaves backwards from the <td> itself.
+      if (!event.defaultPrevented) {
+        const inner = td.querySelector<HTMLElement>("[data-grid-cell]");
+        if (inner) inner.focus();
+        else if (!event.shiftKey) td.querySelector<HTMLElement>("button")?.focus();
+      }
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       stepHorizontal(from, event.key === "ArrowRight" ? 1 : -1, event);
     } else {
