@@ -1,4 +1,5 @@
 {% extends "meso/_meso_base.html" %}
+{% load static %}
 
 {% block title %}{{ athlete.name }} · Meso{% endblock %}
 
@@ -31,14 +32,14 @@
         <div>
           <h1 class="meso-h1">{{ athlete.name }}</h1>
           <p class="meso-sub">{{ athlete.subtitle }}</p>
-          <form method="post" action="{% url 'meso:athlete_label' athlete.id %}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
-            {% csrf_token %}
-            <input type="text" name="label" class="meso-field" value="{{ athlete_label }}" maxlength="255" placeholder="Their name" aria-label="Your name for this athlete" style="width:auto;min-width:180px;" />
-            <button type="submit" class="meso-btn meso-btn--ghost">Save name</button>
+          {# One intake form (#646): this name, goals, history and contraindication inputs all join it by form="athlete-intake". #}
+          <form id="athlete-intake" method="post" action="{% url 'meso:athlete_record' athlete.id %}" data-dirty-guard>{% csrf_token %}</form>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <input type="text" name="label" form="athlete-intake" class="meso-field" value="{{ athlete_label }}" maxlength="255" placeholder="Their name" aria-label="Your name for this athlete" style="width:auto;min-width:180px;" />
             <span class="meso-row-meta">
               {% if athlete_has_own_name %}Their own name is shown; this label is a fallback.{% else %}Shown to you (and in emails to them) until they set their own name.{% endif %}
             </span>
-          </form>
+          </div>
         </div>
       </div>
       {% if athlete.status == 'needs_review' %}
@@ -51,11 +52,7 @@
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div class="meso-card meso-card--pad">
           <p class="meso-eyebrow">Goals</p>
-          <form method="post" action="{% url 'meso:athlete_record' athlete.id %}" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
-            {% csrf_token %}
-            <textarea name="goals" class="meso-field" maxlength="2000" rows="3" aria-label="Goals" placeholder="What is this athlete working toward?">{{ athlete.goals }}</textarea>
-            <button type="submit" class="meso-btn">Save goals</button>
-          </form>
+          <textarea name="goals" form="athlete-intake" class="meso-field" maxlength="2000" rows="3" aria-label="Goals" placeholder="What is this athlete working toward?">{{ athlete.goals }}</textarea>
           {% if athlete.program_goal %}
             <p class="meso-sub" style="margin:10px 0 0;">Program goal: {{ athlete.program_goal }}</p>
           {% endif %}
@@ -63,17 +60,16 @@
 
         <div class="meso-card meso-card--pad">
           <p class="meso-eyebrow">Training history</p>
-          <form method="post" action="{% url 'meso:athlete_record' athlete.id %}" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
-            {% csrf_token %}
+          <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
             <label for="athlete-training-started" class="meso-row-meta">Training since</label>
-            <input id="athlete-training-started" type="date" name="training_started" class="meso-field" value="{{ athlete.training_started|default_if_none:'' }}" />
+            <input id="athlete-training-started" type="date" name="training_started" form="athlete-intake" max="{{ today|date:'Y-m-d' }}" class="meso-field" value="{{ athlete.training_started|default_if_none:'' }}" />
             <label for="athlete-notes" class="meso-row-meta">Notes — visible to the athlete and to their other coaches</label>
-            <textarea id="athlete-notes" name="notes" class="meso-field" maxlength="5000" rows="4" placeholder="Injury history, preferences, context">{{ athlete.notes }}</textarea>
+            <textarea id="athlete-notes" name="notes" form="athlete-intake" class="meso-field" maxlength="5000" rows="4" placeholder="Injury history, preferences, context">{{ athlete.notes }}</textarea>
             <label for="{{ athlete_record_form.unit.id_for_label }}" class="meso-row-meta">Load unit</label>
             {{ athlete_record_form.unit }}
             <p class="meso-row-meta" style="margin:0;">Currently {{ effective_unit }} ({{ effective_unit_source }})</p>
-            <button type="submit" class="meso-btn">Save training history</button>
-          </form>
+            <button type="submit" form="athlete-intake" class="meso-btn meso-btn--primary">Save athlete record</button>
+          </div>
         </div>
 
         <div class="meso-card meso-card--pad">
@@ -94,11 +90,10 @@
           {% else %}
             <p class="meso-sub" style="margin:0 0 10px;">None on file.</p>
           {% endif %}
-          <form method="post" action="{% url 'meso:athlete_contraindication_add' athlete.id %}" style="display:flex;gap:8px;align-items:center;">
-            {% csrf_token %}
-            <input type="text" name="text" class="meso-field" maxlength="255" aria-label="Add a contraindication" placeholder="e.g. L knee: no deep flexion" style="flex:1;min-width:0;" />
-            <button type="submit" class="meso-btn">Add</button>
-          </form>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" name="new_contraindication" form="athlete-intake" class="meso-field" maxlength="255" aria-label="Add a contraindication" placeholder="e.g. L knee: no deep flexion" style="flex:1;min-width:0;" />
+            <button type="submit" name="add_contraindication" value="1" form="athlete-intake" class="meso-btn">Add</button>
+          </div>
         </div>
 
         <div class="meso-card meso-card--pad">
@@ -213,4 +208,8 @@
       </div>
     </div>
   </div>
+{% endblock %}
+
+{% block scripts %}
+  <script defer src="{% static 'js/meso_dirty_guard.js' %}"></script>
 {% endblock %}

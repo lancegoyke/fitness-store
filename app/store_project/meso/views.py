@@ -543,13 +543,53 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
             ctx["coach_name"] = coach_name(self.request.user)
         return ctx
 
+    def _save_name(self, request, form):
+        request.user.name = form.cleaned_data["name"]
+        request.user.save(update_fields=["name"])
+
+    def _save_coaching(self, request, form):
+        profile, _ = CoachProfile.objects.get_or_create(user=request.user)
+        profile.display_name = form.cleaned_data["display_name"]
+        profile.programming_style = form.cleaned_data["programming_style"]
+        profile.avoid_rules = form.cleaned_data["avoid_rules"]
+        profile.default_unit = form.cleaned_data["unit"]
+        profile.save(
+            update_fields=[
+                "display_name",
+                "programming_style",
+                "avoid_rules",
+                "default_unit",
+                "modified",
+            ]
+        )
+
     def post(self, request, *args, **kwargs):
         section = request.POST.get("section")
+        if section is None:
+            # The page is one form with one Save (#646): validate every form,
+            # and save all of them or none, so typed input is never half-lost.
+            name_form = UserNameForm(request.POST)
+            coach_form = (
+                CoachDisplayNameForm(request.POST) if _is_coach(request.user) else None
+            )
+            valid = name_form.is_valid()
+            if coach_form is not None:
+                valid = coach_form.is_valid() and valid
+            if not valid:
+                return self.render_to_response(
+                    self.get_context_data(name_form=name_form, coach_form=coach_form)
+                )
+            with transaction.atomic():
+                self._save_name(request, name_form)
+                if coach_form is not None:
+                    self._save_coaching(request, coach_form)
+            messages.success(request, "Your settings were updated.")
+            return redirect("meso:settings")
+
         if section == "name":
             form = UserNameForm(request.POST)
             if form.is_valid():
-                request.user.name = form.cleaned_data["name"]
-                request.user.save(update_fields=["name"])
+                self._save_name(request, form)
                 messages.success(request, "Your name was updated.")
                 return redirect("meso:settings")
             return self.render_to_response(self.get_context_data(name_form=form))
@@ -557,20 +597,7 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
         if section == "coaching" and _is_coach(request.user):
             form = CoachDisplayNameForm(request.POST)
             if form.is_valid():
-                profile, _ = CoachProfile.objects.get_or_create(user=request.user)
-                profile.display_name = form.cleaned_data["display_name"]
-                profile.programming_style = form.cleaned_data["programming_style"]
-                profile.avoid_rules = form.cleaned_data["avoid_rules"]
-                profile.default_unit = form.cleaned_data["unit"]
-                profile.save(
-                    update_fields=[
-                        "display_name",
-                        "programming_style",
-                        "avoid_rules",
-                        "default_unit",
-                        "modified",
-                    ]
-                )
+                self._save_coaching(request, form)
                 messages.success(request, "Your coaching settings were updated.")
                 return redirect("meso:settings")
             return self.render_to_response(self.get_context_data(coach_form=form))
@@ -702,7 +729,12 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         ctx["athlete_has_own_name"] = bool(clean_name(link.athlete.name))
         athlete_profile = getattr(link.athlete, "athlete_profile", None)
         athlete_unit = athlete_profile.unit if athlete_profile else ""
-        ctx["athlete_record_form"] = AthleteRecordForm(initial={"unit": athlete_unit})
+        record_form = AthleteRecordForm(initial={"unit": athlete_unit})
+        # The unit select renders inside a card, away from the intake <form>
+        # (#646), so it joins that form by id.
+        record_form.fields["unit"].widget.attrs["form"] = "athlete-intake"
+        ctx["athlete_record_form"] = record_form
+        ctx["today"] = timezone.localdate()
         ctx["effective_unit"] = link.effective_unit()
         ctx["effective_unit_source"] = (
             "their own setting" if athlete_unit else "coach default"
@@ -750,10 +782,37 @@ def _first_form_error(form):
     return str(next(iter(form.errors.values()))[0])
 
 
+def _apply_contraindication(athlete, text):
+    """Add or reactivate one contraindication; return the (level, message) to flash.
+
+    Must run inside the caller's transaction with ``athlete`` already locked.
+    """
+    duplicate = (
+        Contraindication.objects.select_for_update(no_key=True)
+        .filter(athlete=athlete, text__iexact=text)
+        .order_by("-active", "pk")
+        .first()
+    )
+    if duplicate is not None and duplicate.active:
+        return messages.INFO, "That contraindication is already active."
+    if duplicate is not None:
+        duplicate.active = True
+        duplicate.save(update_fields=["active"])
+        return messages.SUCCESS, "Contraindication restored."
+    Contraindication.objects.create(athlete=athlete, text=text)
+    return messages.SUCCESS, "Contraindication added."
+
+
 @login_required
 @require_POST
 def athlete_record_update(request, pk):
-    """Update only the submitted parts of an active athlete's global record."""
+    """Update only the submitted parts of an active athlete's record.
+
+    The profile page is one form with one Save (#646), so this also applies the
+    coach's ``label`` for the athlete and a pending ``new_contraindication`` in the
+    same transaction. Everything is validated before anything is written: a bad
+    field rejects the whole POST rather than half-applying it.
+    """
     with transaction.atomic():
         athlete = _locked_active_coached_athlete(request, pk)
         form = AthleteRecordForm(request.POST)
@@ -761,13 +820,44 @@ def athlete_record_update(request, pk):
             messages.error(request, _first_form_error(form))
             return redirect("meso:athlete", pk=pk)
 
+        label = None
+        if "label" in request.POST:
+            label = clean_name(request.POST["label"])
+            if len(label) > 255:
+                messages.error(request, "Name must be 255 characters or fewer.")
+                return redirect("meso:athlete", pk=pk)
+
+        new_text = None
+        if request.POST.get("new_contraindication", "").strip():
+            text_form = ContraindicationForm(
+                {"text": request.POST["new_contraindication"]}
+            )
+            if not text_form.is_valid():
+                messages.error(request, _first_form_error(text_form))
+                return redirect("meso:athlete", pk=pk)
+            new_text = text_form.cleaned_data["text"]
+
         received = form.fields.keys() & request.POST.keys()
         profile, _ = AthleteProfile.objects.get_or_create(user=athlete)
         for field in received:
             setattr(profile, field, form.cleaned_data[field])
         if received:
             profile.save(update_fields=[*sorted(received), "modified"])
+
+        if label is not None:
+            # Lock order: User → CoachAthlete (docs/meso/decisions.md).
+            link = CoachAthlete.objects.select_for_update(no_key=True).get(
+                coach=request.user, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+            )
+            link.label = label
+            link.save(update_fields=["label"])
+
+        flash = (
+            _apply_contraindication(athlete, new_text) if new_text is not None else None
+        )
     messages.success(request, "Athlete record updated.")
+    if flash is not None:
+        messages.add_message(request, *flash)
     return redirect("meso:athlete", pk=pk)
 
 
@@ -781,24 +871,8 @@ def athlete_contraindication_add(request, pk):
         if not form.is_valid():
             messages.error(request, _first_form_error(form))
             return redirect("meso:athlete", pk=pk)
-
-        text = form.cleaned_data["text"]
-        duplicate = (
-            Contraindication.objects.select_for_update(no_key=True)
-            .filter(athlete=athlete, text__iexact=text)
-            .order_by("-active", "pk")
-            .first()
-        )
-        if duplicate is not None and duplicate.active:
-            messages.info(request, "That contraindication is already active.")
-            return redirect("meso:athlete", pk=pk)
-        if duplicate is not None:
-            duplicate.active = True
-            duplicate.save(update_fields=["active"])
-            messages.success(request, "Contraindication restored.")
-            return redirect("meso:athlete", pk=pk)
-        Contraindication.objects.create(athlete=athlete, text=text)
-    messages.success(request, "Contraindication added.")
+        level, message = _apply_contraindication(athlete, form.cleaned_data["text"])
+    messages.add_message(request, level, message)
     return redirect("meso:athlete", pk=pk)
 
 
