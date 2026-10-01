@@ -621,3 +621,31 @@ class TestActivateWaiting:
         link = waiting_link(coach)
         assert [x.pk for x in activate_waiting(coach.pk)] == [link.pk]
         assert activate_waiting(coach.pk) == []
+
+
+class TestNoDuplicateWaitingEmail:
+    def test_claim_after_peer_accept_emails_the_coach_once(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = make_coach()
+        fill_seat(coach)
+        athlete = UserFactory(name="Casey Lee", email="casey@example.com")
+        peer = CoachAthleteFactory(
+            coach=coach,
+            athlete=athlete,
+            status=CoachAthlete.Status.PENDING_COACH_INVITE,
+            invited_by=CoachAthlete.InvitedBy.COACH,
+        )
+        invite, _ = CoachInvite.open_for(coach=coach, email=athlete.email)
+        client.force_login(athlete)
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(reverse("meso:invite_accept", kwargs={"token": peer.token}))
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.post(
+                reverse("meso:invite_claim", kwargs={"token": invite.token}),
+                {"action": "accept"},
+            )
+        assert resp.status_code == 302
+        peer.refresh_from_db()
+        assert peer.status == WAITING
+        assert [m.subject for m in mail.outbox] == [WAITING_SUBJECT]

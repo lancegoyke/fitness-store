@@ -404,3 +404,46 @@ class TestRosterStartButton:
             if "for_invite__accepted_link_id" in q["sql"]
         ]
         assert len(mapping) == 1
+
+
+class TestReusedLink:
+    def test_newest_invite_template_wins_on_the_roster(self, client):
+        coach = make_coach()
+        jordan = UserFactory(name="Jordan Ellis", email="jordan@example.com")
+        i1 = invited(coach)
+        written_template(coach, i1, title="Old")
+        link = accepted(coach, i1, jordan)
+        link.end(by="coach")
+        i2 = invited(coach)
+        assert i2.pk != i1.pk
+        written_template(coach, i2, title="New")
+        link2 = accepted(coach, i2, jordan)
+        assert link2.pk == link.pk
+
+        client.force_login(coach)
+        html = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Start New" in html
+        assert "Start Old" not in html
+
+
+class TestMultilineTemplateTitle:
+    def test_newline_title_still_emails_with_single_line_subject(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = make_coach()
+        invite = invited(coach)
+        tpl = written_template(coach, invite)
+        Plan.objects.filter(pk=tpl.pk).update(title="Strength\nFoundations")
+
+        claim(
+            client,
+            invite,
+            UserFactory(name="Jordan Ellis"),
+            django_capture_on_commit_callbacks,
+        )
+
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == [coach.email]
+        assert "\n" not in mail.outbox[0].subject
+        assert "\r" not in mail.outbox[0].subject

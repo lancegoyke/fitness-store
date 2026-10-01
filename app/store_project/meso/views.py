@@ -484,7 +484,7 @@ class RosterView(TemplateView):
                 for_invite__accepted_link__in=startable,
             )
             .exclude(status=Plan.Status.ARCHIVED)
-            .order_by("pk")
+            .order_by("-for_invite_id", "pk")  # newest invite's template wins
             .values_list("for_invite__accepted_link_id", "pk", "title")
         ):
             start_templates.setdefault(rel_id, {"id": plan_id, "title": title})
@@ -4922,6 +4922,11 @@ def _accept_claim(request, invite):
         # recorded, as a waiting acceptance (#649): the athlete is told nothing
         # about the coach's plan; the coach is emailed.
         waiting = not billing_access.can_add_athlete(invite.coach)
+        already_waiting = CoachAthlete.objects.filter(
+            coach_id=invite.coach_id,
+            athlete=request.user,
+            status=CoachAthlete.Status.ACCEPTED_WAITING,
+        ).exists()
         try:
             link = invite.accept(request.user, waiting=waiting)
         except InvalidTransition as exc:
@@ -4929,7 +4934,8 @@ def _accept_claim(request, invite):
             return redirect("meso:roster")
         track(EventName.INVITE_ACCEPTED, actor=request.user, subject=invite)
         if link.is_waiting:
-            _notify_coach_athlete_waiting(request, link)
+            if not already_waiting:  # the coach already got this email
+                _notify_coach_athlete_waiting(request, link)
             messages.success(request, _waiting_connected_message(invite.coach))
         else:
             # A successful, non-waiting accept completes HERE (#643: tell the
@@ -4985,7 +4991,8 @@ def invite_claim(request, token):
     if not request.user.is_authenticated:
         if request.method == "POST" or not invite.is_pending or invite.is_expired:
             return redirect_to_login(request.get_full_path())
-        remember_claim(request, invite)
+        if request.method == "GET":  # HEAD/OPTIONS must not mint the flag
+            remember_claim(request, invite)
         return render(
             request,
             "meso/invite_claim.html",
@@ -7902,7 +7909,7 @@ class BecomeCoachView(TemplateView):
         # a trial for someone who has been here a while.
         session_intent = request.session.pop("meso_coach_intent", None)
         fresh = timezone.now() - request.user.date_joined < _COACH_PLAN_FRESH_ACCOUNT
-        intent = (_signed_plan(request.GET) if fresh else None) or session_intent
+        intent = (_signed_plan(request.GET) or session_intent) if fresh else None
         if _is_coach(request.user):
             return redirect("meso:roster")
         if intent in {"trial", "free"}:

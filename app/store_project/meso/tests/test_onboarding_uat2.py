@@ -133,6 +133,19 @@ class TestTrialChoiceThroughSignup:
         assert resp.url == reverse("meso:roster")  # existing coach: just the roster
         assert CoachSubscription.objects.get(coach=user).pk == sub.pk
 
+    def test_session_intent_ignored_for_an_established_account(self, client):
+        # The session intent comes from an unsigned anonymous ``?plan=``, so it
+        # needs the same freshness gate as the signed plan.
+        client.get(reverse("meso:become_coach"), {"plan": "trial"})
+        user = UserFactory()
+        User.objects.filter(pk=user.pk).update(
+            date_joined=timezone.now() - timedelta(days=2)
+        )
+        client.force_login(user)  # force_login keeps the session data
+        assert client.get(reverse("meso:become_coach")).status_code == 200
+        assert not CoachProfile.objects.filter(user=user).exists()
+        assert not CoachSubscription.objects.filter(coach=user).exists()
+
     def test_bare_or_forged_plan_does_not_start_anything(self, client):
         url = self._signed(client, "free")
         client = Client()  # no session intent: only the link is in play
@@ -203,6 +216,28 @@ class TestClaimPageFlag:
         invite = _invite()
         client.get(_claim(invite.token))
         assert client.session["meso_claim_token"] == str(invite.token)
+
+    def test_head_sets_no_flag_and_login_does_not_accept(self, client):
+        invite = _invite()
+        athlete = UserFactory(email="existing@example.com")
+        athlete.set_password(PASSWORD)
+        athlete.save()
+        client.head(_claim(invite.token))
+        assert "meso_claim_token" not in client.session
+        resp = client.post(
+            reverse("account_login"),
+            {
+                "login": "existing@example.com",
+                "password": PASSWORD,
+                "next": _claim(invite.token),
+            },
+        )
+        resp = client.get(resp.url)
+        assert resp.status_code == 200
+        assert b"Accept invite" in resp.content
+        assert not CoachAthlete.objects.filter(athlete=athlete).exists()
+        invite.refresh_from_db()
+        assert invite.is_pending
 
     def test_unclaimable_claim_sets_no_flag(self, client):
         invite = _invite()
