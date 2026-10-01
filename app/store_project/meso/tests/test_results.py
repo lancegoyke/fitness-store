@@ -267,7 +267,8 @@ class TestSessionResultsPresenter:
         assert summary["logged_state"] is True
         assert summary["completion"] == 100  # 6 logged / 6 prescribed
         assert summary["flag_count"] == 1
-        assert "Box Squat" in summary["flag"]
+        assert summary["flag_count"] == 1
+        assert summary["note_count"] == 0  # the flag IS the row's note
 
     def test_avg_rpe_delta(self):
         s = seed()
