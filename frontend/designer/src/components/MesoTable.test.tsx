@@ -321,7 +321,18 @@ describe("cell sub-lines", () => {
       await user.keyboard("{Escape}");
       expect(screen.queryByTestId("cell-line-100-3")).not.toBeInTheDocument();
       expect(marker).toHaveAttribute("aria-expanded", "false");
-      expect(marker).toHaveFocus();
+      // Focus lands on a real grid stop (not the marker) so keyboard nav keeps an anchor.
+      expect(screen.getByTestId("cell-text-100")).toHaveFocus();
+    });
+
+    it("shows no marker for a cleared (blank) athlete line", () => {
+      withCell(
+        cell({
+          lines: [{ id: 11, line: 1, text: "", athlete_authored: true }],
+          athlete_summary: null,
+        }),
+      );
+      expect(screen.queryByTestId("cell-athlete-marker-100")).not.toBeInTheDocument();
     });
 
     it("expands from the keyboard and collapses when focus leaves the group", async () => {

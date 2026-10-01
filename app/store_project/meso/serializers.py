@@ -1003,7 +1003,15 @@ def athlete_line_summary(lines, unit):
                 best = (value[0], load, set_unit, rpe)
     summary = {"sets": len(logged), "load": "", "unit": "", "rpe": ""}
     if best:
-        summary.update(load=best[1], unit=best[2] or "", rpe=best[3] or "")
+        # A typed suffix ("225lb") rides in the load; show the number once and
+        # let the suffix be the unit.
+        load = str(best[1]).strip()
+        suffix = re.search(r"(kgs?|lbs?)$", load, re.IGNORECASE)
+        set_unit = best[2] or ""
+        if suffix:
+            set_unit = "kg" if suffix.group().lower().startswith("k") else "lb"
+            load = load[: suffix.start()].strip()
+        summary.update(load=load, unit=set_unit, rpe=best[3] or "")
     return summary
 
 

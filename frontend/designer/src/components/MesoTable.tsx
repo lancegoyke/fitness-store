@@ -367,7 +367,7 @@ function GridCellEditor({
   // #645: athlete-authored lines collapse to ONE roll-up marker (read-only
   // presentation; the lines, their writes and the ghost numbering are
   // untouched). Expanding renders them as the editable athlete rows.
-  const athleteLines = lines.filter((l) => l.athlete_authored);
+  const athleteLines = lines.filter((l) => l.athlete_authored && l.text.trim() !== "");
   const [athleteOpen, setAthleteOpen] = useState(false);
   const markerRef = useRef<HTMLButtonElement>(null);
   const athleteSetCount = cell.athlete_summary?.sets ?? athleteLines.length;
@@ -379,9 +379,9 @@ function GridCellEditor({
 
   function onAthleteKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key !== "Escape" || !athleteOpen) return;
-    // Park focus on the marker BEFORE the inputs unmount (the nav handler has
-    // already sent it to the cell by the time this bubbles).
-    markerRef.current?.focus();
+    // Park focus on the cell's own text input (a real grid stop, so useTableNav
+    // re-anchors there) BEFORE the athlete inputs unmount.
+    document.querySelector<HTMLInputElement>(`[data-testid="cell-text-${cellId}"]`)?.focus();
     setAthleteOpen(false);
   }
 

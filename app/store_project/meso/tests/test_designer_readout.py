@@ -163,3 +163,23 @@ class TestAthleteSummary:
         ]
         assert summary["sets"] == 2 and summary["load"] == "225"
         assert summary["unit"] == "lb"  # the plan's unit
+
+    def test_a_typed_unit_suffix_is_not_doubled(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        line = sub_line(cell, "225 lb x 5", athlete_authored=True)
+        log = SessionLogFactory(
+            session=cell.exercise_slot.session_slot.sessions.first()
+        )
+        LoggedSetFactory(
+            session_log=log,
+            prescription=cell,
+            source_line=line,
+            load="225lb",
+            unit="lb",
+        )
+        data = serialize_mesocycle_grid(meso)
+        summary = data["days"][0]["rows"][0]["cells"][str(cell.week_id)][
+            "athlete_summary"
+        ]
+        assert (summary["load"], summary["unit"]) == ("225", "lb")
