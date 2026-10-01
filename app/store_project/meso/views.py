@@ -625,13 +625,13 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
             # The coaching display name sits behind a disclosure (#648); open it
             # when a name is already set or the submitted one is non-empty/invalid.
             bound = ctx["coach_form"]
-            if bound.is_bound:
-                ctx["display_name_open"] = bool(
+            ctx["display_name_open"] = bool(getattr(profile, "display_name", "")) or (
+                bound.is_bound
+                and bool(
                     bound.data.get("display_name", "").strip()
                     or bound.errors.get("display_name")
                 )
-            else:
-                ctx["display_name_open"] = bool(getattr(profile, "display_name", ""))
+            )
         return ctx
 
     def _save_name(self, request, form):

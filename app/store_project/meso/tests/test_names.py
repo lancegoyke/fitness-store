@@ -452,6 +452,20 @@ class TestSettingsSingleNameField:
         assert details is not None
         assert "open" in details.group(1)
 
+    def test_disclosure_stays_open_when_saved_name_cleared_on_invalid_post(
+        self, client
+    ):
+        coach = UserFactory(name="Maya")
+        CoachProfile.objects.create(user=coach, display_name="Iron Lab")
+        client.force_login(coach)
+        body = client.post(
+            reverse("meso:settings"),
+            {"name": "Maya", "display_name": "", "unit": "bogus"},
+        ).content.decode()
+        details = re.search(r"<details\b([^>]*)>", body)
+        assert details is not None
+        assert "open" in details.group(1)
+
     def test_non_coach_has_no_details(self, client):
         athlete = UserFactory()
         CoachAthleteFactory(coach=UserFactory(), athlete=athlete)
