@@ -102,3 +102,25 @@ def test_undisplayable_change_starts_rejected_not_approved(client):
     html = _persist_and_render(client, plan, cleaned).content.decode()
     assert "'rejected'" in html
     assert "can't show" in html
+
+
+def test_progress_on_unreadable_cell_starts_rejected_even_with_model_text():
+    plan, _, cell = make_plan()
+    cell.text = "Wave: 5-3-1 on the platform"
+    cell.save()
+    cleaned = _clean(
+        plan,
+        _blank(prescription_id=cell.pk, before="Wave at 200", after="Wave at 225"),
+    )
+    assert cleaned["status"] == ProposedChange.Status.REJECTED
+
+
+def test_session_volume_with_no_readable_cells_starts_rejected():
+    plan, session, cell = make_plan()
+    cell.text = "Wave: 5-3-1 on the platform"
+    cell.save()
+    cleaned = _clean(
+        plan,
+        _blank(kind="volume", session_id=session.pk, new_sets="3", new_load=""),
+    )
+    assert cleaned["status"] == ProposedChange.Status.REJECTED

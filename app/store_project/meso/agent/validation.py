@@ -213,6 +213,10 @@ def _fill_display(cleaned):
         cleaned["day_label"] = str(session)[:128]
 
     before = after = ""
+    # Can ``apply_change`` actually write this? A progress/volume whose target
+    # cell the parser can't read is a safe skip at apply time, so approving it
+    # would be a no-op the card dressed up as an edit.
+    applicable = True
     if kind == "swap" and presc is not None:
         before = presc.name
         after = payload.get("name") or cleaned["introduces_exercise"]
@@ -222,8 +226,13 @@ def _fill_display(cleaned):
         if new_text is not None:
             before = _first_line(presc.text)
             after = new_text
+        else:
+            applicable = False
     elif kind == "volume" and session is not None and payload.get("sets"):
-        after = f"{payload['sets']} sets on every exercise"
+        if any(agent_apply._parsed_bits(cell) for cell in session.cells()):
+            after = f"{payload['sets']} sets on every exercise"
+        else:
+            applicable = False
     elif kind == "deload":
         before, after = "Training week", "Deload week"
     elif kind == "add":
@@ -233,7 +242,7 @@ def _fill_display(cleaned):
         cleaned["before"] = before[:255]
     if not cleaned["after"]:
         cleaned["after"] = after[:255]
-    if not (cleaned["before"] or cleaned["after"]):
+    if not applicable or not (cleaned["before"] or cleaned["after"]):
         cleaned["status"] = ProposedChange.Status.REJECTED
 
 
