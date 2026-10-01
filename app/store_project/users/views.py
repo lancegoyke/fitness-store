@@ -16,13 +16,23 @@ User = get_user_model()
 class UserProfileView(LoginRequiredMixin, DetailView):
     model = User
     template_name = "users/profile.html"
-    extra_context = {
-        "programs": Program.objects.filter(status=Book.PUBLIC),
-        "books": Book.objects.filter(status=Book.PUBLIC),
-    }
 
     def get_object(self):
         return User.objects.get(email=self.request.user.email)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["programs"] = [
+            program
+            for program in Program.objects.filter(status=Program.PUBLIC)
+            if self.request.user.has_perm(f"products.can_view_{program.slug}")
+        ]
+        context["books"] = [
+            book
+            for book in Book.objects.filter(status=Book.PUBLIC)
+            if self.request.user.has_perm(f"products.can_view_{book.slug}")
+        ]
+        return context
 
 
 user_profile_view = UserProfileView.as_view()

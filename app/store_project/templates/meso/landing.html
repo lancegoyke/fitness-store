@@ -25,11 +25,7 @@ visitor — demo/trial lead, athlete login is a compact strip, not a card.
 {% endcomment %}
 
 {# Public page — keep the logged-in coach nav (Roster/Designer) out of it. #}
-{% block navlinks %}{% endblock %}
-
-{% block topnav_avatar %}
-  <a class="meso-btn meso-btn--ghost" href="{% url 'account_login' %}?next={{ athlete_next|urlencode }}" style="padding:5px 12px;font-size:12px;">Log in</a>
-{% endblock %}
+{% block meso_topnav %}{% endblock %}
 
 {% block content %}
   <div class="meso-page">
@@ -41,8 +37,8 @@ visitor — demo/trial lead, athlete login is a compact strip, not a card.
         <!-- The hero's own CTA pair (issue #417) — a cold visitor's first click
              shouldn't require scanning the cards below. -->
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
-          <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_enter' %}">Try the demo — no signup</a>
-          <a class="meso-btn meso-btn--ghost" href="{% url 'meso:become_coach' %}">Start your free trial</a>
+          <a class="meso-btn meso-btn--primary" href="{% url 'meso:become_coach' %}?plan=trial">Start your free trial</a>
+          <a class="meso-btn meso-btn--ghost" href="{% url 'meso:sandbox_enter' %}">Try the demo — no signup</a>
         </div>
       </div>
       {% comment %}

@@ -61,7 +61,7 @@ class CoachProfile(models.Model):
     )
     avoid_rules = models.TextField(_("Avoid rules"), blank=True)
     default_unit = models.CharField(
-        _("Default unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
+        _("Default unit"), max_length=2, choices=Unit, default=Unit.POUNDS
     )
     tour_state = models.JSONField(
         _("Guided tour state"),

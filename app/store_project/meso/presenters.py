@@ -514,10 +514,16 @@ def pending_invite(invite):
     return {
         "email": invite.email,
         "label": invite.label,
+        "display_name": invite_display_name(invite),
         "token": invite.token,
         "when": invite.created_at,
         "is_expired": invite.status == CoachInvite.Status.EXPIRED or invite.is_expired,
     }
+
+
+def invite_display_name(invite):
+    """The roster's short human label for an email invite."""
+    return invite.label or invite.email.partition("@")[0]
 
 
 def pending_request(link):

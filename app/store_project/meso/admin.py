@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.db import transaction
+from django.forms.models import BaseInlineFormSet
 
 from . import demo as meso_demo
 from .models import AgentProposalBatch
@@ -304,8 +305,18 @@ class PrescriptionAdmin(admin.ModelAdmin):
     raw_id_fields = ("exercise_slot", "week")
 
 
+class LoggedSetInlineFormSet(BaseInlineFormSet):
+    def save_new(self, form, commit=True):
+        obj = form.save(commit=False)
+        obj.unit = obj.session_log.session.week.mesocycle.plan.unit
+        if commit:
+            obj.save()
+        return obj
+
+
 class LoggedSetInline(admin.TabularInline):
     model = LoggedSet
+    formset = LoggedSetInlineFormSet
     extra = 0
     raw_id_fields = ("prescription", "source_line")
     # ``exercise_slot`` (#578 C1) is DERIVED, not edited — but the trade is
@@ -337,7 +348,8 @@ class LoggedSetInline(admin.TabularInline):
     # introduced here — ``main`` produces an equally uncountable row from the
     # same blank add — just a gap this field doesn't close either.
     #
-    # ``unit`` is the immutable write-time denomination of this historical set.
+    # ``unit`` is the immutable write-time denomination of this historical set;
+    # new inline rows derive it from the session log's plan in the formset.
     # ``reclaimed_line`` is an internal hint for the restore lookup (#541),
     # not something to edit either. It has no DB constraint, so it can
     # outlive its cell; as an editable field that stale id would fail

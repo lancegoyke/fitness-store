@@ -9,7 +9,7 @@
       <div>
         <p class="meso-eyebrow">Coach workspace</p>
         <h1 class="meso-h1">Your athletes</h1>
-        <p class="meso-sub">{{ athletes|length }} athlete{{ athletes|length|pluralize }}{% if needs_review %} · {{ needs_review }} needs review{% endif %}</p>
+        <p class="meso-sub">{{ athletes|length }} athlete{{ athletes|length|pluralize }}{% if active_pending_invites %} · {{ active_pending_invites|length }} invite{{ active_pending_invites|length|pluralize }} pending{% endif %}{% if needs_review %} · {{ needs_review }} needs review{% endif %}</p>
       </div>
     </div>
 
@@ -103,7 +103,7 @@
           <div class="meso-phone-wrap meso-roster-head" style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
             <p class="meso-eyebrow" style="margin:0;">Individuals</p>
             <div class="meso-spacer"></div>
-            <span class="meso-row-meta">{{ athletes|length }} athlete{{ athletes|length|pluralize }}</span>
+            <span class="meso-row-meta">{{ athletes|length }} athlete{{ athletes|length|pluralize }}{% if active_pending_invites %} · {{ active_pending_invites|length }} invite{{ active_pending_invites|length|pluralize }} pending{% endif %}</span>
             <a href="{% url 'meso:relationship_history' %}" class="meso-row-meta" style="text-decoration:none;color:var(--accent);white-space:nowrap;">· Past athletes →</a>
             <a href="{% url 'meso:template_library' %}" class="meso-row-meta" style="text-decoration:none;color:var(--accent);white-space:nowrap;">· Templates →</a>
           </div>
@@ -136,7 +136,7 @@
               </a>
             {% empty %}
               <div class="meso-row" style="color:var(--dim);">
-                No athletes yet. Invite one to get started.
+                {% if active_pending_invites|length == 1 %}No athletes yet — {{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% elif active_pending_invites %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% else %}No athletes yet. Invite one to get started.{% endif %}
               </div>
             {% endfor %}
           </div>
@@ -242,7 +242,17 @@
                   </form>
                 {% endfor %}
               {% else %}
-                <p class="meso-sub" style="margin:0;">Invite an athlete first to build them a program.</p>
+                {% if active_pending_invites %}
+                  <p class="meso-sub" style="margin:0;">{% if active_pending_invites|length == 1 %}{{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% else %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% endif %}</p>
+                  {% if not has_self_link and not is_sandbox %}
+                    <form method="post" action="{% url 'meso:roster_add_self' %}" style="margin:0;">
+                      {% csrf_token %}
+                      <button type="submit" class="meso-btn meso-btn--ghost">+ Add yourself as an athlete</button>
+                    </form>
+                  {% endif %}
+                {% else %}
+                  <p class="meso-sub" style="margin:0;">Invite an athlete first to build them a program.</p>
+                {% endif %}
               {% endif %}
             </div>
           </details>

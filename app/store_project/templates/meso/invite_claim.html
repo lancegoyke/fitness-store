@@ -24,7 +24,15 @@
 {% block content %}
   <div class="meso-page" style="max-width:520px;">
     <div class="meso-card meso-card--pad" style="margin-top:32px;">
-      {% if invite.status == 'pending' %}
+      {% if anonymous %}
+        <p class="meso-eyebrow">Coach invite</p>
+        <h1 class="meso-h1">{{ coach_name }} invited you to train</h1>
+        <p class="meso-sub">Create an account or sign in to respond to the invite.</p>
+        <div style="display:flex;gap:10px;margin-top:18px;">
+          <a class="meso-btn meso-btn--primary" href="{% url 'account_signup' %}?next={{ claim_path|urlencode }}">Create account</a>
+          <a class="meso-btn meso-btn--ghost" href="{% url 'account_login' %}?next={{ claim_path|urlencode }}">Sign in</a>
+        </div>
+      {% elif invite.status == 'pending' %}
         {% if is_self %}
           <p class="meso-eyebrow">Coach invite</p>
           <h1 class="meso-h1">This is your own invite</h1>

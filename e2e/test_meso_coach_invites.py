@@ -109,18 +109,18 @@ def _coach_sends_invite_and_gets_claim_url(page, press, shot, email):
 
 
 def _invitee_follows_link_and_signs_up(invitee_page, press, shot, claim_url, email):
-    """Brand-new invitee opens the claim link, bounces to login, and signs up.
+    """Brand-new invitee opens the claim link, sees the invite, and signs up.
 
     Doesn't assert where signup lands them afterward — the caller does that.
     """
     invitee_page.goto(claim_url)
-    expect(invitee_page).to_have_url(re.compile(r"/accounts/login/\?next="))
+    # The claim page itself is the door (#606.2): no store login in between.
     expect(
-        invitee_page.get_by_role("heading", name="Login to your account")
+        invitee_page.get_by_role("heading", name="Casey Coach invited you to train")
     ).to_be_visible()
-    shot("02-invitee-login-bounce", on=invitee_page)
+    shot("02-invitee-claim-landing", on=invitee_page)
 
-    press(invitee_page.get_by_role("link", name="Sign up"))
+    press(invitee_page.get_by_role("link", name="Create account"))
     expect(
         invitee_page.get_by_role("heading", name="Create your account")
     ).to_be_visible()

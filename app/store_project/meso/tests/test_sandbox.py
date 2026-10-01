@@ -621,11 +621,11 @@ class TestInviteAndRequestGuards:
         assert "_auth_user_id" not in client.session
         assert resp.status_code == 302
         assert resp.url == claim_url
-        # ...where login_required sends them to login with ?next= back here.
+        # ...where the anonymous claim landing offers login/signup back here.
         resp2 = client.get(claim_url)
-        assert resp2.status_code == 302
-        assert reverse("account_login") in resp2.url
-        assert claim_url in resp2.url  # carries ?next=
+        assert resp2.status_code == 200
+        assert reverse("account_login") in resp2.content.decode()
+        assert claim_url in resp2.content.decode()
         # The invite is untouched, no link was bound, nothing was emailed.
         invite.refresh_from_db()
         assert invite.status == CoachInvite.Status.PENDING

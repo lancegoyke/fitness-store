@@ -11,6 +11,7 @@ the built ``EmailMessage``/``EmailMultiAlternatives`` before its caller
 
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
+from django.urls import reverse
 
 from store_project.meso.names import clean_name
 from store_project.notifications.emails import tag_kind
@@ -58,6 +59,18 @@ class AccountAdapter(DefaultAccountAdapter):
         message = super().render_mail(template_prefix, email, context, headers)
         tag_kind(message, kind_for_template_prefix(template_prefix))
         return message
+
+    def get_login_redirect_url(self, request):
+        from store_project.meso.models import CoachAthlete
+        from store_project.meso.models import CoachProfile
+
+        if CoachProfile.objects.filter(user=request.user).exists():
+            return reverse("meso:roster")
+        if CoachAthlete.objects.filter(
+            athlete=request.user, status=CoachAthlete.Status.ACTIVE
+        ).exists():
+            return reverse("meso:athlete_home")
+        return super().get_login_redirect_url(request)
 
 
 class SocialAccountAdapter(DefaultSocialAccountAdapter):
