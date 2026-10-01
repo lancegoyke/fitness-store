@@ -59,42 +59,44 @@
     {% endcomment %}
     {% block site_nav %}{% include "_nav.html" %}{% endblock %}
     <div class="meso-app">
-      <nav class="meso-topnav">
-        <a class="meso-brand" href="{% url 'meso:roster' %}">
-          <span class="meso-brand-mark"><i></i></span>
-          <b>Meso</b>
-        </a>
-        <div class="meso-navlinks">
-          {% block navlinks %}
-            <a class="meso-navlink {% if active == 'roster' %}is-active{% endif %}" href="{% url 'meso:roster' %}">Roster</a>
-            <a class="meso-navlink {% if active == 'designer' %}is-active{% endif %}" href="{% url 'meso:designer' %}">Designer</a>
-            {% if not is_sandbox %}
-              <a class="meso-navlink {% if active == 'billing' %}is-active{% endif %}" href="{% url 'meso:billing' %}">Billing</a>
-            {% endif %}
-            {% if request.user.is_superuser %}
-              <a class="meso-navlink {% if active == 'usage' %}is-active{% endif %}" href="{% url 'meso:usage_dashboard' %}">Usage</a>
-              <a class="meso-navlink {% if active == 'tour_funnel' %}is-active{% endif %}" href="{% url 'meso:tour_funnel' %}">Tour funnel</a>
-              <a class="meso-navlink {% if active == 'analytics' %}is-active{% endif %}" href="{% url 'meso:product_analytics' %}">Analytics</a>
-              <a class="meso-navlink {% if active == 'email' %}is-active{% endif %}" href="{% url 'notifications:email_dashboard' %}">Email</a>
-            {% endif %}
-          {% endblock %}
-        </div>
-        <div class="meso-spacer"></div>
+      {% block meso_topnav %}
+        <nav class="meso-topnav">
+          <a class="meso-brand" href="{% url 'meso:roster' %}">
+            <span class="meso-brand-mark"><i></i></span>
+            <b>Meso</b>
+          </a>
+          <div class="meso-navlinks">
+            {% block navlinks %}
+              <a class="meso-navlink {% if active == 'roster' %}is-active{% endif %}" href="{% url 'meso:roster' %}">Roster</a>
+              <a class="meso-navlink {% if active == 'designer' %}is-active{% endif %}" href="{% url 'meso:designer' %}">Designer</a>
+              {% if not is_sandbox %}
+                <a class="meso-navlink {% if active == 'billing' %}is-active{% endif %}" href="{% url 'meso:billing' %}">Billing</a>
+              {% endif %}
+              {% if request.user.is_superuser %}
+                <a class="meso-navlink {% if active == 'usage' %}is-active{% endif %}" href="{% url 'meso:usage_dashboard' %}">Usage</a>
+                <a class="meso-navlink {% if active == 'tour_funnel' %}is-active{% endif %}" href="{% url 'meso:tour_funnel' %}">Tour funnel</a>
+                <a class="meso-navlink {% if active == 'analytics' %}is-active{% endif %}" href="{% url 'meso:product_analytics' %}">Analytics</a>
+                <a class="meso-navlink {% if active == 'email' %}is-active{% endif %}" href="{% url 'notifications:email_dashboard' %}">Email</a>
+              {% endif %}
+            {% endblock %}
+          </div>
+          <div class="meso-spacer"></div>
         {% comment %}
           A page's own buttons. The wrapper is `display: contents` on wide
           screens, so they lay out exactly as direct children of the bar; on a
           phone (meso.css, #508) it becomes the bar's second row. No whitespace
           around the block, so `:empty` hides the row when a page has none.
         {% endcomment %}
-        <div class="meso-topnav-actions">{% block topnav_actions %}{% endblock %}</div>
+          <div class="meso-topnav-actions">{% block topnav_actions %}{% endblock %}</div>
         {% comment %}
           The corner's job is identity (issue #387): show *who* is signed in —
           the one thing the site nav's Account/Logout links above don't. It
           links to Meso settings. Anonymous shell pages (offline) render nothing
           here.
         {% endcomment %}
-        {% block topnav_avatar %}{% if request.user.is_authenticated %}<a class="meso-avatar meso-avatar--sm meso-avatar--accent meso-avatar--link" href="{% url 'meso:settings' %}" title="Signed in as {{ request.user.display_name }} — settings">{{ request.user.display_name|initials }}</a>{% endif %}{% endblock %}
-      </nav>
+          {% block topnav_avatar %}{% if request.user.is_authenticated %}<a class="meso-avatar meso-avatar--sm meso-avatar--accent meso-avatar--link" href="{% url 'meso:settings' %}" title="Signed in as {{ request.user.display_name }} — settings">{{ request.user.display_name|initials }}</a>{% endif %}{% endblock %}
+        </nav>
+      {% endblock %}
 
       {% if is_sandbox or messages %}
         {# Matches .meso-page's gutter (max-width:1120px, 24px side padding) so these strips align with the content below instead of bleeding to the viewport edges. #}

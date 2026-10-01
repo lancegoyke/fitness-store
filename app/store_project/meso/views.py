@@ -14,6 +14,7 @@ from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.mixins import UserPassesTestMixin
+from django.contrib.auth.views import redirect_to_login
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError
@@ -450,6 +451,13 @@ class RosterView(TemplateView):
         ctx["pending_invites"] = [
             presenters.pending_invite(inv) for inv in outstanding_invites
         ]
+        active_pending_invites = [
+            invite for invite in ctx["pending_invites"] if not invite["is_expired"]
+        ]
+        ctx["active_pending_invites"] = active_pending_invites
+        ctx["active_pending_invite"] = (
+            active_pending_invites[0] if active_pending_invites else None
+        )
         # Pending athlete→coach requests awaiting this coach's reply (N4 Phase 2).
         pending_requests = (
             CoachAthlete.objects.for_coach(self.request.user)
@@ -513,7 +521,7 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
                         getattr(profile, "programming_style", []) or []
                     ),
                     "avoid_rules": getattr(profile, "avoid_rules", ""),
-                    "unit": getattr(profile, "default_unit", Unit.KILOGRAMS),
+                    "unit": getattr(profile, "default_unit", Unit.POUNDS),
                 }
             )
             ctx["coach_name"] = coach_name(self.request.user)
@@ -4406,15 +4414,15 @@ def coach_invite_resend(request, token):
     return redirect("meso:roster")
 
 
-@login_required
 def invite_claim(request, token):
     """An invited athlete follows the emailed claim link.
 
-    ``@login_required`` bounces an anonymous visitor to ``/accounts/login/`` with
-    ``?next=`` back here; allauth carries ``next`` through both login and signup,
-    so a brand-new athlete returns authenticated. GET renders a confirm page; POST
-    ``action=accept`` materializes an active ``CoachAthlete`` link and lands on the
-    athlete's training home, ``action=decline`` marks the invite declined.
+    A claimable token gives an anonymous visitor a focused login/signup landing;
+    invalid or submitted anonymous requests redirect to login without revealing
+    token state. Allauth carries ``next`` back here. An authenticated GET renders
+    a confirm page; POST ``action=accept`` materializes an active
+    ``CoachAthlete`` link and lands on the athlete's training home,
+    ``action=decline`` marks the invite declined.
     Bearer-token authorized — any authenticated user holding the token may claim
     (no email match; see ``CoachInvite``). An already-answered invite is a friendly
     no-op, never a crash.
@@ -4427,17 +4435,35 @@ def invite_claim(request, token):
     Sandbox gate (S4): the claim is bearer-token authorized, so a visitor still
     logged in as a throwaway sandbox account would bind a real coach to a
     disposable athlete the expiry sweep later deletes. End the sandbox session
-    and retry the same URL anonymously — ``login_required`` then routes them
-    through login/signup with ``?next=`` back here, exactly like any logged-out
-    invitee. (No flash: session storage doesn't survive the logout.)
+    and retry the same URL anonymously, where the claim landing offers login and
+    signup with ``?next=`` back here. (No flash: session storage doesn't survive
+    the logout.)
     """
-    if meso_sandbox.is_sandbox(request.user):
+    if request.user.is_authenticated and meso_sandbox.is_sandbox(request.user):
         logout(request)
         return redirect(request.get_full_path())
-    invite = get_object_or_404(
-        CoachInvite.objects.select_related("coach", "coach__coach_profile"),
-        token=token,
-    )
+    try:
+        invite = get_object_or_404(
+            CoachInvite.objects.select_related("coach", "coach__coach_profile"),
+            token=token,
+        )
+    except Http404:
+        if not request.user.is_authenticated:
+            return redirect_to_login(request.get_full_path())
+        raise
+    if not request.user.is_authenticated:
+        if request.method == "POST" or not invite.is_pending or invite.is_expired:
+            return redirect_to_login(request.get_full_path())
+        return render(
+            request,
+            "meso/invite_claim.html",
+            {
+                "anonymous": True,
+                "invite": invite,
+                "coach_name": coach_name(invite.coach),
+                "claim_path": request.get_full_path(),
+            },
+        )
     if request.method == "POST":
         action = request.POST.get("action")
         if action not in ("accept", "decline"):
@@ -7277,8 +7303,19 @@ class BecomeCoachView(TemplateView):
     template_name = "meso/become_coach.html"
 
     def get(self, request, *args, **kwargs):
-        if request.user.is_authenticated and _is_coach(request.user):
+        if not request.user.is_authenticated:
+            intent = request.GET.get("plan")
+            if intent in {"trial", "free"}:
+                request.session["meso_coach_intent"] = intent
+            else:
+                request.session.pop("meso_coach_intent", None)
+            return super().get(request, *args, **kwargs)
+
+        intent = request.session.pop("meso_coach_intent", None)
+        if _is_coach(request.user):
             return redirect("meso:roster")
+        if intent in {"trial", "free"}:
+            return _start_coaching(request, intent)
         return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -7288,6 +7325,7 @@ class BecomeCoachView(TemplateView):
         ctx["free_agent_runs"] = CoachSubscription.FREE_AGENT_ALLOWANCE
         ctx["paid_agent_runs"] = CoachSubscription.PAID_AGENT_ALLOWANCE
         ctx["price_summary"] = presenters.PRICE_SUMMARY
+        ctx["intent"] = self.request.session.get("meso_coach_intent")
         # allauth returns here after signup/login (?next=), where the visitor —
         # now authenticated — sees the start-coaching form.
         ctx["next_url"] = reverse("meso:become_coach")
@@ -7306,9 +7344,14 @@ def start_coaching(request):
     as-is, never a 500). The free path creates **no** subscription row — free is
     "no row" — and subscribing is the roster's Subscribe CTA (Phase 3).
     """
+    return _start_coaching(request, request.POST.get("plan"))
+
+
+def _start_coaching(request, plan):
+    """Create a coach profile and apply the selected self-serve plan."""
     CoachProfile.objects.get_or_create(user=request.user)
     started_trial = False
-    if request.POST.get("plan") == "trial":
+    if plan == "trial":
         try:
             CoachSubscription.start_trial_for(request.user)
         except InvalidTransition:

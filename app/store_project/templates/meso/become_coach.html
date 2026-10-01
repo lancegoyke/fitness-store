@@ -41,19 +41,19 @@
         <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:6px 0 14px;">Start coaching with Meso</p>
         <form method="post" action="{% url 'meso:start_coaching' %}" style="display:flex;gap:10px;flex-wrap:wrap;margin:0;">
           {% csrf_token %}
-          <button type="submit" name="plan" value="free" class="meso-btn meso-btn--primary">Start coaching free</button>
-          <button type="submit" name="plan" value="trial" class="meso-btn meso-btn--ghost">Start {{ trial_days }}-day free trial</button>
+          <button type="submit" name="plan" value="trial" class="meso-btn meso-btn--primary">Start {{ trial_days }}-day free trial</button>
+          <button type="submit" name="plan" value="free" class="meso-btn meso-btn--ghost">Start coaching free</button>
         </form>
         <p class="meso-row-meta" style="margin-top:12px;">You can subscribe for unlimited athletes and the AI agent anytime from your dashboard.</p>
       {% else %}
         <p class="meso-eyebrow">First, your account</p>
-        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:6px 0 14px;">Create an account to start coaching</p>
+        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:6px 0 14px;">{% if intent == 'trial' %}Create an account to start your {{ trial_days }}-day free trial — no card{% elif intent == 'free' %}Create an account to start coaching free{% else %}Create an account to start coaching{% endif %}</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <a class="meso-btn meso-btn--primary" href="{% url 'account_signup' %}?next={{ next_url|urlencode }}">Create your account</a>
           <a class="meso-btn meso-btn--ghost" href="{% url 'account_login' %}?next={{ next_url|urlencode }}">Log in</a>
           <a class="meso-btn meso-btn--ghost" href="{% url 'meso:sandbox_enter' %}">Try the demo first — no signup</a>
         </div>
-        <p class="meso-row-meta" style="margin-top:12px;">It's free to begin — you'll choose your plan once you're in.</p>
+        {% if not intent %}<p class="meso-row-meta" style="margin-top:12px;">It's free to begin — you'll choose your plan once you're in.</p>{% endif %}
       {% endif %}
     </div>
   </div>

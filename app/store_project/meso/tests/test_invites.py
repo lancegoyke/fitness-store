@@ -400,13 +400,13 @@ class TestInviteClaimView:
     def _url(self, token):
         return reverse("meso:invite_claim", kwargs={"token": token})
 
-    def test_anonymous_redirects_to_login_with_next(self, client):
+    def test_anonymous_pending_invite_renders_claim_landing(self, client):
         coach = UserFactory()
         invite, _ = CoachInvite.open_for(coach=coach, email="ath@example.com")
         resp = client.get(self._url(invite.token))
-        assert resp.status_code == 302
-        assert "/accounts/login/" in resp.url
-        assert self._url(invite.token) in resp.url  # carries ?next=
+        assert resp.status_code == 200
+        assert reverse("account_login") in resp.content.decode()
+        assert self._url(invite.token) in resp.content.decode()
 
     def test_authenticated_get_renders_confirm(self, client):
         coach = UserFactory(name="Coach Carter")
