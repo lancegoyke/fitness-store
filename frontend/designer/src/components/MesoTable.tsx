@@ -499,7 +499,14 @@ function GridCellEditor({
             data-testid={`cell-athlete-marker-${cellId}`}
             aria-expanded={athleteOpen}
             aria-label={`${athleteSetCount} ${athleteSetCount === 1 ? "set" : "sets"} logged by your athlete — ${athleteOpen ? "hide" : "show"} lines`}
-            onClick={() => setAthleteOpen((o) => !o)}
+            onClick={() => {
+              // Collapsing unmounts the athlete inputs that may own the nav
+              // anchor — re-anchor on the cell's text input first.
+              if (athleteOpen) {
+                document.querySelector<HTMLInputElement>(`[data-testid="cell-text-${cellId}"]`)?.focus();
+              }
+              setAthleteOpen((o) => !o);
+            }}
           >
             {athleteMarkerText}
           </button>
