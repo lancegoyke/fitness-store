@@ -395,7 +395,7 @@ describe("table view (issue #455 phase A5: the only view left besides periodizat
 
     render(<DesignerRoot />);
 
-    expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=1");
+    expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=1&from=designer");
   });
 
   // §4b: the default grid opens on the plan's FIRST block by order, which

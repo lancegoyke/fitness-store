@@ -196,6 +196,21 @@ class TestResultsAccess:
         assert "3 x 6, RPE 7, 70" in body  # the prescribed target still shows
 
 
+class TestResultsNoteSummary:
+    def test_page_mentions_flags_and_notes(self, client):
+        s = seed()
+        log_session(
+            s,
+            squat_sets=[("6", "70", "7"), ("6", "70", "7"), ("4", "70", "7")],
+            rdl_sets=[("8", "80", "8")] * 3,
+        )
+        client.force_login(s.coach)
+        body = client.get(results_url(s.session)).content.decode()
+        assert "flags to act on" in body  # big "0" tile + pluralised meta
+        assert "1 note" in body
+        assert "1 notes" not in body
+
+
 class TestResultsBareRedirect:
     def test_redirects_to_latest_logged_session(self, client):
         s = seed()
@@ -252,7 +267,8 @@ class TestSessionResultsPresenter:
         assert summary["logged_state"] is True
         assert summary["completion"] == 100  # 6 logged / 6 prescribed
         assert summary["flag_count"] == 1
-        assert "Box Squat" in summary["flag"]
+        assert summary["flag_count"] == 1
+        assert summary["note_count"] == 0  # the flag IS the row's note
 
     def test_avg_rpe_delta(self):
         s = seed()
@@ -316,6 +332,25 @@ class TestSessionResultsPresenter:
         )
         rows = {r["name"]: r for r in session_results(s.session)["rows"]}
         assert rows["Box Squat"]["note"] == "missed 2 reps on set 3"
+
+    def test_notes_are_counted_separately_from_flags(self):
+        """#654: a rep-shortfall note is not a flag, but the summary says so."""
+        s = seed()
+        log_session(
+            s,
+            squat_sets=[("6", "70", "7"), ("6", "70", "7"), ("4", "70", "7")],
+            rdl_sets=[("8", "80", "8")] * 3,
+        )
+        summary = session_results(s.session)["summary"]
+        assert summary["flag_count"] == 0
+        assert summary["note_count"] == 1
+
+    def test_note_count_zero_when_clean(self):
+        s = seed()
+        log_session(
+            s, squat_sets=[("6", "70", "7")] * 3, rdl_sets=[("8", "80", "8")] * 3
+        )
+        assert session_results(s.session)["summary"]["note_count"] == 0
 
     def test_no_flag_when_on_target(self):
         s = seed()

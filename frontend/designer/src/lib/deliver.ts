@@ -9,5 +9,8 @@ export function deliverHref(
 ): string {
   if (planId == null) return "/meso/deliver/";
   const base = `/meso/deliver/${planId}/`;
-  return viewedWeekId != null ? `${base}?week=${viewedWeekId}` : base;
+  // `from=designer` makes the deliver screen's back link return here, not to review.
+  return viewedWeekId != null
+    ? `${base}?week=${viewedWeekId}&from=designer`
+    : `${base}?from=designer`;
 }

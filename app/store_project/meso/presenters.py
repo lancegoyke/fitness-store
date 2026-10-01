@@ -460,7 +460,7 @@ def _personal_record_rows(athlete, unit):
     rows = [
         {
             "name": r.name,
-            "e1rm": _fmt_num(round(r.e1rm, 2)),
+            "e1rm": _fmt_num(round(r.e1rm)),
             "unit": r.unit,
             "reps": r.reps,
             "load": r.load,
@@ -1390,6 +1390,13 @@ def session_results(session):
             ),
             "flag": flag,
             "flag_count": len(flagged),
+            # A flagged row's note ("RPE n over target") IS the flag — counting it
+            # again would read "1 flag · 1 note" for one row.
+            "note_count": sum(
+                1
+                for row in rows
+                if row.get("note") and all(row is not f for f, _ in flagged)
+            ),
             "logged_state": log is not None,
             "new_records": [serialize_new_record(r) for r in new_records],
         },

@@ -438,6 +438,26 @@ class TestDeliverScreen:
         resp = client.get(reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 404
 
+    def test_back_link_to_designer_only_for_the_literal_from_designer(self, client):
+        plan, _, _, _ = seed_plan()
+        client.force_login(plan.relationship.coach)
+        designer = reverse("meso:designer_plan", kwargs={"plan_id": plan.pk})
+
+        body = self._screen(client, plan, **{"from": "designer"}).content.decode()
+        assert "Back to designer" in body
+        assert f'href="{designer}"' in body
+        assert "Back to changes" not in body
+
+        for value in ("", "review", "https://evil.example", "//evil.example"):
+            params = {"from": value} if value else {}
+            body = self._screen(client, plan, **params).content.decode()
+            assert "Back to changes" in body
+            assert "Back to designer" not in body
+            # (og:url echoes the request URL, encoded; only hrefs matter)
+            assert 'href="https://evil' not in body
+            assert 'href="//evil' not in body
+            assert f'href="{reverse("meso:review")}">← Back to changes' in body
+
     def _screen(self, client, plan, **params):
         url = reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
         return client.get(url, params)

@@ -24,7 +24,7 @@
         <section class="meso-card meso-card--pad">
           <p class="meso-eyebrow">Your name</p>
           <div style="display:flex;flex-direction:column;gap:9px;">
-            <label for="{{ name_form.name.id_for_label }}" class="meso-row-name">Your name</label>
+            <label for="{{ name_form.name.id_for_label }}" class="meso-row-name">Your name (shown to your athletes)</label>
             {{ name_form.name }}
             {{ name_form.name.errors }}
           </div>
@@ -35,10 +35,15 @@
           <section class="meso-card meso-card--pad">
             <p class="meso-eyebrow">Coaching</p>
             <div style="display:flex;flex-direction:column;gap:9px;">
-              <label for="{{ coach_form.display_name.id_for_label }}" class="meso-row-name">Display name</label>
-              {{ coach_form.display_name }}
-              {{ coach_form.display_name.errors }}
-              <p class="meso-sub" style="margin:0;">How athletes see you. Leave blank to use your account name.</p>
+              <details{% if display_name_open %} open{% endif %}>
+                <summary style="cursor:pointer;color:var(--accent);font-size:13px;">Use a different name for coaching</summary>
+                <div style="display:flex;flex-direction:column;gap:9px;margin-top:9px;">
+                  <label for="{{ coach_form.display_name.id_for_label }}" class="meso-row-name">Display name</label>
+                  {{ coach_form.display_name }}
+                  {{ coach_form.display_name.errors }}
+                  <p class="meso-sub" style="margin:0;">How athletes see you. Leave blank to use your account name.</p>
+                </div>
+              </details>
               <label for="{{ coach_form.programming_style.id_for_label }}" class="meso-row-name">Programming style</label>
               {{ coach_form.programming_style }}
               {{ coach_form.programming_style.errors }}

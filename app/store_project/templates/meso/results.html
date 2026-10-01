@@ -34,7 +34,7 @@
       </div>
       <div class="meso-card meso-card--pad">
         <div style="font-size:26px;font-weight:800;letter-spacing:-0.025em;{% if summary.flag_count %}color:var(--warn);{% endif %}">{{ summary.flag_count }}</div>
-        <div class="meso-row-meta">{{ summary.flag_count|pluralize:"flag,flags" }} to act on</div>
+        <div class="meso-row-meta">{{ summary.flag_count|pluralize:"flag,flags" }} to act on{% if summary.note_count %} · {{ summary.note_count }} note{{ summary.note_count|pluralize }}{% endif %}</div>
       </div>
     </div>
 

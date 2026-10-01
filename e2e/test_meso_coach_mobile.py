@@ -247,7 +247,7 @@ def test_designer_phone_fallback_for_a_client_plan(
     assert_fits(page)
 
     deliver_url = reverse("meso:deliver_plan", kwargs={"plan_id": plan_id})
-    expected_deliver_url = f"{deliver_url}?week={coach_workspace.week.pk}"
+    expected_deliver_url = f"{deliver_url}?week={coach_workspace.week.pk}&from=designer"
     profile_url = reverse("meso:athlete", kwargs={"pk": coach_workspace.athlete.pk})
     roster_url = reverse("meso:roster")
 

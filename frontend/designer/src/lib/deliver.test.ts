@@ -6,11 +6,11 @@ import { deliverHref } from "./deliver";
 
 describe("deliverHref", () => {
   it("carries the viewed week as a ?week= query param", () => {
-    expect(deliverHref(7, 2)).toBe("/meso/deliver/7/?week=2");
+    expect(deliverHref(7, 2)).toBe("/meso/deliver/7/?week=2&from=designer");
   });
 
   it("omits ?week= when no week is viewed yet", () => {
-    expect(deliverHref(7, null)).toBe("/meso/deliver/7/");
+    expect(deliverHref(7, null)).toBe("/meso/deliver/7/?from=designer");
   });
 
   it("falls back to the bare deliver URL without a plan", () => {

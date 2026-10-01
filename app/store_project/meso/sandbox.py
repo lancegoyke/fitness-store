@@ -3,9 +3,10 @@
 A logged-out visitor to ``/meso/demo/`` gets a real, throwaway coach ``User`` —
 marked with a ``SandboxSession`` — logged in for the length of their visit, so
 every existing login-gated view / CSRF / scoping query just works. The
-workspace starts **empty**; the guided demo onboarding tour (``tour.py``,
-issue #430 Phase 2) walks the visitor into loading each feature's sample data
-themselves via ``demo``'s per-segment loaders. Phase 2 (of *this* module) adds
+workspace starts **populated** (#650 — five athletes, a built program, a
+delivered week, a logged session, via ``demo.load_demo``); the guided demo
+onboarding tour (``tour.py``, issue #430 Phase 2) is still armed and narrates
+that loaded workspace. Phase 2 (of *this* module) adds
 the expiry sweep that reaps a sandbox after its TTL. See
 ``docs/meso/public-sandbox-demo-plan.md`` and
 ``docs/meso/demo-onboarding-tour-plan.md``.
@@ -41,16 +42,14 @@ def is_sandbox(user):
 
 @transaction.atomic
 def create_sandbox(*, source_ip=None):
-    """Mint a throwaway coach: ``User`` + ``CoachProfile`` + a started tour.
+    """Mint a throwaway coach: ``User`` + ``CoachProfile`` + demo data + a tour.
 
     Unusable password (never a real login credential) and a non-routable,
     per-visitor email (never real mail) mark the account as disposable. The
-    workspace starts **empty** (guided-tour Phase 2, the empty-start flip) —
-    no eager ``demo.load_demo`` — and the guided tour is armed at step 0 so
-    the visitor is walked feature-by-feature into loading each segment of
-    sample data themselves (``docs/meso/demo-onboarding-tour-plan.md``,
-    landmine table: the empty start only ships *with* the tour, never
-    before it). Returns the new user.
+    workspace is **populated** up front (#650, the landing page's "populated
+    workspace" promise): ``demo.load_demo`` runs inside this same transaction —
+    silent, no email/push — and the guided tour is still armed at step 0, where
+    each step narrates the already-loaded segment. Returns the new user.
     """
     email = f"{uuid4().hex}@{SANDBOX_EMAIL_DOMAIN}"
     user = User.objects.create(email=email, username=email, name="Demo Coach")
@@ -62,6 +61,7 @@ def create_sandbox(*, source_ip=None):
         expires_at=timezone.now() + timedelta(hours=settings.MESO_SANDBOX_TTL_HOURS),
         source_ip=source_ip,
     )
+    demo.load_demo(user)
     tour.start_tour(profile)
     tour.record_started(user, "sandbox")
     return user

@@ -115,6 +115,13 @@ class TestAthletePersonalRecordsPresenter:
         assert rows[0]["load"] == "120"
         assert rows[0]["date"] == date(2026, 6, 24)
 
+    def test_e1rm_is_displayed_in_whole_units(self):
+        """#654: 83 x 5 -> 96.83 shows "97", never a two-decimal "96.83"."""
+        s = seed()
+        log_done(s, squat=[("5", "83", "8")])
+        rows = athlete_personal_records(s.athlete)["rows"]
+        assert rows[0]["e1rm"] == "97"
+
     def test_best_set_provenance_wins(self):
         s = seed()
         # A heavier low-rep single beats the lighter working set on e1RM.
