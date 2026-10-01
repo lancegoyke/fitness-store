@@ -253,6 +253,17 @@ class TestAthleteSummaryUnitsAndScope:
         _logged_set(cell, new, "225", unit=Unit.POUNDS, n=1)
         assert _summary(meso, cell)["load"] == "225"
 
+    def test_an_older_logs_line_text_is_not_reparsed_as_a_fallback(self):
+        # The old log's set is filtered out; its line must not come back via
+        # the text fallback and beat the newest log's top set.
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        old_set = _logged_set(cell, _log(cell), "315", unit=Unit.POUNDS, n=1)
+        old_set.source_line.text = "315lb x5"
+        old_set.source_line.save()
+        _logged_set(cell, _log(cell), "225", unit=Unit.POUNDS, n=1)
+        assert _summary(meso, cell)["load"] == "225"
+
     def test_a_log_of_another_athlete_is_ignored(self):
         meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
         cell = cells["Back Squat"][0]
@@ -324,5 +335,18 @@ class TestWeekReadoutsMixedUnits:
 
     def test_bw_rpe_is_not_read_as_a_load(self):
         meso, _, _ = _block({"Dip": ["3x8 BW @8"] * 4})
+        wk = serialize_mesocycle_grid(meso)["weeks"]
+        assert all(w["inten"] is None for w in wk)
+
+
+class TestLoadTokenEdges:
+    def test_kilos_suffix_is_kilograms_on_a_pound_plan(self):
+        # 100 kilos = 220 lb beats 150 lb: week 1 is the heaviest.
+        meso, _, _ = _block({"Squat": ["3x5 @ 100kilos", "3x5 @ 150lb", "3x5", "3x5"]})
+        wk = serialize_mesocycle_grid(meso)["weeks"]
+        assert (wk[0]["inten"], wk[1]["inten"]) == (100, 68)
+
+    def test_an_absurdly_large_load_does_not_crash_the_readout(self):
+        meso, _, _ = _block({"Squat": ["3x5 @ " + "9" * 400] * 4})
         wk = serialize_mesocycle_grid(meso)["weeks"]
         assert all(w["inten"] is None for w in wk)

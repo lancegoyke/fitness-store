@@ -642,6 +642,10 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
     commitAnchor(from, flat, false);
     if (event.key === "Tab") {
       stepTab(from, event.shiftKey ? -1 : 1, event);
+      // Off the table's edge: native Tab must leave the grid as it would from
+      // the editor, not step from the <td> INTO its own input. Park focus on
+      // the editor first; the browser resumes the traversal from there.
+      if (!event.defaultPrevented) td.querySelector<HTMLElement>("[data-grid-cell]")?.focus();
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       stepHorizontal(from, event.key === "ArrowRight" ? 1 : -1, event);
     } else {

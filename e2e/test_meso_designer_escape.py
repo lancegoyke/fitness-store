@@ -81,6 +81,24 @@ def test_tab_after_escape_moves_to_the_next_cell(page, live_server, login, block
 
 
 @pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
+def test_tab_after_escape_off_the_table_edge_leaves_the_grid(
+    page, live_server, login, block_plan
+):
+    login(block_plan.coach)
+    _open_designer(page, live_server, block_plan.plan)
+    rests = page.locator("[data-testid^='row-rest-']")
+    last = rests.nth(rests.count() - 1)
+    # Only the final row of the final day has no landable stop after Rest if
+    # no later table follows; if one does, the Tab simply moves there. Either
+    # way focus must not land back in the cancelled Rest editor.
+    last.click()
+    page.keyboard.press("Escape")
+    assert _active_tag(page) == "TD"
+    page.keyboard.press("Tab")
+    expect(last).not_to_be_focused()
+
+
+@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
 def test_add_exercise_then_type_gives_exactly_the_typed_name(
     page, live_server, login, block_plan
 ):

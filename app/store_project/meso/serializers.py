@@ -14,6 +14,7 @@ athlete actually did last time, per lift) is derived from real logged sets here
 (athlete slice Phase 3).
 """
 
+import math
 import re
 from collections import Counter
 from collections import defaultdict
@@ -919,7 +920,7 @@ def _reps_value(parsed):
 
 
 _KG_PER_LB = 0.45359237
-_UNIT_SUFFIX = re.compile(r"\s*(kgs?|lbs?)$", re.IGNORECASE)
+_UNIT_SUFFIX = re.compile(r"\s*(kgs?|kilos?|lbs?)$", re.IGNORECASE)
 
 
 def _to_kg(number, unit):
@@ -956,6 +957,8 @@ def _load_value(load, unit="kg"):
     if not digits:
         return None
     number = float(digits.group())
+    if not math.isfinite(number):
+        return None
     if token.endswith("%"):
         return number, "pct"
     suffix = _split_suffix(token)[1]
@@ -1055,7 +1058,9 @@ def athlete_line_summary(lines, unit, log_id=None):
                 continue
             text, suffix = _split_suffix(s.load)
             candidates.append((text, s.unit or suffix or "", s.rpe))
-        if not candidates:
+        # Text fallback only for a line no LoggedSet was ever derived from: a
+        # line whose sets all belong to an older log is that log's, not ours.
+        if not candidates and not any(s.load for s in lc.parsed_sets.all()):
             parsed = parsing.parse_performed(lc.text) or {}
             if parsed.get("load"):
                 text, suffix = _split_suffix(parsed["load"])
