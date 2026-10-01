@@ -1,0 +1,1 @@
+{{ athlete_name }} accepted your invite. Upgrade to start coaching them.

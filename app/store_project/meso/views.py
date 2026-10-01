@@ -45,6 +45,7 @@ from django.views.generic import TemplateView
 
 from store_project.analytics.events import EventName
 from store_project.analytics.track import track
+from store_project.notifications.emails import send_athlete_waiting_email
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
@@ -484,6 +485,15 @@ class RosterView(TemplateView):
         ctx["pending_requests"] = [
             presenters.pending_request(link) for link in pending_requests
         ]
+        # Athletes who accepted but wait on this coach's plan (#649) — not
+        # active athletes, so they sit with the pending rows, not in ``athletes``.
+        ctx["waiting_athletes"] = [
+            presenters.waiting_acceptance(link)
+            for link in CoachAthlete.objects.for_coach(self.request.user)
+            .waiting()
+            .select_related("athlete")
+            .order_by("responded_at", "pk")
+        ]
         # Billing/paywall state (S6 Phase 3): tier, seat usage, and the upgrade
         # CTAs (start trial / subscribe / manage billing).
         ctx["billing"] = presenters.billing_state(
@@ -498,7 +508,14 @@ class RosterView(TemplateView):
         # onboarding card that teaches the model and offers the one-click demo;
         # once demo data is loaded a banner offers to remove it (Q3).
         ctx["has_demo"] = meso_demo.has_demo(self.request.user)
-        ctx["is_empty"] = not athletes
+        ctx["is_empty"] = not athletes and not ctx["waiting_athletes"]
+        # Invites out + athletes waiting beyond the free seats (#649): the cue
+        # to show the upgrade CTA right by the list, not only in the billing card.
+        ctx["seat_pressure"] = not ctx["billing"][
+            "is_active"
+        ] and billing_access.committed_seat_count(
+            self.request.user
+        ) > billing_access.effective_seat_limit(self.request.user)
         # Self-coaching (guided-tour Phase 0): the roster offers "Add yourself as
         # an athlete" until the coach's one self-link is active.
         ctx["has_self_link"] = any(link.is_self for link in links)
@@ -3993,6 +4010,42 @@ def push_unsubscribe(request):
 # end), independent of who holds the token URL.
 
 
+def _waiting_connected_message(coach):
+    """What an athlete is told when their acceptance is parked (#649).
+
+    Deliberately neutral — nothing about the coach's plan, limit or billing.
+    """
+    return (
+        f"You're connected to {coach_name(coach)}. "
+        "They'll have your program ready soon."
+    )
+
+
+def _notify_coach_athlete_waiting(request, link):
+    """Email the coach that an athlete accepted and waits on their plan (#649).
+
+    Sent on commit, best-effort (a mail failure is logged, never a lost
+    acceptance), and never for a sandbox coach.
+    """
+    coach, athlete, label = link.coach, link.athlete, link.label
+    if meso_sandbox.is_sandbox(coach):
+        return
+    roster_url = request.build_absolute_uri(reverse("meso:roster"))
+
+    def _send():
+        try:
+            send_athlete_waiting_email(
+                athlete=athlete,
+                coach=coach,
+                roster_url=roster_url,
+                athlete_label=label,
+            )
+        except Exception:  # mail is best-effort; never fail the acceptance on it
+            logger.exception("Failed to send athlete-waiting email to %s", coach.email)
+
+    transaction.on_commit(_send)
+
+
 @login_required
 @require_POST
 def invite_accept(request, token):
@@ -4000,18 +4053,18 @@ def invite_accept(request, token):
     if not link.is_pending or request.user != link.recipient():
         return HttpResponseForbidden("You cannot respond to this invite.")
     # Seat gate (D4): activating this link consumes one of the coach's seats. A
-    # free coach at the cap can't accept an athlete's request (and can't have a
-    # coach-invite they sent accepted) until they upgrade. Worded for whichever
-    # side is acting — the coach themselves vs. the athlete accepting the coach.
+    # free coach at the cap can't accept an athlete's request until they upgrade
+    # (their own plan, so SEAT_LIMIT_MESSAGE is theirs to read). When the *athlete*
+    # accepts a coach's invite, the acceptance is parked as waiting instead (#649):
+    # the coach's plan is never the athlete's problem, so nothing about it is said.
     if not billing_access.can_add_athlete(link.coach):
         if request.user == link.coach:
             messages.error(request, SEAT_LIMIT_MESSAGE)
-        else:
-            messages.error(
-                request,
-                f"{coach_name(link.coach)} can't take on new athletes right now.",
-            )
-        return redirect("meso:roster")
+            return redirect("meso:roster")
+        link.accept(waiting=True)
+        _notify_coach_athlete_waiting(request, link)
+        messages.success(request, _waiting_connected_message(link.coach))
+        return redirect("meso:athlete_home")
     link.accept()
     messages.success(request, "Relationship accepted.")
     return redirect("meso:roster")
@@ -4021,7 +4074,11 @@ def invite_accept(request, token):
 @require_POST
 def invite_decline(request, token):
     link = get_object_or_404(CoachAthlete, token=token)
-    if not link.is_pending or request.user != link.recipient():
+    # A coach may also remove an athlete's waiting acceptance (#649).
+    is_waiting_removal = link.is_waiting and request.user == link.coach
+    if not is_waiting_removal and (
+        not link.is_pending or request.user != link.recipient()
+    ):
         return HttpResponseForbidden("You cannot respond to this invite.")
     link.decline()
     messages.success(request, "Invite declined.")
@@ -4174,6 +4231,9 @@ def athlete_request_coach(request):
         if existing and existing.is_active:
             messages.info(request, f"You're already training with {coach_name(coach)}.")
             return redirect("meso:athlete_home")
+        if existing and existing.is_waiting:
+            messages.info(request, f"You're already connected to {coach_name(coach)}.")
+            return redirect("meso:athlete_home")
         if existing and existing.status == CoachAthlete.Status.PENDING_ATHLETE_REQUEST:
             messages.info(
                 request, f"You've already asked to train with {coach_name(coach)}."
@@ -4310,11 +4370,9 @@ def coach_invite(request):
     if email == CoachInvite.normalize_email(request.user.email):
         messages.error(request, "You can't invite yourself.")
         return redirect("meso:roster")
-    # Seat gate (D4): a free coach at the cap can't open a new invite — accepting
-    # it would create a billable seat they aren't paying for.
-    if not billing_access.can_add_athlete(request.user):
-        messages.error(request, SEAT_LIMIT_MESSAGE)
-        return redirect("meso:roster")
+    # No seat gate here (#649): the invite goes out even at the free cap, since
+    # the coach may be about to upgrade. An invitee who can't be seated yet is
+    # parked as a waiting acceptance when they claim; the warning below says so.
     with transaction.atomic():
         # LOCK ORDER (#611) — CoachInvite is a child of the coach User row.
         # Reserve the parent before open_for can insert, matching a User-rooted
@@ -4329,6 +4387,11 @@ def coach_invite(request):
         invite, created = CoachInvite.open_for(
             coach=request.user, email=email, label=label
         )
+        # Counts this invite (it's claimable now): over the limit means this
+        # invitee can't be seated until the coach starts a trial or subscribes.
+        over_free_cover = billing_access.committed_seat_count(
+            request.user
+        ) > billing_access.effective_seat_limit(request.user)
     track(EventName.INVITE_SENT, actor=request.user, subject=invite, new=created)
     accept_url = request.build_absolute_uri(
         reverse("meso:invite_claim", kwargs={"token": invite.token})
@@ -4357,6 +4420,14 @@ def coach_invite(request):
         )
 
     transaction.on_commit(_send)
+    if over_free_cover:
+        messages.warning(
+            request,
+            f"Free covers {CoachSubscription.FREE_SEAT_LIMIT} "
+            f"athlete{'s' if CoachSubscription.FREE_SEAT_LIMIT != 1 else ''}. "
+            f"{label or email} won't be able to join until you start your trial "
+            "or subscribe.",
+        )
     return redirect("meso:roster")
 
 
@@ -4541,25 +4612,24 @@ def invite_claim(request, token):
                 return redirect("meso:athlete_home")
             if action == "accept":
                 # Seat gate (D4): claiming materializes an active link — a billable
-                # seat for the coach. A coach who has since hit their cap can't take
-                # on the athlete until they upgrade; the athlete sees why.
-                if not billing_access.can_add_athlete(invite.coach):
-                    messages.error(
-                        request,
-                        f"{coach_name(invite.coach)} has reached their athlete "
-                        "limit and can't add you right now.",
-                    )
-                    return redirect("meso:athlete_home")
+                # seat for the coach. A coach with no seat left still gets the
+                # athlete recorded, as a waiting acceptance (#649): the athlete is
+                # told nothing about the coach's plan; the coach is emailed.
+                waiting = not billing_access.can_add_athlete(invite.coach)
                 try:
-                    invite.accept(request.user)
+                    link = invite.accept(request.user, waiting=waiting)
                 except InvalidTransition as exc:
                     messages.error(request, str(exc))
                     return redirect("meso:roster")
                 track(EventName.INVITE_ACCEPTED, actor=request.user, subject=invite)
-                messages.success(
-                    request,
-                    f"You're now training with {coach_name(invite.coach)}.",
-                )
+                if link.is_waiting:
+                    _notify_coach_athlete_waiting(request, link)
+                    messages.success(request, _waiting_connected_message(invite.coach))
+                else:
+                    messages.success(
+                        request,
+                        f"You're now training with {coach_name(invite.coach)}.",
+                    )
                 return redirect("meso:athlete_home")
             invite.decline()
         messages.success(request, "Invite declined.")
