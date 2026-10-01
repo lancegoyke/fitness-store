@@ -340,6 +340,25 @@ class TestAthleteSummaryPctAndReclaimed:
         _logged_set(cell, new, "100", unit=Unit.POUNDS, n=1)
         assert _summary(meso, cell)["load"] == "100"
 
+    def test_an_older_logs_blank_load_reclaimed_set_still_blocks_the_fallback(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        old = _log(cell)
+        old_line = sub_line(cell, "315 x 5", athlete_authored=True)
+        LoggedSetFactory(
+            session_log=old,
+            prescription=cell,
+            source_line=None,
+            reclaimed_line=old_line,
+            set_number=1,
+            load="",
+            reps="5",
+            unit=Unit.POUNDS,
+        )
+        new = _log(cell)
+        _logged_set(cell, new, "225", unit=Unit.POUNDS, n=1)
+        assert _summary(meso, cell)["load"] == "225"
+
     def test_a_reclaimed_set_of_the_newest_log_is_used(self):
         meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
         cell = cells["Back Squat"][0]

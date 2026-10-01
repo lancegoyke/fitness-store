@@ -1077,7 +1077,7 @@ def athlete_line_summary(lines, unit, log_id=None):
             candidates.append((text, s.unit or suffix or "", s.rpe))
         # Text fallback only for a line no LoggedSet was ever derived from: a
         # line whose sets all belong to an older log is that log's, not ours.
-        if not candidates and not any(s.load for s in behind):
+        if not candidates and not behind:
             parsed = parsing.parse_performed(lc.text) or {}
             if parsed.get("load"):
                 text, suffix = _split_suffix(parsed["load"])
