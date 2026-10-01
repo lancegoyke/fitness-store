@@ -149,6 +149,18 @@
   background: var(--surface);
   border: 1.5px solid var(--accent);
 }
+.meso-timeline-nodata {
+  font-size: 10.5px;
+  line-height: 1.25;
+  text-align: center;
+  color: var(--dim);
+  max-width: 100%;
+}
+.meso-block-chart-caption {
+  font-size: 11.5px;
+  color: var(--dim);
+  margin: -4px 0 8px;
+}
 .meso-timeline-label {
   font-size: 12.5px;
   font-weight: 700;

@@ -641,16 +641,18 @@ class TestSerializeMesocycleGrid:
             # (barH(w.vol, ...)/barH(w.inten, ...)) need these on the grid
             # payload now that the one-week `plan_data`/`serialize_week` path
             # is no longer the front-end's only source for them.
-            "vol": f.week1.volume,
-            "inten": f.week1.intensity,
+            # #638: read off the block's prescriptions (week 1 is the grid's
+            # biggest week; each lift's load climbs into week 2), not the stored Week.volume/intensity.
+            "vol": 100,
+            "inten": 94,
         }
         wk2 = result["weeks"][1]
         assert wk2["id"] == f.week2.pk
         assert wk2["index"] == 2
         assert wk2["label"] == "Wk 2"
         assert wk2["delivered_at"] == f.week2.delivered_at.isoformat()
-        assert wk2["vol"] == f.week2.volume
-        assert wk2["inten"] == f.week2.intensity
+        assert wk2["vol"] < 100  # 4x5 + 3x10 + ... vs week 1's 4x6 + 3x12 + ...
+        assert wk2["inten"] is not None
 
     def test_days_ordered_with_session_id_and_identity(self):
         f = _build_grid_meso()
@@ -701,6 +703,7 @@ class TestSerializeMesocycleGrid:
             "text": "4 x 6, RPE 7, 100",
             "skipped": False,
             "lines": [],
+            "athlete_summary": None,
         }
 
     def test_deleted_week_is_excluded(self):
@@ -954,11 +957,12 @@ class TestSerializeMesocycleGridQueries:
     """
 
     def test_individual_grid_query_count(self, django_assert_num_queries):
-        # 9 = weeks, session slots, sessions, exercise slots, cells,
+        # 10 = weeks, session slots, sessions, exercise slots, cells,
+        # parsed_sets (athlete-line summary, #645),
         # 2x PlanAction (serialize_plan_history), mesocycles (phases),
         # contraindications (serialize_athlete_identity).
         f = _build_grid_meso()
-        with django_assert_num_queries(9):
+        with django_assert_num_queries(10):
             serialize_mesocycle_grid(f.meso)
 
 

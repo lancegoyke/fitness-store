@@ -169,7 +169,7 @@ describe("BlockView", () => {
 
   it("labels calendar columns by the program day's own number, as the athlete sees it", () => {
     const days = calendarDays(2);
-    days[1] = { ...days[1]!, day_number: 3 };
+    days[1] = { ...days[1]!, day_number: 3, name: "" };
     const { container } = render(<BlockView {...baseProps({ periodStyle: "calendar", days })} />);
 
     expect(Array.from(container.querySelectorAll(".meso-cal-day-label"), (node) => node.textContent)).toEqual([
@@ -189,5 +189,50 @@ describe("BlockView", () => {
 
     const { container: calendarContainer } = render(<BlockView {...baseProps({ periodStyle: "calendar" })} />);
     expect(calendarContainer.querySelectorAll(".is-current")).toHaveLength(0);
+  });
+
+  describe("unparsed weeks (#638)", () => {
+    const mixed: GridWeek[] = [
+      { ...weeks[0]!, vol: null, inten: null },
+      weeks[1]!,
+    ];
+
+    it("draws no bars and a caption for a week with nothing parsed", () => {
+      const { container } = render(<BlockView {...baseProps({ weeks: mixed })} />);
+      const w1 = screen.getByTestId("block-week-1");
+      expect(w1.querySelectorAll(".meso-bar")).toHaveLength(0);
+      expect(screen.getByTestId("block-week-nodata-1")).toHaveTextContent(
+        "Nothing to chart — no sets × reps or loads parsed",
+      );
+      expect(screen.getByTestId("block-week-2").querySelectorAll(".meso-bar")).toHaveLength(2);
+      expect(screen.queryByTestId("block-week-nodata-2")).not.toBeInTheDocument();
+      expect(screen.getByTestId("block-chart-caption")).toBeInTheDocument();
+      expect(container).toBeTruthy();
+    });
+
+    it("draws only the non-null bar when one is null, with no nodata caption", () => {
+      render(<BlockView {...baseProps({ weeks: [{ ...weeks[0]!, vol: 50, inten: null }] })} />);
+      const w1 = screen.getByTestId("block-week-1");
+      expect(w1.querySelectorAll(".meso-bar--vol")).toHaveLength(1);
+      expect(w1.querySelectorAll(".meso-bar--inten")).toHaveLength(0);
+      expect(screen.queryByTestId("block-week-nodata-1")).not.toBeInTheDocument();
+      expect(screen.getByTestId("block-chart-caption")).toBeInTheDocument();
+    });
+
+    it("shows neither caption when every bar is present", () => {
+      render(<BlockView {...baseProps()} />);
+      expect(screen.queryByTestId("block-chart-caption")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("block-week-nodata-1")).not.toBeInTheDocument();
+    });
+
+    it("labels calendar columns by day name, falling back to 'Day N' when blank", () => {
+      const days = calendarDays(3);
+      days[0]!.name = "Upper A";
+      days[1]!.name = "   ";
+      days[2]!.name = "";
+      const { container } = render(<BlockView {...baseProps({ periodStyle: "calendar", days })} />);
+      const labels = Array.from(container.querySelectorAll(".meso-cal-day-label")).map((el) => el.textContent);
+      expect(labels).toEqual(["Upper A", "Day 2", "Day 3"]);
+    });
   });
 });

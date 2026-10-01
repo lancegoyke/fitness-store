@@ -137,9 +137,10 @@ export interface GridWeek {
    * (like Week's) to minimize churn in the many existing GridWeek test
    * fixtures across this tree that predate this phase and don't set them —
    * BlockView's barH already treats a missing value as 0 (`w.vol ?? 0`). The
-   * real server payload always includes both. */
-  vol?: number;
-  inten?: number;
+   * real server payload always includes both. `null` = nothing in that week
+   * could be parsed (BlockView draws no bar). */
+  vol?: number | null;
+  inten?: number | null;
 }
 
 export interface GridCell {
@@ -150,6 +151,8 @@ export interface GridCell {
   /** The row's freeform sub-line stack for this week (line >= 1), blank
    * lines included so the editor can show a cleared line in place. */
   lines: CellLine[];
+  /** Roll-up of the athlete-authored lines (null when there are none). */
+  athlete_summary?: { sets: number; load: string; unit: string; rpe: string } | null;
 }
 
 export interface GridRow {

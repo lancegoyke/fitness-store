@@ -177,6 +177,11 @@ export function BlockView({
             Intensity
           </div>
         </div>
+        {periodStyle === "timeline" && weeks.some((w) => w.vol === null || w.inten === null) && (
+          <div className="meso-block-chart-caption" data-testid="block-chart-caption">
+            Bars are read from the sets, reps and loads you've written. Weeks with none show no bar.
+          </div>
+        )}
 
         {periodStyle === "timeline" && (
           <div className="meso-flex meso-timeline">
@@ -189,12 +194,21 @@ export function BlockView({
                 onClick={() => onSwitchWeek(w.id)}
               >
                 <div className="meso-timeline-bars">
-                  <div
-                    className={`meso-bar meso-bar--vol${w.deload ? " is-deload" : ""}`}
-                    style={{ height: barH(w.vol ?? 0, 156) }}
-                  />
-                  <div className="meso-bar meso-bar--inten" style={{ height: barH(w.inten ?? 0, 156) }} />
+                  {w.vol !== null && (
+                    <div
+                      className={`meso-bar meso-bar--vol${w.deload ? " is-deload" : ""}`}
+                      style={{ height: barH(w.vol ?? 0, 156) }}
+                    />
+                  )}
+                  {w.inten !== null && (
+                    <div className="meso-bar meso-bar--inten" style={{ height: barH(w.inten ?? 0, 156) }} />
+                  )}
                 </div>
+                {w.vol === null && w.inten === null && (
+                  <div className="meso-timeline-nodata" data-testid={`block-week-nodata-${w.id}`}>
+                    Nothing to chart — no sets × reps or loads parsed
+                  </div>
+                )}
                 <div className="meso-timeline-label">{w.label}</div>
                 {/* NOTE (deviation): the source repeats `w.phase` here as a
                     colored pill under every bar. The fixture (and real data,
@@ -230,7 +244,7 @@ export function BlockView({
               <div />
               {days.map((day) => (
                 <div key={day.session_slot_id} className="meso-cal-day-label">
-                  Day {day.day_number}
+                  {day.name?.trim() || `Day ${day.day_number}`}
                 </div>
               ))}
             </div>

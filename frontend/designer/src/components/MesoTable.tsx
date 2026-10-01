@@ -54,7 +54,7 @@
 // weeks, add-this-week and move-to-day all stay. (The per-cell group
 // adjust badge went with the group subsystem itself.)
 import { useEffect, useRef, useState } from "react";
-import type { ClipboardEvent, KeyboardEvent } from "react";
+import type { ClipboardEvent, FocusEvent, KeyboardEvent } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -364,6 +364,33 @@ function GridCellEditor({
   const lines = cell.lines ?? [];
   const nextLine = lines.reduce((max, l) => Math.max(max, l.line), 0) + 1;
 
+  // #645: athlete-authored lines collapse to ONE roll-up marker (read-only
+  // presentation; the lines, their writes and the ghost numbering are
+  // untouched). Expanding renders them as the editable athlete rows.
+  const athleteLines = lines.filter((l) => l.athlete_authored);
+  const [athleteOpen, setAthleteOpen] = useState(false);
+  const markerRef = useRef<HTMLButtonElement>(null);
+  const athleteSetCount = cell.athlete_summary?.sets ?? athleteLines.length;
+  const summary = cell.athlete_summary;
+  const loadPart = summary && summary.load ? ` · ${summary.load}${summary.unit ? ` ${summary.unit}` : ""}` : "";
+  const athleteMarkerText = `✓ ${athleteSetCount} ${athleteSetCount === 1 ? "set" : "sets"}${loadPart}${
+    summary && summary.rpe ? ` @${summary.rpe}` : ""
+  }`;
+
+  function onAthleteKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== "Escape" || !athleteOpen) return;
+    // Park focus on the marker BEFORE the inputs unmount (the nav handler has
+    // already sent it to the cell by the time this bubbles).
+    markerRef.current?.focus();
+    setAthleteOpen(false);
+  }
+
+  function onAthleteBlur(e: FocusEvent<HTMLDivElement>) {
+    const next = e.relatedTarget;
+    if (next instanceof Node && e.currentTarget.contains(next)) return;
+    setAthleteOpen(false);
+  }
+
   function onCopy(e: ClipboardEvent<HTMLInputElement>) {
     const el = e.currentTarget;
     if (el.selectionStart !== el.selectionEnd) return; // real selection: native copy wins.
@@ -443,20 +470,57 @@ function GridCellEditor({
         onPaste={onPaste}
         {...navProps}
       />
-      {lines.map((l) => (
-        <CellSubLineInput
-          key={l.line}
-          cellId={cellId}
-          lineId={l.id}
-          rowId={row.exercise_slot_id}
-          weekId={week.id}
-          line={l.line}
-          text={l.text}
-          athleteAuthored={l.athlete_authored}
-          tableNav={tableNav}
-          onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
-        />
-      ))}
+      {lines
+        .filter((l) => !l.athlete_authored)
+        .map((l) => (
+          <CellSubLineInput
+            key={l.line}
+            cellId={cellId}
+            lineId={l.id}
+            rowId={row.exercise_slot_id}
+            weekId={week.id}
+            line={l.line}
+            text={l.text}
+            tableNav={tableNav}
+            onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
+          />
+        ))}
+      {athleteLines.length > 0 ? (
+        <div
+          className="meso-athlete-group"
+          data-testid={`cell-athlete-group-${cellId}`}
+          onKeyDown={onAthleteKeyDown}
+          onBlur={onAthleteBlur}
+        >
+          <button
+            type="button"
+            ref={markerRef}
+            className="meso-athlete-marker"
+            data-testid={`cell-athlete-marker-${cellId}`}
+            aria-expanded={athleteOpen}
+            aria-label={`${athleteSetCount} ${athleteSetCount === 1 ? "set" : "sets"} logged by your athlete — ${athleteOpen ? "hide" : "show"} lines`}
+            onClick={() => setAthleteOpen((o) => !o)}
+          >
+            {athleteMarkerText}
+          </button>
+          {athleteOpen
+            ? athleteLines.map((l) => (
+                <CellSubLineInput
+                  key={l.line}
+                  cellId={cellId}
+                  lineId={l.id}
+                  rowId={row.exercise_slot_id}
+                  weekId={week.id}
+                  line={l.line}
+                  text={l.text}
+                  athleteAuthored
+                  tableNav={tableNav}
+                  onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
+                />
+              ))
+            : null}
+        </div>
+      ) : null}
       <CellSubLineInput
         key={`ghost-${nextLine}`}
         cellId={cellId}
