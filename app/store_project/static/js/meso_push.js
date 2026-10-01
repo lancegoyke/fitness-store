@@ -60,6 +60,16 @@
     return sub;
   }
 
+  // Defensive read: storage can be absent or throw (Safari private mode).
+  function dismissed(key) {
+    if (!key) return false;
+    try {
+      return window.localStorage.getItem(key) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
   function refreshCta() {
     const cta = document.getElementById("meso-push-cta");
     if (!cta) return;
@@ -67,7 +77,14 @@
     // The card wrapper (data-prompt-priority) is what hides; the prompt
     // coordinator in meso_onboarding.js decides whether it is the one shown.
     const box = cta.closest("[data-prompt-priority]") || cta;
-    box.hidden = !(supported() && Notification.permission === "default");
+    // Honour the card's own dismissal here, not only in the coordinator: if
+    // meso_onboarding.js is slow or blocked, a card the athlete already waved
+    // away must not come back (#669).
+    box.hidden = !(
+      supported() &&
+      Notification.permission === "default" &&
+      !dismissed(box.dataset.promptDismissKey)
+    );
     window.dispatchEvent(new Event("meso:prompts-changed"));
   }
 

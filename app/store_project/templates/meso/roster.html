@@ -38,7 +38,7 @@
               <button type="submit" class="meso-btn meso-btn--ghost">Remove demo data</button>
             </form>
           </div>
-        {% elif is_empty and not show_meso_tour %}
+        {% elif show_getting_started and not show_meso_tour %}
           <!-- First-run onboarding (first-time-UX Phase 2): teach Invite → Build →
                Deliver and offer the one-click demo. Suppressed while the guided
                demo tour (issue #430) is actually mounted — its own welcome step
@@ -54,16 +54,16 @@
             </div>
             <ol style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:11px;">
               <li style="display:flex;gap:11px;align-items:flex-start;">
-                <span class="meso-avatar meso-avatar--sm meso-avatar--accent">1</span>
-                <div style="min-width:0;"><div class="meso-row-name">Invite an athlete</div><div class="meso-row-meta">They get an email to join and train with you.</div></div>
+                {% if checklist.invited %}<span class="meso-avatar meso-avatar--sm" data-step-done aria-label="Done">&#10003;</span>{% else %}<span class="meso-avatar meso-avatar--sm meso-avatar--accent">1</span>{% endif %}
+                <div style="min-width:0;"><div class="meso-row-name"{% if checklist.invited %} style="color:var(--dim);"{% endif %}>Invite an athlete</div><div class="meso-row-meta">They get an email to join and train with you.</div></div>
               </li>
               <li style="display:flex;gap:11px;align-items:flex-start;">
-                <span class="meso-avatar meso-avatar--sm meso-avatar--accent">2</span>
-                <div style="min-width:0;"><div class="meso-row-name">Build their program</div><div class="meso-row-meta">Lay out their mesocycle in the designer — solo or with the AI agent.</div></div>
+                {% if checklist.written %}<span class="meso-avatar meso-avatar--sm" data-step-done aria-label="Done">&#10003;</span>{% else %}<span class="meso-avatar meso-avatar--sm meso-avatar--accent">2</span>{% endif %}
+                <div style="min-width:0;"><div class="meso-row-name"{% if checklist.written %} style="color:var(--dim);"{% endif %}>Build their program</div><div class="meso-row-meta">Lay out their mesocycle in the designer — solo or with the AI agent.</div></div>
               </li>
               <li style="display:flex;gap:11px;align-items:flex-start;">
-                <span class="meso-avatar meso-avatar--sm meso-avatar--accent">3</span>
-                <div style="min-width:0;"><div class="meso-row-name">Deliver the week</div><div class="meso-row-meta">Push it to their phone; their logged results flow back to you.</div></div>
+                {% if checklist.delivered %}<span class="meso-avatar meso-avatar--sm" data-step-done aria-label="Done">&#10003;</span>{% else %}<span class="meso-avatar meso-avatar--sm meso-avatar--accent">3</span>{% endif %}
+                <div style="min-width:0;"><div class="meso-row-name"{% if checklist.delivered %} style="color:var(--dim);"{% endif %}>Deliver the week</div><div class="meso-row-meta">Push it to their phone; their logged results flow back to you.</div></div>
               </li>
             </ol>
             {% if tour_entry_available %}
@@ -294,12 +294,6 @@
                     {% if active_pending_invites|length == 1 %}<input type="hidden" name="invite" value="{{ active_pending_invite.token }}">{% endif %}
                     <p class="meso-sub" style="margin:0;">You can write the program now as a template &#8212; start it for them once they accept. <button type="submit" style="appearance:none;background:none;border:none;padding:0;font:inherit;color:var(--accent);cursor:pointer;text-decoration:underline;">Write it as a template</button>.</p>
                   </form>
-                  {% if not has_self_link and not is_sandbox %}
-                    <form method="post" action="{% url 'meso:roster_add_self' %}" style="margin:0;">
-                      {% csrf_token %}
-                      <button type="submit" class="meso-btn meso-btn--ghost">+ Add yourself as an athlete</button>
-                    </form>
-                  {% endif %}
                 {% else %}
                   <p class="meso-sub" style="margin:0;">Invite an athlete first to build them a program.</p>
                 {% endif %}
@@ -395,7 +389,7 @@
         </div>
 
         {% if not show_meso_tour %}
-          {% if not is_empty or not tour_entry_available %}
+          {% if not show_getting_started or not tour_entry_available %}
             <!-- Durable tour restart (#441 P2): the empty-state entry card disappears
                  once the workspace has data or the tour is dismissed/completed, so this
                  is the always-available way back into the guided tour. Hidden while the
