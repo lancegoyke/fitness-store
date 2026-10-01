@@ -311,6 +311,10 @@ class CoachAthlete(models.Model):
             _("Pending coach acceptance"),
         )
         ACTIVE = "active", _("Active")
+        # The athlete accepted, but the coach's plan has no seat for them yet
+        # (#649). Neither active (no seat, no program access) nor pending (the
+        # athlete's answer is in); it flips to ACTIVE when the coach upgrades.
+        ACCEPTED_WAITING = "accepted_waiting", _("Accepted, waiting on coach's plan")
         DECLINED = "declined", _("Declined")
         ENDED = "ended", _("Ended")
 
@@ -355,6 +359,19 @@ class CoachAthlete(models.Model):
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
     responded_at = models.DateTimeField(_("Time responded"), null=True, blank=True)
     ended_at = models.DateTimeField(_("Time ended"), null=True, blank=True)
+    # Who ended an ``ended`` link (#651): only a coach-ended link is restorable
+    # without a fresh invite. Blank for links that were never ended, and for
+    # links ended before this column existed.
+    ended_by = models.CharField(
+        _("Ended by"), max_length=8, choices=InvitedBy.choices, blank=True, default=""
+    )
+    # The plans ``end()`` archived, as ``{plan_id: status_before}`` (#651), so a
+    # restore can put back exactly those plans in exactly the state they were in.
+    # Plans already archived before the end are never listed. Cleared on restore
+    # and whenever the link is reopened by a fresh invite.
+    ended_archived_plans = models.JSONField(
+        _("Plans archived by ending"), default=dict, blank=True
+    )
 
     objects = CoachAthleteQuerySet.as_manager()
 
