@@ -1,4 +1,4 @@
-<p>Hi {{ athlete_name }},</p>
+<p>Hi{% if greeting_name %} {{ greeting_name }}{% endif %},</p>
 
 <p>{{ coach_name }} just delivered a new block ({{ week_count }} week{{ week_count|pluralize }}) of
   <strong>{{ plan_title }}</strong> to your training app.</p>

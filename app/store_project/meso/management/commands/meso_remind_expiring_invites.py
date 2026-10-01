@@ -83,7 +83,10 @@ class Command(BaseCommand):
                     path=reverse("meso:invite_claim", kwargs={"token": locked.token}),
                 )
                 sent = send_coach_invite_reminder_email(
-                    coach=locked.coach, email=locked.email, accept_url=accept_url
+                    coach=locked.coach,
+                    email=locked.email,
+                    accept_url=accept_url,
+                    recipient_name=locked.label,
                 )
                 if not sent:
                     return False  # e.g. blacklisted; leave un-stamped to retry

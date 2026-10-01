@@ -1,4 +1,4 @@
-{% autoescape off %}Hi,
+{% autoescape off %}Hi{% if greeting_name %} {{ greeting_name }}{% endif %},
 
 {{ coach_name }} invited you to train with them on Mastering Fitness — where
 your coach builds your program and you log your training.

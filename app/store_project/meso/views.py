@@ -18,6 +18,8 @@ from django.contrib.auth.views import redirect_to_login
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError
+from django.core.signing import BadSignature
+from django.core.signing import TimestampSigner
 from django.core.validators import validate_email
 from django.db import connection
 from django.db import transaction
@@ -49,6 +51,7 @@ from store_project.notifications.emails import send_athlete_waiting_email
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
+from store_project.notifications.emails import send_invite_accepted_email
 from store_project.notifications.emails import send_relationship_ended_email
 from store_project.notifications.push import record_push_click
 
@@ -68,6 +71,9 @@ from .billing import access as billing_access
 from .billing import agent_usage_report as usage_report
 from .billing import stripe_gateway as billing_gateway
 from .billing import webhooks as billing_webhooks
+from .claim_session import forget_claim
+from .claim_session import remember_claim
+from .claim_session import session_claim_token
 from .forms import AthleteRecordForm
 from .forms import CoachDisplayNameForm
 from .forms import ContraindicationForm
@@ -461,10 +467,32 @@ class RosterView(TemplateView):
             .exclude(status=Plan.Status.ARCHIVED)
             .values_list("relationship_id", flat=True)
         )
+        # The template the coach wrote for the invite each athlete accepted
+        # (#643) → a one-click "Start <title>" on rows with no program yet. One
+        # query for the whole roster; suspended rows are skipped because
+        # ``template_use`` rejects them.
+        startable = [
+            link.pk
+            for link in links
+            if link.pk not in have_plan and link.pk not in suspended
+        ]
+        start_templates = {}
+        for rel_id, plan_id, title in (
+            Plan.objects.filter(
+                is_template=True,
+                owner=self.request.user,
+                for_invite__accepted_link__in=startable,
+            )
+            .exclude(status=Plan.Status.ARCHIVED)
+            .order_by("pk")
+            .values_list("for_invite__accepted_link_id", "pk", "title")
+        ):
+            start_templates.setdefault(rel_id, {"id": plan_id, "title": title})
         athletes = [
             presenters.roster_athlete(
                 link.athlete,
                 relationship_id=link.pk,
+                start_template=start_templates.get(link.pk),
                 label=link.label,
                 suspended=link.pk in suspended,
                 demo=link.is_demo,
@@ -3974,7 +4002,9 @@ def manifest_webmanifest(request):
 # v8: athlete_session.html hides the "tap Log session" instruction after a
 #     session is already logged (#608/605.4). Navigation responses are cached,
 #     so installed clients need a fresh cache namespace.
-PWA_CACHE_VERSION = "meso-pwa-v8"
+# v9: athlete home leads with the program and shows one prompt at a time
+#     (#641); meso_onboarding.js/meso_push.js coordinate prompt priority.
+PWA_CACHE_VERSION = "meso-pwa-v9"
 
 
 @require_GET
@@ -4165,6 +4195,49 @@ def _notify_coach_athlete_waiting(request, link):
     transaction.on_commit(_send)
 
 
+def _written_template_title(coach, invite):
+    """Title of the first live template ``coach`` wrote for ``invite`` (#643), or ""."""
+    if invite is None:
+        return ""
+    return (
+        Plan.objects.filter(is_template=True, owner=coach, for_invite=invite)
+        .exclude(status=Plan.Status.ARCHIVED)
+        .order_by("pk")
+        .values_list("title", flat=True)
+        .first()
+        or ""
+    )
+
+
+def _notify_coach_invite_accepted(request, link, invite=None):
+    """Email the coach that their invited athlete accepted (#643).
+
+    The non-waiting counterpart of ``_notify_coach_athlete_waiting`` (which
+    already tells the coach in the waiting case — never send both). Sent on
+    commit, best-effort, and never for a sandbox coach or a self/demo link.
+    ``invite`` is the email invite that produced the link (None for a peer
+    invite); when the coach wrote a template for it, the email names it.
+    """
+    coach, athlete, label = link.coach, link.athlete, link.label
+    if link.is_self or link.is_demo or meso_sandbox.is_sandbox(coach):
+        return
+    roster_url = request.build_absolute_uri(reverse("meso:roster"))
+
+    def _send():
+        try:
+            send_invite_accepted_email(
+                athlete=athlete,
+                coach=coach,
+                roster_url=roster_url,
+                athlete_label=label,
+                template_title=_written_template_title(coach, invite),
+            )
+        except Exception:  # mail is best-effort; never fail the acceptance on it
+            logger.exception("Failed to send invite-accepted email to %s", coach.email)
+
+    transaction.on_commit(_send)
+
+
 @login_required
 @require_POST
 def invite_accept(request, token):
@@ -4203,6 +4276,8 @@ def invite_accept(request, token):
             messages.success(request, _waiting_connected_message(link.coach))
             return redirect("meso:athlete_home")
         link.accept()
+        if request.user != link.coach:
+            _notify_coach_invite_accepted(request, link)
     messages.success(request, "Relationship accepted.")
     return redirect("meso:roster")
 
@@ -4669,7 +4744,10 @@ def coach_invite(request):
     def _send():
         try:
             sent = send_coach_invite_email(
-                coach=coach, email=email, accept_url=accept_url
+                coach=coach,
+                email=email,
+                accept_url=accept_url,
+                recipient_name=label,
             )
         except Exception:  # mail is best-effort; never fail the invite on it
             logger.exception("Failed to send coach invite email to %s", email)
@@ -4765,7 +4843,10 @@ def coach_invite_resend(request, token):
     def _send():
         try:
             sent = send_coach_invite_email(
-                coach=coach, email=email, accept_url=accept_url
+                coach=coach,
+                email=email,
+                accept_url=accept_url,
+                recipient_name=invite.label,
             )
         except Exception:  # mail is best-effort; never fail the resend on it
             logger.exception("Failed to resend coach invite email to %s", email)
@@ -4787,6 +4868,80 @@ def coach_invite_resend(request, token):
     return redirect("meso:roster")
 
 
+def _claim_not_actionable(request, invite):
+    """The redirect for a locked invite that can no longer be answered, else None.
+
+    Call under the invite's row lock, with the invite re-read by token.
+    """
+    if not invite.is_pending:
+        messages.info(request, "This invite has already been answered.")
+        return redirect("meso:athlete_home")
+    if invite.is_expired:
+        invite.expire()
+        messages.info(
+            request,
+            "This invite has expired. Ask your coach to resend it.",
+        )
+        return redirect("meso:athlete_home")
+    return None
+
+
+def _accept_claim(request, invite):
+    """Accept the claimed invite as ``request.user`` and return the redirect.
+
+    The one place an invite acceptance completes — the confirm page's POST and
+    the auto-accept after signup/login (#642) both come through here. ``invite``
+    is the caller's unlocked read; the transition runs under the locks below,
+    re-reading by the *submitted token* so a resend that rotated it → 404.
+    """
+    token = invite.token
+    invite_coach_id = invite.coach_id
+    forget_claim(request)
+    with transaction.atomic():
+        # LOCK ORDER (#596) — CoachAthlete has two User parents, so reserve both
+        # in ascending pk before the invite row. A User cascade takes its parent
+        # first and only then deletes the CoachInvite; matching it here removes
+        # the reverse edge.
+        expected_user_ids = {invite_coach_id, request.user.pk}
+        locked_user_ids = set(
+            User.objects.select_for_update(no_key=True)
+            .filter(pk__in=expected_user_ids)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        invite = get_object_or_404(
+            CoachInvite.objects.select_for_update(no_key=True), token=token
+        )
+        if invite.coach_id != invite_coach_id or locked_user_ids != expected_user_ids:
+            raise Http404("Invite participants changed")
+        stale = _claim_not_actionable(request, invite)
+        if stale is not None:
+            return stale
+        # Seat gate (D4): claiming materializes an active link — a billable seat
+        # for the coach. A coach with no seat left still gets the athlete
+        # recorded, as a waiting acceptance (#649): the athlete is told nothing
+        # about the coach's plan; the coach is emailed.
+        waiting = not billing_access.can_add_athlete(invite.coach)
+        try:
+            link = invite.accept(request.user, waiting=waiting)
+        except InvalidTransition as exc:
+            messages.error(request, str(exc))
+            return redirect("meso:roster")
+        track(EventName.INVITE_ACCEPTED, actor=request.user, subject=invite)
+        if link.is_waiting:
+            _notify_coach_athlete_waiting(request, link)
+            messages.success(request, _waiting_connected_message(invite.coach))
+        else:
+            # A successful, non-waiting accept completes HERE (#643: tell the
+            # coach their athlete joined).
+            _notify_coach_invite_accepted(request, link, invite)
+            messages.success(
+                request,
+                f"You're now training with {coach_name(invite.coach)}.",
+            )
+        return redirect("meso:athlete_home")
+
+
 def invite_claim(request, token):
     """An invited athlete follows the emailed claim link.
 
@@ -4795,7 +4950,10 @@ def invite_claim(request, token):
     token state. Allauth carries ``next`` back here. An authenticated GET renders
     a confirm page; POST ``action=accept`` materializes an active
     ``CoachAthlete`` link and lands on the athlete's training home,
-    ``action=decline`` marks the invite declined.
+    ``action=decline`` marks the invite declined. The anonymous landing flags the
+    session with its token (#642): allauth's signup page then prefills and brands
+    itself for the invite, and coming back here authenticated with that flag
+    accepts without a second click (an authenticated GET without it still asks).
     Bearer-token authorized — any authenticated user holding the token may claim
     (no email match; see ``CoachInvite``). An already-answered invite is a friendly
     no-op, never a crash.
@@ -4827,6 +4985,7 @@ def invite_claim(request, token):
     if not request.user.is_authenticated:
         if request.method == "POST" or not invite.is_pending or invite.is_expired:
             return redirect_to_login(request.get_full_path())
+        remember_claim(request, invite)
         return render(
             request,
             "meso/invite_claim.html",
@@ -4841,67 +5000,33 @@ def invite_claim(request, token):
         action = request.POST.get("action")
         if action not in ("accept", "decline"):
             return HttpResponseBadRequest("action must be 'accept' or 'decline'.")
-        invite_coach_id = invite.coach_id
+        if action == "accept":
+            return _accept_claim(request, invite)
         with transaction.atomic():
-            locked_user_ids = None
-            if action == "accept":
-                # LOCK ORDER (#596) — CoachAthlete has two User parents, so
-                # reserve both in ascending pk before the invite row. A User
-                # cascade takes its parent first and only then deletes the
-                # CoachInvite; matching it here removes the reverse edge.
-                expected_user_ids = {invite_coach_id, request.user.pk}
-                locked_user_ids = set(
-                    User.objects.select_for_update(no_key=True)
-                    .filter(pk__in=expected_user_ids)
-                    .order_by("pk")
-                    .values_list("pk", flat=True)
-                )
             # Lock by the *submitted token*, not the pk: a resend that rotated the
             # token out from under this in-flight claim must invalidate the old
             # link (Phase-3 "resend kills the previous token"), so a superseded
-            # token finds no row → 404 rather than accepting on stale authority.
+            # token finds no row → 404 rather than acting on stale authority.
             invite = get_object_or_404(
                 CoachInvite.objects.select_for_update(no_key=True), token=token
             )
-            if action == "accept" and (
-                invite.coach_id != invite_coach_id
-                or locked_user_ids != expected_user_ids
-            ):
-                raise Http404("Invite participants changed")
-            if not invite.is_pending:
-                messages.info(request, "This invite has already been answered.")
-                return redirect("meso:athlete_home")
-            if invite.is_expired:
-                invite.expire()
-                messages.info(
-                    request,
-                    "This invite has expired. Ask your coach to resend it.",
-                )
-                return redirect("meso:athlete_home")
-            if action == "accept":
-                # Seat gate (D4): claiming materializes an active link — a billable
-                # seat for the coach. A coach with no seat left still gets the
-                # athlete recorded, as a waiting acceptance (#649): the athlete is
-                # told nothing about the coach's plan; the coach is emailed.
-                waiting = not billing_access.can_add_athlete(invite.coach)
-                try:
-                    link = invite.accept(request.user, waiting=waiting)
-                except InvalidTransition as exc:
-                    messages.error(request, str(exc))
-                    return redirect("meso:roster")
-                track(EventName.INVITE_ACCEPTED, actor=request.user, subject=invite)
-                if link.is_waiting:
-                    _notify_coach_athlete_waiting(request, link)
-                    messages.success(request, _waiting_connected_message(invite.coach))
-                else:
-                    messages.success(
-                        request,
-                        f"You're now training with {coach_name(invite.coach)}.",
-                    )
-                return redirect("meso:athlete_home")
+            forget_claim(request)
+            stale = _claim_not_actionable(request, invite)
+            if stale is not None:
+                return stale
             invite.decline()
         messages.success(request, "Invite declined.")
         return redirect("meso:athlete_home")
+    # Arrived back from signup/login on the claim page this browser followed
+    # while anonymous (#642): the visitor already chose "join", so accept now
+    # instead of asking again. The flag is only ever set by the anonymous claim
+    # page of this same token, so a crafted link can't force an accept.
+    if (
+        session_claim_token(request) == str(token)
+        and invite.is_claimable
+        and request.user != invite.coach
+    ):
+        return _accept_claim(request, invite)
     # Lazily age out an overdue link on view so the confirm page shows the
     # "expired" state (and the status sticks) rather than offering a dead Accept.
     # The cheap pre-check avoids locking on every GET; the real transition runs
@@ -6667,7 +6792,22 @@ def plan_batch_deliver(request, plan_id):
 @login_required
 @require_POST
 def template_create(request):
-    """Create a blank, scaffolded template in the coach's library."""
+    """Create a blank, scaffolded template and open it in the designer.
+
+    An optional ``invite`` POST field (the roster's "Write it as a template",
+    #643) is the token of one of the coach's pending invites; the template then
+    remembers it (``for_invite``). An unknown, foreign, malformed or no-longer-
+    pending token is ignored — the result is a plain blank template.
+    """
+    try:
+        invite = (
+            CoachInvite.objects.for_coach(request.user)
+            .pending()
+            .filter(token=request.POST.get("invite", ""))
+            .first()
+        )
+    except (ValidationError, ValueError):
+        invite = None
     with transaction.atomic():
         plan = Plan.objects.create(
             owner=request.user,
@@ -6676,6 +6816,7 @@ def template_create(request):
             status=Plan.Status.ACTIVE,
             title="New template",
             unit=_coach_default_unit(request.user),
+            for_invite=invite,
         )
         plan.scaffold()
     return redirect("meso:designer_plan", plan_id=plan.pk)
@@ -7711,6 +7852,22 @@ def billing_start_trial(request):
 # create the coach. See ``docs/meso/billing-plan.md``.
 
 
+_COACH_PLAN_SIGNER = TimestampSigner(salt="meso.become_coach.plan")
+_COACH_PLAN_MAX_AGE = 24 * 60 * 60
+
+
+def _signed_plan(params):
+    """The trial/free plan a ``next`` URL carries, only if our CTA signed it."""
+    plan = params.get("plan")
+    try:
+        signed = _COACH_PLAN_SIGNER.unsign(
+            params.get("plan_sig", ""), max_age=_COACH_PLAN_MAX_AGE
+        )
+    except BadSignature:
+        return None
+    return plan if plan == signed and plan in {"trial", "free"} else None
+
+
 class BecomeCoachView(TemplateView):
     """Public "become a coach" landing — the front door to self-serve signup.
 
@@ -7735,7 +7892,12 @@ class BecomeCoachView(TemplateView):
                 request.session.pop("meso_coach_intent", None)
             return super().get(request, *args, **kwargs)
 
-        intent = request.session.pop("meso_coach_intent", None)
+        # The choice also rides in ``?plan=`` (via ``next``) because allauth's
+        # login() flushes a session that carried another account (#644). A bare
+        # ``?plan=`` from a link does nothing (it would start a trial on a GET);
+        # only the signed one our own CTA minted counts. It wins over the session.
+        session_intent = request.session.pop("meso_coach_intent", None)
+        intent = _signed_plan(request.GET) or session_intent
         if _is_coach(request.user):
             return redirect("meso:roster")
         if intent in {"trial", "free"}:
@@ -7749,10 +7911,16 @@ class BecomeCoachView(TemplateView):
         ctx["free_agent_runs"] = CoachSubscription.FREE_AGENT_ALLOWANCE
         ctx["paid_agent_runs"] = CoachSubscription.PAID_AGENT_ALLOWANCE
         ctx["price_summary"] = presenters.PRICE_SUMMARY
-        ctx["intent"] = self.request.session.get("meso_coach_intent")
-        # allauth returns here after signup/login (?next=), where the visitor —
-        # now authenticated — sees the start-coaching form.
-        ctx["next_url"] = reverse("meso:become_coach")
+        intent = self.request.session.get("meso_coach_intent")
+        ctx["intent"] = intent
+        # allauth returns here after signup/login (?next=); the chosen plan is
+        # carried in the URL so it survives a session flush (#644).
+        next_url = reverse("meso:become_coach")
+        if intent in {"trial", "free"}:
+            next_url += "?" + urlencode(
+                {"plan": intent, "plan_sig": _COACH_PLAN_SIGNER.sign(intent)}
+            )
+        ctx["next_url"] = next_url
         return ctx
 
 

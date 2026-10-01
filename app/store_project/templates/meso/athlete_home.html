@@ -25,117 +25,8 @@
       </div>
     </div>
 
-    {% if push_enabled %}
-      {# Revealed by meso_push.js only when notifications are usable + undecided. #}
-      <button type="button" id="meso-push-cta" class="meso-card meso-card--pad" hidden
-              style="display:flex;align-items:center;gap:12px;width:100%;text-align:left;margin-bottom:14px;cursor:pointer;border:1px solid var(--line);background:var(--surface);">
-        <span style="font-size:18px;">🔔</span>
-        <span style="flex:1;min-width:0;">
-          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Get notified when your coach delivers</span>
-          <span class="meso-row-meta">Turn on notifications so you know the moment a new week is ready.</span>
-        </span>
-        <span class="meso-badge">Enable</span>
-      </button>
-    {% endif %}
-
-    <!-- Install prompt (first-time UX Phase 4): kept hidden; meso_onboarding.js
-         reveals it only when the app is installable and not already installed or
-         dismissed, and swaps in the native button vs the manual iOS steps. -->
-    <div id="meso-install-card" class="meso-card meso-card--pad"
-         style="display:none;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
-      <span style="font-size:18px;line-height:1.3;">📲</span>
-      <span style="flex:1;min-width:0;">
-        <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Install Meso on your phone</span>
-        <span data-install-mode="prompt" style="display:none;">
-          <span class="meso-row-meta" style="display:block;margin:2px 0 9px;">Add it to your home screen for one-tap access and offline logging at the gym.</span>
-          <button type="button" id="meso-install-btn" class="meso-btn meso-btn--primary" style="padding:6px 12px;font-size:13px;">Install</button>
-        </span>
-        <span data-install-mode="ios" style="display:none;">
-          <span class="meso-row-meta" style="display:block;margin-top:2px;">Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>, for one-tap access and offline logging at the gym.</span>
-        </span>
-      </span>
-      <button type="button" data-install-dismiss aria-label="Dismiss install prompt" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
-    </div>
-
-    <!-- Your coaches (N4 Phase 2): invites awaiting you, requests you've sent,
-         and the request-a-coach form. -->
-    <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
-      <p class="meso-eyebrow">Your coaches</p>
-
-      {% for inv in pending.invites %}
-        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
-          <div class="meso-avatar meso-avatar--sm">{{ inv.initials }}</div>
-          <div style="min-width:0;">
-            <div class="meso-row-name">{{ inv.coach }}</div>
-            <div class="meso-row-meta">Invited you to train · {{ inv.when|date:"M j" }}</div>
-          </div>
-          <div class="meso-spacer"></div>
-          <form method="post" action="{% url 'meso:invite_accept' token=inv.token %}" style="margin:0;">
-            {% csrf_token %}
-            <button type="submit" class="meso-btn meso-btn--primary" style="padding:5px 10px;font-size:12px;">Accept</button>
-          </form>
-          <form method="post" action="{% url 'meso:invite_decline' token=inv.token %}" style="margin:0;">
-            {% csrf_token %}
-            <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Decline</button>
-          </form>
-        </div>
-      {% endfor %}
-
-      {% for req in pending.requests %}
-        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
-          <div class="meso-avatar meso-avatar--sm">{{ req.initials }}</div>
-          <div style="min-width:0;">
-            <div class="meso-row-name">{{ req.coach }}</div>
-            <div class="meso-row-meta">Requested {{ req.when|date:"M j" }} · awaiting reply</div>
-          </div>
-          <div class="meso-spacer"></div>
-          <span class="meso-badge"><i></i>Pending</span>
-          <form method="post" action="{% url 'meso:request_withdraw' token=req.token %}" style="margin:0;">
-            {% csrf_token %}
-            <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Withdraw</button>
-          </form>
-        </div>
-      {% endfor %}
-
-      {# Accepted, coach has no seat yet (#649): a calm holding line — never anything about the coach's plan. #}
-      {% for w in pending.waiting %}
-        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
-          <div class="meso-avatar meso-avatar--sm">{{ w.coach|slice:":1"|upper }}</div>
-          <div style="min-width:0;">
-            <div class="meso-row-name">{{ w.coach }}</div>
-            <div class="meso-row-meta">You're connected to {{ w.coach }}. They'll have your program ready soon.</div>
-          </div>
-        </div>
-      {% endfor %}
-
-      <details {% if not pending.invites and not pending.requests %}open{% endif %} style="margin-top:6px;">
-        <summary style="list-style:none;cursor:pointer;font-size:12.5px;font-weight:650;color:var(--accent);">+ Request a coach</summary>
-        <form method="post" action="{% url 'meso:athlete_request_coach' %}" style="display:flex;gap:9px;margin-top:10px;">
-          {% csrf_token %}
-          <input name="email" type="email" required maxlength="254" placeholder="coach@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font-family:inherit;color:var(--ink);padding:8px 10px;outline:none;" />
-          <button type="submit" class="meso-btn meso-btn--primary">Send request</button>
-        </form>
-        <p class="meso-row-meta" style="margin-top:8px;">Enter your coach's email to ask to train with them.</p>
-      </details>
-    </div>
-
-    {% if show_first_log_hint %}
-      <!-- First-log coachmark (first-time UX Phase 4): server-driven (shown only
-           until the athlete's first log lands), so it's one-time + cross-device;
-           meso_onboarding.js persists a manual dismiss across reloads. -->
-      <div class="meso-card meso-card--pad" data-coachmark-key="firstlog-home"
-           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
-        <span style="font-size:18px;line-height:1.3;">👇</span>
-        <span style="flex:1;min-width:0;">
-          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">New here? Log your first workout</span>
-          <span class="meso-row-meta">Tap a session below to open it. Record your sets there, then tap <strong>Log session</strong>.</span>
-        </span>
-        <button type="button" data-coachmark-dismiss aria-label="Dismiss tip" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
-      </div>
-    {% endif %}
-
     {% for plan in plans %}
-      <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+      <div class="meso-card meso-card--pad" data-testid="athlete-program" style="margin-bottom:14px;">
         <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px;flex-wrap:wrap;">
           <span style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">{{ plan.title }}</span>
           {% if plan.block %}<span class="meso-row-meta">{{ plan.block }}</span>{% endif %}
@@ -284,6 +175,132 @@
       </div>
     {% endfor %}
 
+    {# Prompt cards (#641): at most ONE shows, below the program. Each is rendered hidden/eligible and meso_onboarding.js reveals only the highest-priority eligible, undismissed one (data-prompt-priority, lowest number wins). #}
+    <style>[data-prompt-priority][hidden],[data-prompt-priority][data-prompt-suppressed]{display:none !important;}</style>
+    {% if push_enabled %}
+      {# Revealed by meso_push.js only when notifications are usable + undecided. #}
+      <div id="meso-push-prompt" data-prompt-priority="1" data-prompt-dismiss-key="meso-prompt-dismissed-push" hidden
+           style="display:flex;align-items:center;gap:6px;margin-bottom:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);">
+        <button type="button" id="meso-push-cta"
+                style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-align:left;cursor:pointer;border:0;background:transparent;padding:14px;font:inherit;color:inherit;">
+          <span style="font-size:18px;">🔔</span>
+          <span style="flex:1;min-width:0;">
+            <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Get notified when your coach delivers</span>
+            <span class="meso-row-meta">Turn on notifications so you know the moment a new week is ready.</span>
+          </span>
+          <span class="meso-badge">Enable</span>
+        </button>
+        <button type="button" data-prompt-dismiss aria-label="Dismiss notifications prompt" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;margin-right:8px;">&times;</button>
+      </div>
+    {% endif %}
+
+    <!-- Install prompt (first-time UX Phase 4): kept hidden; meso_onboarding.js
+         reveals it only when the app is installable and not already installed or
+         dismissed, and swaps in the native button vs the manual iOS steps. -->
+    <div id="meso-install-card" class="meso-card meso-card--pad" data-prompt-priority="2" data-prompt-dismiss-key="meso-install-dismissed"
+         style="display:none;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
+      <span style="font-size:18px;line-height:1.3;">📲</span>
+      <span style="flex:1;min-width:0;">
+        <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Install Meso on your phone</span>
+        <span data-install-mode="prompt" style="display:none;">
+          <span class="meso-row-meta" style="display:block;margin:2px 0 9px;">Add it to your home screen for one-tap access and offline logging at the gym.</span>
+          <button type="button" id="meso-install-btn" class="meso-btn meso-btn--primary" style="padding:6px 12px;font-size:13px;">Install</button>
+        </span>
+        <span data-install-mode="ios" style="display:none;">
+          <span class="meso-row-meta" style="display:block;margin-top:2px;">Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>, for one-tap access and offline logging at the gym.</span>
+        </span>
+      </span>
+      <button type="button" data-install-dismiss aria-label="Dismiss install prompt" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
+    </div>
+
+    {% if show_first_log_hint %}
+      <!-- First-log coachmark (first-time UX Phase 4): server-driven (shown only
+           until the athlete's first log lands), so it's one-time + cross-device;
+           meso_onboarding.js persists a manual dismiss across reloads. -->
+      <div class="meso-card meso-card--pad" data-coachmark-key="firstlog-home" data-prompt-priority="3" data-prompt-dismiss-key="meso-coachmark-firstlog-home"
+           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
+        <span style="font-size:18px;line-height:1.3;">👇</span>
+        <span style="flex:1;min-width:0;">
+          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">New here? Log your first workout</span>
+          <span class="meso-row-meta">Tap a session above to open it. Record your sets there, then tap <strong>Log session</strong>.</span>
+        </span>
+        <button type="button" data-coachmark-dismiss aria-label="Dismiss tip" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
+      </div>
+    {% endif %}
+
+    <!-- Your coaches (N4 Phase 2): invites awaiting you, requests you've sent,
+         and the request-a-coach form. -->
+    <div class="meso-card meso-card--pad" data-testid="your-coaches" style="margin-bottom:14px;">
+      <p class="meso-eyebrow">Your coaches</p>
+
+      {% for c in pending.coaches %}
+        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
+          <div class="meso-avatar meso-avatar--sm">{{ c.initials }}</div>
+          <div style="min-width:0;">
+            <div class="meso-row-name">{{ c.coach }}</div>
+            <div class="meso-row-meta">Coaching you since {{ c.since|date:"M j" }}</div>
+          </div>
+        </div>
+      {% endfor %}
+
+      {% for inv in pending.invites %}
+        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
+          <div class="meso-avatar meso-avatar--sm">{{ inv.initials }}</div>
+          <div style="min-width:0;">
+            <div class="meso-row-name">{{ inv.coach }}</div>
+            <div class="meso-row-meta">Invited you to train · {{ inv.when|date:"M j" }}</div>
+          </div>
+          <div class="meso-spacer"></div>
+          <form method="post" action="{% url 'meso:invite_accept' token=inv.token %}" style="margin:0;">
+            {% csrf_token %}
+            <button type="submit" class="meso-btn meso-btn--primary" style="padding:5px 10px;font-size:12px;">Accept</button>
+          </form>
+          <form method="post" action="{% url 'meso:invite_decline' token=inv.token %}" style="margin:0;">
+            {% csrf_token %}
+            <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Decline</button>
+          </form>
+        </div>
+      {% endfor %}
+
+      {% for req in pending.requests %}
+        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
+          <div class="meso-avatar meso-avatar--sm">{{ req.initials }}</div>
+          <div style="min-width:0;">
+            <div class="meso-row-name">{{ req.coach }}</div>
+            <div class="meso-row-meta">Requested {{ req.when|date:"M j" }} · awaiting reply</div>
+          </div>
+          <div class="meso-spacer"></div>
+          <span class="meso-badge"><i></i>Pending</span>
+          <form method="post" action="{% url 'meso:request_withdraw' token=req.token %}" style="margin:0;">
+            {% csrf_token %}
+            <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Withdraw</button>
+          </form>
+        </div>
+      {% endfor %}
+
+      {# Accepted, coach has no seat yet (#649): a calm holding line — never anything about the coach's plan. #}
+      {% for w in pending.waiting %}
+        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
+          <div class="meso-avatar meso-avatar--sm">{{ w.coach|slice:":1"|upper }}</div>
+          <div style="min-width:0;">
+            <div class="meso-row-name">{{ w.coach }}</div>
+            <div class="meso-row-meta">You're connected to {{ w.coach }}. They'll have your program ready soon.</div>
+          </div>
+        </div>
+      {% endfor %}
+
+      <details {% if not pending.invites and not pending.requests and not pending.has_coach %}open{% endif %} style="margin-top:6px;">
+        <summary style="list-style:none;cursor:pointer;font-size:12.5px;font-weight:650;color:var(--accent);">+ Request a coach</summary>
+        <form method="post" action="{% url 'meso:athlete_request_coach' %}" style="display:flex;gap:9px;margin-top:10px;">
+          {% csrf_token %}
+          <input name="email" type="email" required maxlength="254" placeholder="coach@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font-family:inherit;color:var(--ink);padding:8px 10px;outline:none;" />
+          <button type="submit" class="meso-btn meso-btn--primary">Send request</button>
+        </form>
+        <p class="meso-row-meta" style="margin-top:8px;">Enter your coach's email to ask to train with them.</p>
+      </details>
+    </div>
+    <!-- /your-coaches -->
+
     {% if on_file %}
       <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
         <p class="meso-eyebrow">What your coach has on file</p>
@@ -323,15 +340,17 @@
     {# Personal records (Phase 4d) — standing bests below the live programs. #}
     {% include "meso/_pr_list.html" %}
 
+    {% if not pending.has_coach %}
     <!-- Self-serve coach signup (S6 Phase 4): the way into the coach surface. -->
-    <a class="meso-card meso-card--pad" href="{% url 'meso:become_coach' %}"
-       style="display:flex;align-items:center;gap:12px;margin-top:14px;text-decoration:none;color:inherit;border:1px solid var(--line);">
-      <span style="font-size:18px;">🏋️</span>
-      <span style="flex:1;min-width:0;">
-        <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Are you a coach?</span>
-        <span class="meso-row-meta">Design programs and coach your own athletes with Meso.</span>
-      </span>
-      <span class="meso-badge">Start &rarr;</span>
-    </a>
+      <a class="meso-card meso-card--pad" href="{% url 'meso:become_coach' %}"
+         style="display:flex;align-items:center;gap:12px;margin-top:14px;text-decoration:none;color:inherit;border:1px solid var(--line);">
+        <span style="font-size:18px;">🏋️</span>
+        <span style="flex:1;min-width:0;">
+          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Are you a coach?</span>
+          <span class="meso-row-meta">Design programs and coach your own athletes with Meso.</span>
+        </span>
+        <span class="meso-badge">Start &rarr;</span>
+      </a>
+    {% endif %}
   </div>
 {% endblock %}

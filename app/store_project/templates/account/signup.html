@@ -6,11 +6,11 @@
 
 {% block head_title %}{% trans "Sign Up" %}{% endblock head_title %}
 
-{% block auth_title %}{% trans "Create your account" %}{% endblock auth_title %}
+{% block auth_title %}{% if claim_invite %}Join {{ claim_coach_name }} on Meso{% else %}{% trans "Create your account" %}{% endif %}{% endblock auth_title %}
 
 {% block auth_description %}
   <p class="auth-card__description text-center">
-    {% trans "Enter your email below to create your account." %}
+    {% if claim_invite %}Create your account to start training with {{ claim_coach_name }}.{% else %}{% trans "Enter your email below to create your account." %}{% endif %}
     <a href="{{ login_url }}">{% trans "Sign in" %}</a>
   </p>
 {% endblock auth_description %}

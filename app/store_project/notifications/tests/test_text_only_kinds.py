@@ -32,6 +32,7 @@ from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_invite_reminder_email
 from store_project.notifications.emails import send_coach_request_email
 from store_project.notifications.emails import send_contact_emails
+from store_project.notifications.emails import send_invite_accepted_email
 from store_project.notifications.emails import send_margin_alert_email
 from store_project.notifications.emails import send_relationship_ended_email
 from store_project.notifications.models import TEXT_ONLY_KINDS
@@ -117,6 +118,12 @@ class TestTextOnlyKindsMatchRealSenders:
         mail.outbox.clear()
 
         send_athlete_waiting_email(
+            athlete=athlete, coach=coach2, roster_url="https://x.test/meso/"
+        )
+        kinds_seen.add(self._check(mail.outbox[0]))
+        mail.outbox.clear()
+
+        send_invite_accepted_email(
             athlete=athlete, coach=coach2, roster_url="https://x.test/meso/"
         )
         kinds_seen.add(self._check(mail.outbox[0]))

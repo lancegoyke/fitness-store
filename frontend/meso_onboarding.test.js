@@ -13,6 +13,7 @@ import {
   isDismissed,
   detectIOS,
   shouldTrackInstall,
+  pickPrompt,
 } from "../app/store_project/static/js/meso_onboarding.js";
 
 const IPHONE_UA =

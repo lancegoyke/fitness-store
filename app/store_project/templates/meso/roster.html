@@ -134,6 +134,20 @@
                 {% endif %}
                 <span class="meso-muted" style="font-size:16px;">›</span>
               </a>
+              {% if a.start_template %}
+                {# A sibling row, not inside the anchor: a form can't nest in a link. #}
+                <div class="meso-row" style="cursor:default;">
+                  <div class="meso-row-main" style="min-width:0;">
+                    <div class="meso-row-meta">{{ a.name }} accepted. You wrote {{ a.start_template.title }} for them.</div>
+                  </div>
+                  <div class="meso-spacer"></div>
+                  <form method="post" action="{% url 'meso:template_use' plan_id=a.start_template.id %}" style="margin:0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="relationship" value="{{ a.relationship_id }}">
+                    <button type="submit" class="meso-btn meso-btn--primary" style="min-height:44px;">Start {{ a.start_template.title }}</button>
+                  </form>
+                </div>
+              {% endif %}
             {% empty %}
               <div class="meso-row" style="color:var(--dim);">
                 {% if active_pending_invites|length == 1 %}No athletes yet — {{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% elif active_pending_invites %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% elif has_history %}No active athletes right now.{% else %}No athletes yet. Invite one to get started.{% endif %}
@@ -275,7 +289,11 @@
               {% else %}
                 {% if active_pending_invites %}
                   <p class="meso-sub" style="margin:0;">{% if active_pending_invites|length == 1 %}{{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% else %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% endif %}</p>
-                  <p class="meso-sub" style="margin:0;">You can write the program now as a template &#8212; start it for them once they accept. <a href="{% url 'meso:template_library' %}" style="color:var(--accent);">Write it as a template</a>.</p>
+                  <form method="post" action="{% url 'meso:template_create' %}" style="margin:0;">
+                    {% csrf_token %}
+                    {% if active_pending_invites|length == 1 %}<input type="hidden" name="invite" value="{{ active_pending_invite.token }}">{% endif %}
+                    <p class="meso-sub" style="margin:0;">You can write the program now as a template &#8212; start it for them once they accept. <button type="submit" style="appearance:none;background:none;border:none;padding:0;font:inherit;color:var(--accent);cursor:pointer;text-decoration:underline;">Write it as a template</button>.</p>
+                  </form>
                   {% if not has_self_link and not is_sandbox %}
                     <form method="post" action="{% url 'meso:roster_add_self' %}" style="margin:0;">
                       {% csrf_token %}

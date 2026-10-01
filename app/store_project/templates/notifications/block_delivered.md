@@ -1,4 +1,4 @@
-{% autoescape off %}Hi {{ athlete_name }},
+{% autoescape off %}Hi{% if greeting_name %} {{ greeting_name }}{% endif %},
 
 {{ coach_name }} just delivered a new block ({{ week_count }} week{{ week_count|pluralize }}) of "{{ plan_title }}" to your training app.
 

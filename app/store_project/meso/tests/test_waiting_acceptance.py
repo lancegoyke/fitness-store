@@ -295,7 +295,9 @@ class TestClaimOverLimit:
         resp = self.claim(client, django_capture_on_commit_callbacks)
         link = CoachAthlete.objects.get(coach=self.coach, athlete=self.athlete)
         assert link.status == ACTIVE
-        assert mail.outbox == []
+        # #643: an active accept tells the coach (the waiting email is the
+        # other case; one or the other, never both).
+        assert [m.subject for m in mail.outbox] == ["Casey Lee accepted your invite."]
         assert "You're now training with Alex Kim." in flashed(resp)
 
     def test_no_email_for_a_sandbox_coach(

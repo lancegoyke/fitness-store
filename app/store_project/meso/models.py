@@ -1475,6 +1475,22 @@ class Plan(models.Model):
         null=True,
         blank=True,
     )
+    # The pending invite a template was written for (#643): "write the program
+    # now, start it once they accept". A hint for the accept email and the
+    # roster's one-click "Start <title>" — the invite holds no program. No DB-
+    # level FK (same call as ``LoggedSet.reclaimed_line``/``Event.actor``): a
+    # constraint would take a KEY SHARE lock on the invite row at every
+    # template insert's COMMIT, against the accept path that locks the invite
+    # (decisions.md § Row-lock order). SET_NULL still runs in Python on delete.
+    for_invite = models.ForeignKey(
+        "CoachInvite",
+        on_delete=models.SET_NULL,
+        db_constraint=False,
+        null=True,
+        blank=True,
+        related_name="written_templates",
+        verbose_name=_("Written for invite"),
+    )
     title = models.CharField(_("Title"), max_length=255)
     # Goals/focus are per-plan (D-b); the athlete's contraindications stay global.
     goal = models.CharField(_("Goal"), max_length=255, blank=True)

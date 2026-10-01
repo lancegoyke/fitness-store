@@ -1,4 +1,6 @@
 import logging
+from email.utils import formataddr
+from email.utils import parseaddr
 
 from django.conf import settings
 from django.core.mail import EmailMessage
@@ -6,6 +8,7 @@ from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 
 from store_project.meso.names import athlete_name
+from store_project.meso.names import clean_name
 from store_project.meso.names import coach_name
 
 from .models import EmailKind
@@ -185,7 +188,39 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
     return sent > 0
 
 
-def send_coach_invite_email(*, coach, email, accept_url) -> bool:
+def first_name(full) -> str:
+    """First whitespace-separated token of a name; ``""`` when there is none."""
+    cleaned = clean_name(full)
+    return cleaned.split(" ", 1)[0] if cleaned else ""
+
+
+def client_email_identity(coach) -> dict:
+    """From + Reply-To kwargs for an email a coach's action sends to a client.
+
+    The envelope address stays ``settings.DEFAULT_FROM_EMAIL``'s (SES verifies
+    it); only the display name changes, to ``"<Coach> via Mastering Fitness"``,
+    and replies go to the coach. ``formataddr`` quotes/encodes the name, and
+    ``clean_name`` collapses newlines and other whitespace, so a hostile display
+    name cannot inject headers. A coach with no email gets no Reply-To.
+    """
+    address = parseaddr(settings.DEFAULT_FROM_EMAIL)[1]
+    # Drop remaining control characters (clean_name only folds whitespace).
+    name = "".join(ch for ch in coach_name(coach) if ch.isprintable())
+    identity = {"from_email": formataddr((f"{name} via Mastering Fitness", address))}
+    identity["reply_to"] = [coach.email] if coach.email else []
+    return identity
+
+
+def _greeting_name(user, label="") -> str:
+    """First name for a "Hi Jordan," greeting; ``""`` unless a real name exists.
+
+    Only the athlete's own name or the coach's label count -- never the email
+    stem ``athlete_name`` falls back to.
+    """
+    return first_name(getattr(user, "name", "") or label)
+
+
+def send_coach_invite_email(*, coach, email, accept_url, recipient_name="") -> bool:
     """Email an athlete a tokened link to claim a coach's training invite.
 
     Meso N4 (athlete onboarding): a coach invites a person by email; this sends
@@ -197,6 +232,8 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
         coach: the inviting ``User`` (for the message's "from" name).
         email: the invited address (the recipient).
         accept_url: absolute URL of the claim page (``/meso/claim/<token>/``).
+        recipient_name: the name the coach typed for the invitee (``CoachInvite.label``);
+            only its first name is used, in the greeting. Empty greets "Hi,".
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because there is no
@@ -210,6 +247,7 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
         return False
     context = {
         "coach_name": coach_name(coach),
+        "greeting_name": first_name(recipient_name),
         "accept_url": accept_url,
     }
     subject = render_to_string(
@@ -220,8 +258,8 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
     message = EmailMultiAlternatives(
         subject=subject,
         body=msg_plain,
-        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
         to=[email],
+        **client_email_identity(coach),
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.COACH_INVITE)
@@ -229,7 +267,9 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
     return sent > 0
 
 
-def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
+def send_coach_invite_reminder_email(
+    *, coach, email, accept_url, recipient_name=""
+) -> bool:
     """Remind an athlete that a coach's claim link is about to expire.
 
     Meso N4 Phase 4 (invite lifecycle): a pending ``CoachInvite`` nears its TTL
@@ -241,6 +281,8 @@ def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
         coach: the inviting ``User`` (for the message's "from" name).
         email: the invited address (the recipient).
         accept_url: absolute URL of the claim page (``/meso/claim/<token>/``).
+        recipient_name: the name the coach typed for the invitee (``CoachInvite.label``);
+            only its first name is used, in the greeting. Empty greets "Hi,".
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because there is no
@@ -254,6 +296,7 @@ def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
         return False
     context = {
         "coach_name": coach_name(coach),
+        "greeting_name": first_name(recipient_name),
         "accept_url": accept_url,
     }
     subject = render_to_string(
@@ -264,8 +307,8 @@ def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
     message = EmailMultiAlternatives(
         subject=subject,
         body=msg_plain,
-        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
         to=[email],
+        **client_email_identity(coach),
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.INVITE_REMINDER)
@@ -350,6 +393,43 @@ def send_athlete_waiting_email(*, athlete, coach, roster_url, athlete_label="") 
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.ATHLETE_WAITING)
+    sent = message.send(fail_silently=False)
+    return sent > 0
+
+
+def send_invite_accepted_email(
+    *, athlete, coach, roster_url, athlete_label="", template_title=""
+) -> bool:
+    """Email a coach that the athlete they invited accepted (#643).
+
+    ``template_title`` is the program the coach wrote ahead of the accept (see
+    ``Plan.for_invite``); when given, the email says it is ready to start. Goes
+    TO the coach, so it uses the plain default From with no Reply-To.
+
+    Returns ``True`` if sent, ``False`` if skipped (no email on file or the
+    backend accepted no recipients). Raises a mail backend exception; callers
+    treat this as best-effort.
+    """
+    if not coach.email:
+        return False
+    context = {
+        "athlete_name": athlete_name(athlete, athlete_label),
+        "template_title": template_title,
+        "roster_url": roster_url,
+    }
+    subject = render_to_string(
+        "notifications/invite_accepted_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/invite_accepted.md", context)
+    msg_html = render_to_string("notifications/invite_accepted.html", context)
+    message = EmailMultiAlternatives(
+        subject=subject,
+        body=msg_plain,
+        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
+        to=[coach.email],
+    )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.INVITE_ACCEPTED)
     sent = message.send(fail_silently=False)
     return sent > 0
 
@@ -461,6 +541,7 @@ def send_block_delivered_email(
         return False
     context = {
         "athlete_name": athlete_name(athlete, athlete_label),
+        "greeting_name": _greeting_name(athlete, athlete_label),
         "coach_name": coach_name(coach),
         "plan_title": plan.title,
         "week_count": week_count,
@@ -481,9 +562,9 @@ def send_block_delivered_email(
     message = EmailMultiAlternatives(
         subject=subject,
         body=msg_plain,
-        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
         to=[athlete.email],
         headers=headers,
+        **client_email_identity(coach),
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.BLOCK_DELIVERED)
@@ -513,6 +594,7 @@ def send_relationship_ended_email(
         return False
     context = {
         "athlete_name": athlete_name(athlete, athlete_label),
+        "greeting_name": _greeting_name(athlete, athlete_label),
         "coach_name": coach_name(coach),
         "home_url": home_url,
         "unsubscribe_url": unsubscribe_url,
@@ -529,9 +611,9 @@ def send_relationship_ended_email(
     message = EmailMultiAlternatives(
         subject=subject,
         body=msg_plain,
-        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
         to=[athlete.email],
         headers=headers,
+        **client_email_identity(coach),
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.RELATIONSHIP_ENDED)

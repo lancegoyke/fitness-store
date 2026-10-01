@@ -76,6 +76,20 @@
     return !!e.standalone && !e.tracked;
   }
 
+  // Pick the ONE prompt card to show (#641). `candidates`: [{ priority,
+  // eligible, dismissed }]. Returns the index of the lowest-priority-number
+  // candidate that is eligible and not dismissed, or -1 when none qualifies.
+  function pickPrompt(candidates) {
+    let best = -1;
+    const list = candidates || [];
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!c || !c.eligible || c.dismissed) continue;
+      if (best === -1 || c.priority < list[best].priority) best = i;
+    }
+    return best;
+  }
+
   // ---- DOM wiring (browser only) ----
 
   const INSTALL_DISMISS_KEY = "meso-install-dismissed";
@@ -119,9 +133,58 @@
         btn.addEventListener("click", function () {
           setDismissed(storeKey);
           hide(el);
+          promptsLocked = true;
         });
       }
     }
+  }
+
+  // Prompt coordinator (#641): the home renders every candidate prompt card
+  // (push opt-in = 1, install = 2, first-log tip = 3) below the program, each
+  // carrying data-prompt-priority + data-prompt-dismiss-key. Each card's own
+  // logic decides whether it is *eligible* (push: meso_push.js clears
+  // `hidden`; install: inline display; tip: server-rendered). This shows only
+  // the best eligible, undismissed one and tags the rest data-prompt-suppressed
+  // (CSS in athlete_home.html hides them). A dismissal never promotes the next
+  // card in the same page load — it shows on a later one (`promptsLocked`).
+  let promptsLocked = false;
+  function initPrompts(doc) {
+    const els = doc.querySelectorAll("[data-prompt-priority]");
+    if (!els.length) return;
+    function coordinate() {
+      if (promptsLocked) return;
+      const list = [];
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        list.push({
+          priority: Number(el.dataset.promptPriority),
+          eligible: !el.hidden && el.style.display !== "none",
+          dismissed: isDismissed(el.dataset.promptDismissKey || ""),
+        });
+      }
+      const winner = pickPrompt(list);
+      for (let i = 0; i < els.length; i++) {
+        if (i === winner) els[i].removeAttribute("data-prompt-suppressed");
+        else els[i].setAttribute("data-prompt-suppressed", "");
+      }
+    }
+    // Dismiss controls: push's is wired here (install/coachmark wire theirs).
+    const pushDismiss = doc.querySelector("#meso-push-prompt [data-prompt-dismiss]");
+    if (pushDismiss) {
+      pushDismiss.addEventListener("click", function () {
+        const box = pushDismiss.closest("[data-prompt-priority]");
+        setDismissed(box.dataset.promptDismissKey);
+        hide(box);
+        promptsLocked = true;
+      });
+    }
+    root.addEventListener("meso:prompts-changed", coordinate);
+    root.addEventListener("meso:installable", function () {
+      // initInstallCard's own listener was registered first, so it has already
+      // re-rendered by the time this runs.
+      coordinate();
+    });
+    coordinate();
   }
 
   // Snapshot the browser's install situation for installPromptState().
@@ -191,6 +254,7 @@
       dismissBtn.addEventListener("click", function () {
         setDismissed(INSTALL_DISMISS_KEY);
         hide(card);
+        promptsLocked = true;
       });
     }
 
@@ -271,6 +335,7 @@
     if (!doc) return;
     initCoachmarks(doc);
     initInstallCard(doc);
+    initPrompts(doc);
     initInstallTracking(doc);
   }
 
@@ -289,6 +354,7 @@
       isDismissed,
       detectIOS,
       shouldTrackInstall,
+      pickPrompt,
     };
   }
 })(typeof window !== "undefined" ? window : this);
