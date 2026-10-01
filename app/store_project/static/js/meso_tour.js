@@ -139,8 +139,16 @@
   // #441 P1-1: the sandbox-only "load everything" skip must never render for
   // a real (self-variant) coach — it would drop 5 fake demo athletes onto
   // their live roster. Hidden whenever the variant isn't explicitly sandbox.
+  //
+  // #650: the public sandbox now arrives fully loaded, so there's nothing left
+  // to "load everything" — the button also hides once every data step reads
+  // `loaded` (it reappears if the coach removes the demo data).
   function shouldShowSkipLoad(config) {
-    return !!config && config.variant === "sandbox";
+    if (!config || config.variant !== "sandbox") return false;
+    var steps = Array.isArray(config.steps) ? config.steps : [];
+    return steps.some(function (step) {
+      return !!step.segment && !step.loaded;
+    });
   }
 
   // #441 P1-3: show "Take me there" only when the browser isn't already on

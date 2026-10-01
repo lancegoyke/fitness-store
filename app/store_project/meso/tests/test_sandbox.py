@@ -158,13 +158,17 @@ class TestCreateSandbox:
         user = sandbox.create_sandbox(source_ip="203.0.113.9")
         assert SandboxSession.objects.get(user=user).source_ip == "203.0.113.9"
 
-    def test_starts_with_an_empty_workspace(self):
-        """The empty-start flip (guided-tour Phase 2, #430) — no eager load_demo."""
+    def test_starts_with_a_populated_workspace(self):
+        """#650: the public demo lands populated — the full ``load_demo`` state."""
         user = sandbox.create_sandbox()
-        assert demo.has_demo(user) is False
+        assert demo.has_athletes(user) is True
+        assert demo.has_program(user) is True
+        assert demo.has_delivery(user) is True
+        assert demo.has_log(user) is True
+        assert len(demo._demo_athletes(user)) == 5
 
     def test_arms_the_guided_tour_at_step_zero(self):
-        """The tour populates the workspace instead of an eager load (#430 Phase 2)."""
+        """The tour is still armed — it narrates the loaded workspace (#650)."""
         user = sandbox.create_sandbox()
         assert CoachProfile.objects.get(user=user).tour_state == {
             "step": 0,
@@ -195,17 +199,12 @@ class TestCreateSandbox:
 def _sandbox_coach():
     """A sandbox coach for guard/view tests below.
 
-    ``create_sandbox`` itself starts empty (#430 Phase 2 — the guided tour
-    populates it step by step); the tests below are about guard/UI behavior
-    *on top of* a populated demo workspace (Maya's plan, ...), not
-    about the empty-start/tour behavior itself, so this loads the full demo
-    explicitly (mirroring the pre-Phase-2 fixture these tests were written
-    against) and marks the tour complete — exactly what the real ``tour_skip``
-    endpoint does — so these tests' rendered pages don't also carry an active
-    tour mount alongside whatever they're actually asserting on.
+    ``create_sandbox`` already loads the full demo (#650); this marks the
+    tour complete — exactly what the real ``tour_skip`` endpoint does — so
+    these tests' rendered pages don't also carry an active tour mount
+    alongside whatever they're actually asserting on.
     """
     coach = sandbox.create_sandbox()
-    demo.load_demo(coach)
     tour.complete(CoachProfile.objects.get(user=coach))
     return coach
 
@@ -216,7 +215,9 @@ def _sandbox_coach():
 
 
 class TestSandboxEnterView:
-    def test_anonymous_visitor_gets_an_empty_sandbox_with_an_active_tour(self, client):
+    def test_anonymous_visitor_gets_a_populated_sandbox_with_an_active_tour(
+        self, client
+    ):
         resp = client.get(reverse("meso:sandbox_enter"))
         assert resp.status_code == 302
         assert resp.url == reverse("meso:roster")
@@ -227,9 +228,8 @@ class TestSandboxEnterView:
         user = User.objects.get(pk=client.session["_auth_user_id"])
         assert CoachProfile.objects.filter(user=user).exists()
         assert SandboxSession.objects.filter(user=user).exists()
-        # Empty-start flip (#430 Phase 2): no eager demo.load_demo — the
-        # guided tour (armed at step 0) populates the workspace instead.
-        assert demo.has_demo(user) is False
+        # #650: populated up front; the guided tour (armed at step 0) narrates it.
+        assert demo.has_demo(user) is True
         assert CoachProfile.objects.get(user=user).tour_state == {
             "step": 0,
             "status": "active",
@@ -239,6 +239,32 @@ class TestSandboxEnterView:
         resp = client.get(reverse("meso:sandbox_enter"), follow=True)
         assert resp.status_code == 200
         assert b"Roster" in resp.content
+
+    def test_entry_lands_on_a_populated_roster(self, client):
+        """#650: "a populated workspace" — five athletes, not "No athletes yet"."""
+        resp = client.get(reverse("meso:sandbox_enter"), follow=True)
+        body = resp.content.decode()
+        assert "Maya" in body
+        assert "No athletes yet" not in body
+
+    def test_entry_tour_config_offers_nothing_that_already_exists(self, client):
+        """#650: every data step reads loaded; the profile step is not locked."""
+        client.get(reverse("meso:sandbox_enter"))
+        user = User.objects.get(pk=client.session["_auth_user_id"])
+        config = tour.build_config(user, "sandbox")
+        by_key = {s["key"]: s for s in config["steps"]}
+        with_segment = [s for s in config["steps"] if s["segment"]]
+        assert {s["key"] for s in with_segment} == {
+            "welcome",
+            "designer",
+            "deliver",
+            "results",
+        }
+        for step in with_segment:
+            assert step["loaded"] is True, step["key"]
+        spec = next(s for s in tour.STEPS if s["key"] == "profile")["sandbox"]
+        assert by_key["profile"]["body"] == spec["body"]
+        assert by_key["profile"]["body"] != spec["body_locked"]
 
     def test_entry_shows_a_single_live_demo_message(self, client):
         """Landing on the roster shows the "live demo" message exactly once.
@@ -274,10 +300,7 @@ class TestSandboxEnterView:
 
         user_a = User.objects.get(pk=user_a_id)
         user_b = User.objects.get(pk=user_b_id)
-        # Loading the same segment for both proves rows never collide even
-        # though both sandboxes start empty (#430 Phase 2).
-        demo.load_athletes(user_a)
-        demo.load_athletes(user_b)
+        # Both sandboxes arrive populated (#650); their demo rows never collide.
         a_athletes = {u.pk for u in demo._demo_athletes(user_a)}
         b_athletes = {u.pk for u in demo._demo_athletes(user_b)}
         assert a_athletes.isdisjoint(b_athletes)
@@ -891,11 +914,9 @@ def _expire(user, hours_ago=1):
 class TestExpireSandboxes:
     def test_expired_sandbox_is_fully_reaped_including_demo_athletes(self):
         user = sandbox.create_sandbox()
-        # A fresh sandbox starts empty (#430 Phase 2) — load the ``athletes``
-        # segment explicitly so this test still covers the leak trap below
-        # (the demo athletes are separate User rows the coach delete doesn't
-        # cascade to).
-        demo.load_athletes(user)
+        # A fresh sandbox arrives populated (#650), so this covers the leak
+        # trap below with no explicit load (the demo athletes are separate
+        # User rows the coach delete doesn't cascade to).
         athlete_ids = [u.pk for u in demo._demo_athletes(user)]
         assert len(athlete_ids) == 5
         _expire(user)
@@ -910,6 +931,22 @@ class TestExpireSandboxes:
         assert SandboxSession.objects.count() == 0
         assert CoachProfile.objects.filter(user_id=user.pk).count() == 0
 
+    def test_fresh_sandbox_leaves_no_orphan_demo_rows_after_reap(self):
+        """#650: a just-created (auto-populated) sandbox is reaped completely."""
+        from store_project.meso.models import CoachAthlete
+        from store_project.meso.models import SessionLog
+
+        before = set(User.objects.values_list("pk", flat=True))
+        user = sandbox.create_sandbox()
+        assert SessionLog.objects.exists()
+        _expire(user)
+
+        assert sandbox.expire_sandboxes() == 1
+
+        assert set(User.objects.values_list("pk", flat=True)) == before
+        assert CoachAthlete.objects.count() == 0
+        assert SessionLog.objects.count() == 0
+
     def test_unexpired_sandbox_is_untouched(self):
         user = sandbox.create_sandbox()  # expires 48h out
 
@@ -918,9 +955,8 @@ class TestExpireSandboxes:
         assert reaped == 0
         assert User.objects.filter(pk=user.pk).exists()
         assert SandboxSession.objects.filter(user=user).exists()
-        # Empty-start (#430 Phase 2): nothing to preserve here but the row +
-        # its (untouched) tour progress.
-        assert demo.has_demo(user) is False
+        # Demo data and tour progress are untouched.
+        assert demo.has_demo(user) is True
         assert CoachProfile.objects.get(user=user).tour_state["status"] == "active"
 
     def test_regular_coach_with_demo_data_is_never_touched(self):

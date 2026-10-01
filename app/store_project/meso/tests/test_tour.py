@@ -303,8 +303,11 @@ class TestBuildConfigGotoReady:
     def _goto(self, config, key):
         return next(s for s in config["steps"] if s["key"] == key)["goto_ready"]
 
-    def test_sandbox_fresh_gates_the_data_dependent_gotos(self):
+    def test_sandbox_cleared_gates_the_data_dependent_gotos(self):
+        # A fresh sandbox arrives populated (#650); gating shows once the coach
+        # removes the demo data.
         user = sandbox.create_sandbox()
+        demo.clear_demo(user)
         config = tour.build_config(user, "sandbox")
         assert self._goto(config, "designer") is False
         assert self._goto(config, "deliver") is False
@@ -312,8 +315,7 @@ class TestBuildConfigGotoReady:
         assert self._goto(config, "agent") is False
 
     def test_sandbox_full_demo_opens_the_gotos(self):
-        user = sandbox.create_sandbox()
-        demo.load_demo(user)
+        user = sandbox.create_sandbox()  # populated on creation (#650)
         config = tour.build_config(user, "sandbox")
         assert self._goto(config, "designer") is True
         assert self._goto(config, "deliver") is True
@@ -540,10 +542,11 @@ class TestBuildConfigSelfVariant:
 # ---------------------------------------------------------------------------
 
 
-class TestSandboxEmptyStart:
-    def test_fresh_sandbox_has_no_demo_data(self):
+class TestSandboxPopulatedStart:
+    def test_fresh_sandbox_has_the_full_demo_data(self):
         user = sandbox.create_sandbox()
-        assert demo.has_demo(user) is False
+        assert demo.has_demo(user) is True
+        assert demo.has_log(user) is True
 
     def test_fresh_sandbox_tour_is_active_at_step_zero(self):
         user = sandbox.create_sandbox()
@@ -1347,6 +1350,7 @@ class TestSandboxFallbackCardCopy:
 
     def test_sandbox_hides_the_invite_copy(self, client):
         user = sandbox.create_sandbox()
+        demo.clear_demo(user)  # the fallback card only shows on an empty roster
         tour.dismiss(CoachProfile.objects.get(user=user))
         client.force_login(user)
 

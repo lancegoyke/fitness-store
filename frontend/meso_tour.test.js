@@ -378,7 +378,25 @@ describe("scrollBehaviorFor", () => {
 // variant; the self variant never offers a "load everything" escape hatch.
 describe("shouldShowSkipLoad", () => {
   it("shows the load-everything skip in the sandbox variant", () => {
-    expect(shouldShowSkipLoad({ variant: "sandbox" })).toBe(true);
+    expect(
+      shouldShowSkipLoad({
+        variant: "sandbox",
+        steps: [{ segment: "athletes", loaded: false }],
+      }),
+    ).toBe(true);
+  });
+
+  it("hides it once every sandbox data step is loaded (#650 populated demo)", () => {
+    expect(
+      shouldShowSkipLoad({
+        variant: "sandbox",
+        steps: [
+          { segment: "athletes", loaded: true },
+          { segment: "program", loaded: true },
+          { key: "finish", signup_gate: true },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("hides it in the self variant (no fake data for real coaches)", () => {

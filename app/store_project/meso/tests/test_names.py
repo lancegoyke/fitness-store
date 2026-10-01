@@ -1,5 +1,7 @@
 """Behavior coverage for Meso's account names and relationship labels (#602)."""
 
+import re
+
 import pytest
 from django.core import mail
 from django.urls import reverse
@@ -411,3 +413,49 @@ class TestMesoSettings:
         )
         assert response.status_code == 404
         assert not CoachProfile.objects.filter(user=athlete).exists()
+
+
+class TestSettingsSingleNameField:
+    """#648: one visible name field; the coaching display name is a disclosure."""
+
+    def _body(self, client, **profile):
+        coach = UserFactory(name="Maya Okonkwo")
+        CoachProfile.objects.create(user=coach, **profile)
+        client.force_login(coach)
+        return client.get(reverse("meso:settings")).content.decode()
+
+    def test_single_labelled_name_and_closed_disclosure(self, client):
+        body = self._body(client)
+        assert body.count("Your name (shown to your athletes)") == 1
+        assert "Use a different name for coaching" in body
+        details = re.search(r"<details\b([^>]*)>(.*?)</details>", body, re.S)
+        assert details is not None
+        assert " open" not in details.group(1)
+        assert 'name="display_name"' in details.group(2)
+        assert 'name="display_name"' not in body.replace(details.group(0), "")
+
+    def test_disclosure_open_when_display_name_set(self, client):
+        body = self._body(client, display_name="Coach Maya")
+        details = re.search(r"<details\b([^>]*)>", body)
+        assert details is not None
+        assert "open" in details.group(1)
+
+    def test_disclosure_open_on_invalid_post_with_display_name(self, client):
+        coach = UserFactory(name="Maya")
+        CoachProfile.objects.create(user=coach)
+        client.force_login(coach)
+        body = client.post(
+            reverse("meso:settings"),
+            {"name": "Maya", "display_name": "Typed Name", "unit": "bogus"},
+        ).content.decode()
+        details = re.search(r"<details\b([^>]*)>", body)
+        assert details is not None
+        assert "open" in details.group(1)
+
+    def test_non_coach_has_no_details(self, client):
+        athlete = UserFactory()
+        CoachAthleteFactory(coach=UserFactory(), athlete=athlete)
+        client.force_login(athlete)
+        body = client.get(reverse("meso:settings")).content.decode()
+        assert "<details" not in body
+        assert "Use a different name for coaching" not in body

@@ -38,7 +38,10 @@ class TestPhoneFallbackForAClientPlan:
             "meso:athlete", kwargs={"pk": plan.athlete.pk}
         )
         deliver_url = reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
-        assert fallback["deliver_url"] == f"{deliver_url}?week={session.week_id}"
+        assert (
+            fallback["deliver_url"]
+            == f"{deliver_url}?week={session.week_id}&from=designer"
+        )
 
     def test_deliver_url_targets_the_default_blocks_first_live_week(self, client):
         # A second, later week on the same block: the fallback still targets
@@ -49,7 +52,10 @@ class TestPhoneFallbackForAClientPlan:
         resp = _get_designer(client, plan)
         fallback = resp.context["phone_fallback"]
         deliver_url = reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
-        assert fallback["deliver_url"] == f"{deliver_url}?week={session.week_id}"
+        assert (
+            fallback["deliver_url"]
+            == f"{deliver_url}?week={session.week_id}&from=designer"
+        )
 
     def test_no_deliver_url_when_the_default_block_has_no_live_week(self, client):
         # Soft-deleted, like a real removed week (Week.deleted_at) — the
@@ -70,7 +76,7 @@ class TestPhoneFallbackForAClientPlan:
         assert 'data-testid="designer-fallback"' in body
         assert "Open this on a larger screen to edit the program." in body
         deliver_url = reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
-        assert f'href="{deliver_url}?week={session.week_id}"' in body
+        assert f'href="{deliver_url}?week={session.week_id}&amp;from=designer"' in body
         assert (
             f'href="{reverse("meso:athlete", kwargs={"pk": plan.athlete.pk})}"' in body
         )

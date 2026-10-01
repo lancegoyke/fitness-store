@@ -387,9 +387,8 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         weeks = (grid_data or {}).get("weeks") or []
         if weeks:
             deliver_url = reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
-            fallback["deliver_url"] = (
-                f"{deliver_url}?{urlencode({'week': weeks[0]['id']})}"
-            )
+            query = urlencode({"week": weeks[0]["id"], "from": "designer"})
+            fallback["deliver_url"] = f"{deliver_url}?{query}"
         return fallback
 
 
@@ -623,6 +622,16 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
                 }
             )
             ctx["coach_name"] = coach_name(self.request.user)
+            # The coaching display name sits behind a disclosure (#648); open it
+            # when a name is already set or the submitted one is non-empty/invalid.
+            bound = ctx["coach_form"]
+            if bound.is_bound:
+                ctx["display_name_open"] = bool(
+                    bound.data.get("display_name", "").strip()
+                    or bound.errors.get("display_name")
+                )
+            else:
+                ctx["display_name_open"] = bool(getattr(profile, "display_name", ""))
         return ctx
 
     def _save_name(self, request, form):
@@ -1374,8 +1383,8 @@ def _sandbox_rate_limited(ip):
 def sandbox_enter(request):
     """Public, no-signup entry into a throwaway coach sandbox (issue #389, S1).
 
-    An anonymous visitor gets a fresh, populated sandbox coach (``sandbox.
-    create_sandbox``) and is logged in as it — every existing login-gated view,
+    An anonymous visitor gets a fresh sandbox coach, already populated with
+    the full demo workspace (``sandbox.create_sandbox``, #650), and is logged in as it — every existing login-gated view,
     CSRF token, and coach-scoping query then just works, no special-casing
     needed. An already-authenticated visitor (including one revisiting this URL
     mid-visit) is simply routed to the roster — the session cookie is the
@@ -8093,6 +8102,14 @@ class DeliverView(LoginRequiredMixin, TemplateView):
         if plan is None:
             raise Http404("Unknown plan")
         ctx["plan_id"] = plan.pk
+        # Back link: only the literal ``from=designer`` is honoured (never a
+        # user-supplied URL); anything else keeps the review default.
+        if self.request.GET.get("from") == "designer":
+            ctx["back_url"] = reverse("meso:designer_plan", kwargs={"plan_id": plan.pk})
+            ctx["back_label"] = "← Back to designer"
+        else:
+            ctx["back_url"] = reverse("meso:review")
+            ctx["back_label"] = "← Back to changes"
         ctx.update(presenters.deliver_screen(plan, week=self._target_week(plan)))
         # Batch-deliver (2c, parity plan §3.1): the coach's OTHER deliverable
         # clients, offered as "send each an independent copy" checkboxes.
