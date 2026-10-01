@@ -1,4 +1,5 @@
 {% extends "meso/_meso_base.html" %}
+{% load static %}
 
 {% block title %}Settings · Meso{% endblock %}
 
@@ -17,44 +18,47 @@
     </div>
 
     <div style="display:flex;flex-direction:column;gap:14px;max-width:680px;">
-      <section class="meso-card meso-card--pad">
-        <p class="meso-eyebrow">Your name</p>
-        <form method="post" style="display:flex;flex-direction:column;gap:9px;">
-          {% csrf_token %}
-          <input type="hidden" name="section" value="name" />
-          <label for="{{ name_form.name.id_for_label }}" class="meso-row-name">Your name</label>
-          {{ name_form.name }}
-          {{ name_form.name.errors }}
-          <div><button type="submit" class="meso-btn meso-btn--primary">Save name</button></div>
-        </form>
-        <p class="meso-sub" style="margin:12px 0 0;"><a href="{% url 'users:profile' %}" style="color:var(--accent);">Email, password and sign-in</a></p>
-      </section>
-
-      {% if is_coach %}
+      {# One form, one Save (#646): the name and coaching cards are both inside it. #}
+      <form method="post" data-dirty-guard style="display:flex;flex-direction:column;gap:14px;">
+        {% csrf_token %}
         <section class="meso-card meso-card--pad">
-          <p class="meso-eyebrow">Coaching</p>
-          <form method="post" style="display:flex;flex-direction:column;gap:9px;">
-            {% csrf_token %}
-            <input type="hidden" name="section" value="coaching" />
-            <label for="{{ coach_form.display_name.id_for_label }}" class="meso-row-name">Display name</label>
-            {{ coach_form.display_name }}
-            {{ coach_form.display_name.errors }}
-            <p class="meso-sub" style="margin:0;">How athletes see you. Leave blank to use your account name.</p>
-            <label for="{{ coach_form.programming_style.id_for_label }}" class="meso-row-name">Programming style</label>
-            {{ coach_form.programming_style }}
-            {{ coach_form.programming_style.errors }}
-            <p class="meso-sub" style="margin:0;">Up to 12 comma-separated tags, each 40 characters or fewer.</p>
-            <label for="{{ coach_form.avoid_rules.id_for_label }}" class="meso-row-name">Avoid rules</label>
-            {{ coach_form.avoid_rules }}
-            {{ coach_form.avoid_rules.errors }}
-            <label for="{{ coach_form.unit.id_for_label }}" class="meso-row-name">Default load unit</label>
-            {{ coach_form.unit }}
-            {{ coach_form.unit.errors }}
-            <div><button type="submit" class="meso-btn meso-btn--primary">Save coaching settings</button></div>
-          </form>
-          <p class="meso-sub" style="margin:12px 0 0;">Athletes see you as: <strong>{{ coach_name }}</strong></p>
+          <p class="meso-eyebrow">Your name</p>
+          <div style="display:flex;flex-direction:column;gap:9px;">
+            <label for="{{ name_form.name.id_for_label }}" class="meso-row-name">Your name</label>
+            {{ name_form.name }}
+            {{ name_form.name.errors }}
+          </div>
+          <p class="meso-sub" style="margin:12px 0 0;"><a href="{% url 'users:profile' %}" style="color:var(--accent);">Email, password and sign-in</a></p>
         </section>
-      {% endif %}
+
+        {% if is_coach %}
+          <section class="meso-card meso-card--pad">
+            <p class="meso-eyebrow">Coaching</p>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <label for="{{ coach_form.display_name.id_for_label }}" class="meso-row-name">Display name</label>
+              {{ coach_form.display_name }}
+              {{ coach_form.display_name.errors }}
+              <p class="meso-sub" style="margin:0;">How athletes see you. Leave blank to use your account name.</p>
+              <label for="{{ coach_form.programming_style.id_for_label }}" class="meso-row-name">Programming style</label>
+              {{ coach_form.programming_style }}
+              {{ coach_form.programming_style.errors }}
+              <p class="meso-sub" style="margin:0;">Up to 12 comma-separated tags, each 40 characters or fewer.</p>
+              <label for="{{ coach_form.avoid_rules.id_for_label }}" class="meso-row-name">Avoid rules</label>
+              {{ coach_form.avoid_rules }}
+              {{ coach_form.avoid_rules.errors }}
+              <label for="{{ coach_form.unit.id_for_label }}" class="meso-row-name">Default load unit</label>
+              {{ coach_form.unit }}
+              {{ coach_form.unit.errors }}
+            </div>
+            <p class="meso-sub" style="margin:12px 0 0;">Athletes see you as: <strong>{{ coach_name }}</strong></p>
+          </section>
+        {% endif %}
+        <div><button type="submit" class="meso-btn meso-btn--primary">Save settings</button></div>
+      </form>
     </div>
   </div>
+{% endblock %}
+
+{% block scripts %}
+  <script defer src="{% static 'js/meso_dirty_guard.js' %}"></script>
 {% endblock %}

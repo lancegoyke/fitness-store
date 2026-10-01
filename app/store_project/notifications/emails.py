@@ -319,6 +319,41 @@ def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
     return sent > 0
 
 
+def send_athlete_waiting_email(*, athlete, coach, roster_url, athlete_label="") -> bool:
+    """Email a coach that an athlete accepted but there is no seat for them yet.
+
+    #649: a free coach at the athlete cap can't activate another athlete, so the
+    acceptance is parked (``accepted_waiting``). This tells the coach, with one
+    link to the roster where Start free trial / Subscribe live. Nothing is ever
+    sent to the athlete about it.
+
+    Returns ``True`` if sent, ``False`` if skipped (no email on file or the
+    backend accepted no recipients). Raises a mail backend exception; callers
+    treat this as best-effort.
+    """
+    if not coach.email:
+        return False
+    context = {
+        "athlete_name": athlete_name(athlete, athlete_label),
+        "roster_url": roster_url,
+    }
+    subject = render_to_string(
+        "notifications/athlete_waiting_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/athlete_waiting.md", context)
+    msg_html = render_to_string("notifications/athlete_waiting.html", context)
+    message = EmailMultiAlternatives(
+        subject=subject,
+        body=msg_plain,
+        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
+        to=[coach.email],
+    )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.ATHLETE_WAITING)
+    sent = message.send(fail_silently=False)
+    return sent > 0
+
+
 def send_margin_alert_email(*, alerts, month_label, threshold) -> bool:
     """Email the owner that paying coaches' agent cost is eating their margin.
 
@@ -452,5 +487,53 @@ def send_block_delivered_email(
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.BLOCK_DELIVERED)
+    sent = message.send(fail_silently=False)
+    return sent > 0
+
+
+def send_relationship_ended_email(
+    *,
+    athlete,
+    coach,
+    home_url,
+    unsubscribe_url=None,
+    athlete_label="",
+) -> bool:
+    """Tell an athlete their coach ended the coaching relationship (#651).
+
+    Only sent for a coach-initiated end. The caller gates the athlete's
+    delivery-email opt-out (it honours ``athlete_opted_out``); this function
+    only advertises the unsubscribe link, like ``send_block_delivered_email``.
+
+    Returns ``True`` if a message was sent, ``False`` if the athlete has no
+    email or the backend accepted no recipients. Raises on a mail backend error,
+    so callers must treat it as best-effort.
+    """
+    if not athlete.email:
+        return False
+    context = {
+        "athlete_name": athlete_name(athlete, athlete_label),
+        "coach_name": coach_name(coach),
+        "home_url": home_url,
+        "unsubscribe_url": unsubscribe_url,
+    }
+    subject = render_to_string(
+        "notifications/relationship_ended_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/relationship_ended.md", context)
+    msg_html = render_to_string("notifications/relationship_ended.html", context)
+    headers = {}
+    if unsubscribe_url:
+        headers["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+        headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    message = EmailMultiAlternatives(
+        subject=subject,
+        body=msg_plain,
+        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
+        to=[athlete.email],
+        headers=headers,
+    )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.RELATIONSHIP_ENDED)
     sent = message.send(fail_silently=False)
     return sent > 0

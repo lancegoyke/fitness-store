@@ -498,6 +498,22 @@ def _nudge_status(invoice_obj, *, from_statuses, to_status):
             logger.exception(
                 "Billing webhook: analytics failed for subscription %s", sub_id
             )
+        # ``.update()`` above skips post_save, so the activation receiver never
+        # saw this recovery: schedule the waiting-link activation by hand (#649).
+        try:
+            from store_project.meso.billing import activation
+
+            # Re-read: ``locked`` is None when the mirror landed after our first read.
+            coach_id = (
+                CoachSubscription.objects.filter(stripe_subscription_id=sub_id)
+                .values_list("coach_id", flat=True)
+                .first()
+            )
+            transaction.on_commit(lambda: activation._activate_after_commit(coach_id))
+        except Exception:
+            logger.exception(
+                "Billing webhook: could not schedule activation for %s", sub_id
+            )
 
 
 def _track_invoice_start(sub_id, previous):

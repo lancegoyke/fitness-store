@@ -338,6 +338,27 @@ def _profile_plan(link):
     )
 
 
+def end_consequence(link, athlete_display_name):
+    """The sentence the end-coaching confirm panel shows (#651).
+
+    Names the athlete and every program that will leave their app (the link's
+    non-archived plans). Programs are date-less (§4a), so there is no "current
+    week" to derive a remaining-weeks range from; the plan titles stand alone.
+    """
+    titles = list(
+        link.plans.exclude(status=Plan.Status.ARCHIVED)
+        .order_by("pk")
+        .values_list("title", flat=True)
+    )
+    lead = f"End coaching with {athlete_display_name}?"
+    if not titles:
+        return f"{lead} They'll move to Past athletes."
+    if len(titles) == 1:
+        return f"{lead} {titles[0]} will disappear from their app."
+    names = ", ".join(titles[:-1]) + f" and {titles[-1]}"
+    return f"{lead} {names} will disappear from their app."
+
+
 def profile_program(link, working_plan):
     """The athlete-profile program block — the athlete's cadence + macrocycle.
 
@@ -560,6 +581,20 @@ def pending_request(link):
     }
 
 
+def waiting_acceptance(link):
+    """An athlete who accepted but waits on the coach's plan (#649), as a roster row.
+
+    The coach removes it via ``invite_decline`` (token), or upgrades to seat it.
+    """
+    name = link_athlete_name(link)
+    return {
+        "name": name,
+        "initials": initials(name),
+        "token": link.token,
+        "when": link.responded_at or link.created_at,
+    }
+
+
 #: Human labels for the relationship-history surface, keyed by terminal/pending
 #: status. ``PENDING_COACH_INVITE`` here is a *re-invite* awaiting the athlete.
 _HISTORY_STATUS_LABELS = {
@@ -603,6 +638,7 @@ def relationship_history(coach):
             "token": link.token,
             "status": link.status,
             "status_label": _HISTORY_STATUS_LABELS[link.status],
+            "can_restore": link.can_restore,
         }
         if link.is_closed:
             # ``closed_at`` is set for any link closed through the state machine;
@@ -852,7 +888,16 @@ def athlete_pending(user):
             invites.append(row)
         else:
             requests.append(row)
-    return {"invites": invites, "requests": requests}
+    # Accepted, but the coach has no seat yet (#649): shown as a calm holding
+    # card — never any wording about the coach's plan.
+    waiting = [
+        {"coach": coach_name(link.coach), "token": link.token}
+        for link in CoachAthlete.objects.for_athlete(user)
+        .waiting()
+        .select_related("coach", "coach__coach_profile")
+        .order_by("responded_at", "pk")
+    ]
+    return {"invites": invites, "requests": requests, "waiting": waiting}
 
 
 def deliver_screen(plan, week=None):

@@ -118,13 +118,16 @@ class TestAccessOverLimit:
 
 
 class TestSeatGateCoachInvite:
-    def test_free_coach_at_cap_cannot_open_invite(self, client):
+    def test_free_coach_at_cap_can_still_open_invite(self, client):
+        # #649: the invite goes out (the coach may be about to upgrade); the
+        # seat is only contested when the invitee claims. See
+        # test_waiting_acceptance.py for the warning and the waiting state.
         coach = UserFactory()
         CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # at cap
         client.force_login(coach)
         resp = client.post(reverse("meso:coach_invite"), data={"email": "new@x.com"})
         assert resp.status_code == 302
-        assert CoachInvite.objects.filter(coach=coach).count() == 0
+        assert CoachInvite.objects.filter(coach=coach).count() == 1
 
     def test_free_coach_with_room_can_open_invite(self, client):
         coach = UserFactory()
@@ -167,7 +170,7 @@ class TestSeatGateInviteAccept:
 
 
 class TestSeatGateInviteClaim:
-    def test_free_coach_at_cap_blocks_claim(self, client):
+    def test_free_coach_at_cap_parks_the_claim_as_waiting(self, client):
         coach = UserFactory()
         CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # at cap
         invite, _ = CoachInvite.open_for(coach=coach, email="newbie@x.com")
@@ -179,8 +182,14 @@ class TestSeatGateInviteClaim:
         )
         assert resp.status_code == 302
         invite.refresh_from_db()
-        assert invite.status == CoachInvite.Status.PENDING
-        assert not CoachAthlete.objects.filter(coach=coach, athlete=claimer).exists()
+        # #649: recorded as a waiting acceptance, never an active seat.
+        assert invite.status == CoachInvite.Status.ACCEPTED
+        assert CoachAthlete.objects.filter(
+            coach=coach, athlete=claimer, status=CoachAthlete.Status.ACCEPTED_WAITING
+        ).exists()
+        assert not CoachAthlete.objects.filter(
+            coach=coach, athlete=claimer, status=CoachAthlete.Status.ACTIVE
+        ).exists()
 
     def test_coach_with_room_allows_claim(self, client):
         coach = UserFactory()

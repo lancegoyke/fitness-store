@@ -277,6 +277,10 @@ class CoachAthleteQuerySet(models.QuerySet):
     def pending(self):
         return self.filter(status__in=CoachAthlete.PENDING_STATUSES)
 
+    def waiting(self):
+        """Links the athlete accepted but the coach has no seat for yet (#649)."""
+        return self.filter(status=CoachAthlete.Status.ACCEPTED_WAITING)
+
     def closed(self):
         """Terminal-state links — declined or ended (the relationship history).
 
@@ -311,6 +315,10 @@ class CoachAthlete(models.Model):
             _("Pending coach acceptance"),
         )
         ACTIVE = "active", _("Active")
+        # The athlete accepted, but the coach's plan has no seat for them yet
+        # (#649). Neither active (no seat, no program access) nor pending (the
+        # athlete's answer is in); it flips to ACTIVE when the coach upgrades.
+        ACCEPTED_WAITING = "accepted_waiting", _("Accepted, waiting on coach's plan")
         DECLINED = "declined", _("Declined")
         ENDED = "ended", _("Ended")
 
@@ -321,6 +329,9 @@ class CoachAthlete(models.Model):
     PENDING_STATUSES = (Status.PENDING_COACH_INVITE, Status.PENDING_ATHLETE_REQUEST)
     # Statuses a fresh invite/request may reopen from.
     CLOSED_STATUSES = (Status.DECLINED, Status.ENDED)
+    # How long after a coach ends a link it can be restored without a re-invite
+    # (#651); past that the coach re-invites and the athlete re-accepts.
+    RESTORE_WINDOW = timedelta(days=30)
 
     coach = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -355,6 +366,19 @@ class CoachAthlete(models.Model):
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
     responded_at = models.DateTimeField(_("Time responded"), null=True, blank=True)
     ended_at = models.DateTimeField(_("Time ended"), null=True, blank=True)
+    # Who ended an ``ended`` link (#651): only a coach-ended link is restorable
+    # without a fresh invite. Blank for links that were never ended, and for
+    # links ended before this column existed.
+    ended_by = models.CharField(
+        _("Ended by"), max_length=8, choices=InvitedBy.choices, blank=True, default=""
+    )
+    # The plans ``end()`` archived, as ``{plan_id: status_before}`` (#651), so a
+    # restore can put back exactly those plans in exactly the state they were in.
+    # Plans already archived before the end are never listed. Cleared on restore
+    # and whenever the link is reopened by a fresh invite.
+    ended_archived_plans = models.JSONField(
+        _("Plans archived by ending"), default=dict, blank=True
+    )
 
     objects = CoachAthleteQuerySet.as_manager()
 
@@ -437,7 +461,17 @@ class CoachAthlete(models.Model):
             link.status = cls.Status.ACTIVE
             link.responded_at = timezone.now()
             link.ended_at = None
-            link.save(update_fields=["status", "responded_at", "ended_at"])
+            link.ended_by = ""
+            link.ended_archived_plans = {}
+            link.save(
+                update_fields=[
+                    "status",
+                    "responded_at",
+                    "ended_at",
+                    "ended_by",
+                    "ended_archived_plans",
+                ]
+            )
         return link
 
     @classmethod
@@ -464,6 +498,8 @@ class CoachAthlete(models.Model):
             link.token = uuid.uuid4()
             link.responded_at = None
             link.ended_at = None
+            link.ended_by = ""
+            link.ended_archived_plans = {}
             link.save(
                 update_fields=[
                     "status",
@@ -471,46 +507,89 @@ class CoachAthlete(models.Model):
                     "token",
                     "responded_at",
                     "ended_at",
+                    "ended_by",
+                    "ended_archived_plans",
                 ]
             )
         return link
 
-    def accept(self):
-        """Recipient accepts a pending link → ``active``."""
+    def accept(self, waiting=False):
+        """Recipient accepts a pending link → ``active``.
+
+        ``waiting=True`` records the acceptance when the coach has no seat for
+        the athlete (#649): the link lands on ``accepted_waiting`` — not a seat,
+        no program access — and flips to active when the coach upgrades.
+        """
         if self.status not in self.PENDING_STATUSES:
             raise InvalidTransition(f"Cannot accept a link that is {self.status}.")
-        self.status = self.Status.ACTIVE
+        self.status = self.Status.ACCEPTED_WAITING if waiting else self.Status.ACTIVE
         self.responded_at = timezone.now()
         self.save(update_fields=["status", "responded_at"])
         return self
 
     def decline(self):
-        """Recipient declines a pending link → ``declined``."""
-        if self.status not in self.PENDING_STATUSES:
+        """Recipient declines a pending link → ``declined``.
+
+        Also how a coach dismisses a waiting acceptance (#649).
+        """
+        if (
+            self.status not in self.PENDING_STATUSES
+            and self.status != self.Status.ACCEPTED_WAITING
+        ):
             raise InvalidTransition(f"Cannot decline a link that is {self.status}.")
         self.status = self.Status.DECLINED
         self.responded_at = timezone.now()
         self.save(update_fields=["status", "responded_at"])
         return self
 
-    def end(self):
+    def end(self, by=None):
         """Either party ends an active link → ``ended``.
 
         Ending archives this coach's plans for the athlete (never deletes), and
         leaves the athlete's other coaches untouched (D-c). The relationship
         and its plans move together, so a failed archive cannot leave an ended
-        link pointing at live plans (#592).
+        link pointing at live plans (#592). ``by`` ("coach"/"athlete") and the
+        ``{plan_id: status_before}`` of exactly the plans archived are recorded
+        so a coach-ended link can be restored (#651).
         """
         if self.status != self.Status.ACTIVE:
             raise InvalidTransition(f"Cannot end a link that is {self.status}.")
-        self.status = self.Status.ENDED
-        self.ended_at = timezone.now()
         with transaction.atomic():
-            self.save(update_fields=["status", "ended_at"])
-            self.plans.exclude(status=Plan.Status.ARCHIVED).update(
+            # A stale instance must not overwrite who ended the link (#651): the
+            # in-memory status above can lag a concurrent end.
+            if not CoachAthlete.objects.filter(
+                pk=self.pk, status=self.Status.ACTIVE
+            ).exists():
+                raise InvalidTransition("Cannot end a link that is no longer active.")
+            to_archive = list(self.plans.exclude(status=Plan.Status.ARCHIVED))
+            self.status = self.Status.ENDED
+            self.ended_at = timezone.now()
+            self.ended_by = by or ""
+            self.ended_archived_plans = {str(p.pk): p.status for p in to_archive}
+            self.save(
+                update_fields=[
+                    "status",
+                    "ended_at",
+                    "ended_by",
+                    "ended_archived_plans",
+                ]
+            )
+            Plan.objects.filter(pk__in=[p.pk for p in to_archive]).update(
                 status=Plan.Status.ARCHIVED
             )
         return self
+
+    @property
+    def can_restore(self):
+        """A coach-ended, real, still-in-window link may be restored (#651)."""
+        return (
+            self.status == self.Status.ENDED
+            and self.ended_by == self.InvitedBy.COACH
+            and not self.is_self
+            and not self.is_demo
+            and self.ended_at is not None
+            and self.ended_at >= timezone.now() - self.RESTORE_WINDOW
+        )
 
     @property
     def is_active(self):
@@ -519,6 +598,10 @@ class CoachAthlete(models.Model):
     @property
     def is_pending(self):
         return self.status in self.PENDING_STATUSES
+
+    @property
+    def is_waiting(self):
+        return self.status == self.Status.ACCEPTED_WAITING
 
     @property
     def is_closed(self):
@@ -843,8 +926,11 @@ class CoachInvite(models.Model):
         self.save(update_fields=["reminder_sent_at"])
         return self
 
-    def accept(self, user):
+    def accept(self, user, *, waiting=False):
         """A claiming user accepts → an **active** ``CoachAthlete`` link.
+
+        ``waiting=True`` (#649) materializes it as ``accepted_waiting`` instead —
+        the coach has no seat for the athlete yet.
 
         The claim *is* the athlete's acceptance, so the materialized link goes
         straight to active. Idempotent against an already-active link, and resolves
@@ -875,7 +961,7 @@ class CoachInvite(models.Model):
             opens_link = existing is None or existing in CoachAthlete.CLOSED_STATUSES
             link = CoachAthlete.invite(coach=self.coach, athlete=user)
             if link.is_pending:
-                link.accept()
+                link.accept(waiting=waiting)
             invite_label = clean_name(self.label)
             # A link may already be active through another path, with a label the
             # coach edited since this email was sent; a stale claim must not revert

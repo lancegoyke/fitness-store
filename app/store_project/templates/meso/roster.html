@@ -136,7 +136,7 @@
               </a>
             {% empty %}
               <div class="meso-row" style="color:var(--dim);">
-                {% if active_pending_invites|length == 1 %}No athletes yet — {{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% elif active_pending_invites %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% else %}No athletes yet. Invite one to get started.{% endif %}
+                {% if active_pending_invites|length == 1 %}No athletes yet — {{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% elif active_pending_invites %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% elif has_history %}No active athletes right now.{% else %}No athletes yet. Invite one to get started.{% endif %}
               </div>
             {% endfor %}
           </div>
@@ -170,6 +170,34 @@
               </form>
             </div>
           {% endfor %}
+
+          {# Athletes who accepted but wait on this coach's plan (#649): upgrade CTA + Remove. #}
+          {% for w in waiting_athletes %}
+            <div class="meso-row" style="cursor:default;flex-wrap:wrap;">
+              <div class="meso-avatar">{{ w.initials }}</div>
+              <div class="meso-row-main" style="min-width:0;">
+                <div class="meso-row-name">{{ w.name }}</div>
+                <div class="meso-row-meta">Accepted — waiting on your plan</div>
+              </div>
+              <div class="meso-spacer"></div>
+              {% include "meso/_upgrade_cta.html" %}
+              <form method="post" action="{% url 'meso:invite_decline' token=w.token %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Remove</button>
+              </form>
+            </div>
+          {% endfor %}
+
+          {# Invites out beyond the free seats and nobody waiting yet (#649): CTA beside the list. #}
+          {% if seat_pressure and not waiting_athletes %}
+            <div class="meso-row" style="cursor:default;flex-wrap:wrap;">
+              <div class="meso-row-main" style="min-width:0;">
+                <div class="meso-row-meta">Free covers {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. Start your trial or subscribe so everyone you've invited can join.</div>
+              </div>
+              <div class="meso-spacer"></div>
+              {% include "meso/_upgrade_cta.html" %}
+            </div>
+          {% endif %}
 
           <!-- Pending athlete→coach requests (N4 Phase 2): accept or decline. -->
           {% for req in pending_requests %}

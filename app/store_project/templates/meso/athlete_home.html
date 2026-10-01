@@ -97,6 +97,17 @@
         </div>
       {% endfor %}
 
+      {# Accepted, coach has no seat yet (#649): a calm holding line — never anything about the coach's plan. #}
+      {% for w in pending.waiting %}
+        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
+          <div class="meso-avatar meso-avatar--sm">{{ w.coach|slice:":1"|upper }}</div>
+          <div style="min-width:0;">
+            <div class="meso-row-name">{{ w.coach }}</div>
+            <div class="meso-row-meta">You're connected to {{ w.coach }}. They'll have your program ready soon.</div>
+          </div>
+        </div>
+      {% endfor %}
+
       <details {% if not pending.invites and not pending.requests %}open{% endif %} style="margin-top:6px;">
         <summary style="list-style:none;cursor:pointer;font-size:12.5px;font-weight:650;color:var(--accent);">+ Request a coach</summary>
         <form method="post" action="{% url 'meso:athlete_request_coach' %}" style="display:flex;gap:9px;margin-top:10px;">

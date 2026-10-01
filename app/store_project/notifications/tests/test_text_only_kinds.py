@@ -26,12 +26,14 @@ from django.core import mail
 from django.urls import reverse
 
 from store_project.notifications.emails import kind_from_headers
+from store_project.notifications.emails import send_athlete_waiting_email
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_invite_reminder_email
 from store_project.notifications.emails import send_coach_request_email
 from store_project.notifications.emails import send_contact_emails
 from store_project.notifications.emails import send_margin_alert_email
+from store_project.notifications.emails import send_relationship_ended_email
 from store_project.notifications.models import TEXT_ONLY_KINDS
 from store_project.notifications.models import EmailKind
 from store_project.payments.utils import order_confirmation_email
@@ -114,6 +116,12 @@ class TestTextOnlyKindsMatchRealSenders:
         kinds_seen.add(self._check(mail.outbox[0]))
         mail.outbox.clear()
 
+        send_athlete_waiting_email(
+            athlete=athlete, coach=coach2, roster_url="https://x.test/meso/"
+        )
+        kinds_seen.add(self._check(mail.outbox[0]))
+        mail.outbox.clear()
+
         settings.ADMINS = [("Owner", "owner@example.com")]
         alert = type(
             "Alert",
@@ -138,6 +146,14 @@ class TestTextOnlyKindsMatchRealSenders:
             coach=coach2,
             plan=plan,
             week_count=2,
+            home_url="https://x.test/meso/me/",
+        )
+        kinds_seen.add(self._check(mail.outbox[0]))
+        mail.outbox.clear()
+
+        send_relationship_ended_email(
+            athlete=athlete,
+            coach=coach2,
             home_url="https://x.test/meso/me/",
         )
         kinds_seen.add(self._check(mail.outbox[0]))

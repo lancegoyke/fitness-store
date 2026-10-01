@@ -566,6 +566,8 @@ def _ensure_demo_link(coach, athlete):
             "is_demo": True,
             "responded_at": None,
             "ended_at": None,
+            "ended_by": "",
+            "ended_archived_plans": {},
         },
     )
     return link

@@ -45,9 +45,11 @@ from django.views.generic import TemplateView
 
 from store_project.analytics.events import EventName
 from store_project.analytics.track import track
+from store_project.notifications.emails import send_athlete_waiting_email
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
+from store_project.notifications.emails import send_relationship_ended_email
 from store_project.notifications.push import record_push_click
 
 from . import adherence as meso_adherence
@@ -505,6 +507,15 @@ class RosterView(TemplateView):
         ctx["pending_requests"] = [
             presenters.pending_request(link) for link in pending_requests
         ]
+        # Athletes who accepted but wait on this coach's plan (#649) — not
+        # active athletes, so they sit with the pending rows, not in ``athletes``.
+        ctx["waiting_athletes"] = [
+            presenters.waiting_acceptance(link)
+            for link in CoachAthlete.objects.for_coach(self.request.user)
+            .waiting()
+            .select_related("athlete")
+            .order_by("responded_at", "pk")
+        ]
         # Billing/paywall state (S6 Phase 3): tier, seat usage, and the upgrade
         # CTAs (start trial / subscribe / manage billing).
         ctx["billing"] = presenters.billing_state(
@@ -519,7 +530,29 @@ class RosterView(TemplateView):
         # onboarding card that teaches the model and offers the one-click demo;
         # once demo data is loaded a banner offers to remove it (Q3).
         ctx["has_demo"] = meso_demo.has_demo(self.request.user)
-        ctx["is_empty"] = not athletes
+        # "Never coached anyone": an ended or waiting link (bar demo/self) means
+        # this coach has really coached or is mid-flow, so no onboarding checklist
+        # (#651). A declined or merely pending request doesn't count.
+        ctx["has_history"] = (
+            CoachAthlete.objects.for_coach(self.request.user)
+            .exclude(is_demo=True)
+            .exclude(is_self=True)
+            .filter(
+                status__in=[
+                    CoachAthlete.Status.ENDED,
+                    CoachAthlete.Status.ACCEPTED_WAITING,
+                ]
+            )
+            .exists()
+        )
+        ctx["is_empty"] = not athletes and not ctx["has_history"]
+        # Invites out + athletes waiting beyond the free seats (#649): the cue
+        # to show the upgrade CTA right by the list, not only in the billing card.
+        ctx["seat_pressure"] = not ctx["billing"][
+            "is_active"
+        ] and billing_access.committed_seat_count(
+            self.request.user
+        ) > billing_access.effective_seat_limit(self.request.user)
         # Self-coaching (guided-tour Phase 0): the roster offers "Add yourself as
         # an athlete" until the coach's one self-link is active.
         ctx["has_self_link"] = any(link.is_self for link in links)
@@ -564,13 +597,53 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
             ctx["coach_name"] = coach_name(self.request.user)
         return ctx
 
+    def _save_name(self, request, form):
+        request.user.name = form.cleaned_data["name"]
+        request.user.save(update_fields=["name"])
+
+    def _save_coaching(self, request, form):
+        profile, _ = CoachProfile.objects.get_or_create(user=request.user)
+        profile.display_name = form.cleaned_data["display_name"]
+        profile.programming_style = form.cleaned_data["programming_style"]
+        profile.avoid_rules = form.cleaned_data["avoid_rules"]
+        profile.default_unit = form.cleaned_data["unit"]
+        profile.save(
+            update_fields=[
+                "display_name",
+                "programming_style",
+                "avoid_rules",
+                "default_unit",
+                "modified",
+            ]
+        )
+
     def post(self, request, *args, **kwargs):
         section = request.POST.get("section")
+        if section is None:
+            # The page is one form with one Save (#646): validate every form,
+            # and save all of them or none, so typed input is never half-lost.
+            name_form = UserNameForm(request.POST)
+            coach_form = (
+                CoachDisplayNameForm(request.POST) if _is_coach(request.user) else None
+            )
+            valid = name_form.is_valid()
+            if coach_form is not None:
+                valid = coach_form.is_valid() and valid
+            if not valid:
+                return self.render_to_response(
+                    self.get_context_data(name_form=name_form, coach_form=coach_form)
+                )
+            with transaction.atomic():
+                self._save_name(request, name_form)
+                if coach_form is not None:
+                    self._save_coaching(request, coach_form)
+            messages.success(request, "Your settings were updated.")
+            return redirect("meso:settings")
+
         if section == "name":
             form = UserNameForm(request.POST)
             if form.is_valid():
-                request.user.name = form.cleaned_data["name"]
-                request.user.save(update_fields=["name"])
+                self._save_name(request, form)
                 messages.success(request, "Your name was updated.")
                 return redirect("meso:settings")
             return self.render_to_response(self.get_context_data(name_form=form))
@@ -578,20 +651,7 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
         if section == "coaching" and _is_coach(request.user):
             form = CoachDisplayNameForm(request.POST)
             if form.is_valid():
-                profile, _ = CoachProfile.objects.get_or_create(user=request.user)
-                profile.display_name = form.cleaned_data["display_name"]
-                profile.programming_style = form.cleaned_data["programming_style"]
-                profile.avoid_rules = form.cleaned_data["avoid_rules"]
-                profile.default_unit = form.cleaned_data["unit"]
-                profile.save(
-                    update_fields=[
-                        "display_name",
-                        "programming_style",
-                        "avoid_rules",
-                        "default_unit",
-                        "modified",
-                    ]
-                )
+                self._save_coaching(request, form)
                 messages.success(request, "Your coaching settings were updated.")
                 return redirect("meso:settings")
             return self.render_to_response(self.get_context_data(coach_form=form))
@@ -723,7 +783,12 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         ctx["athlete_has_own_name"] = bool(clean_name(link.athlete.name))
         athlete_profile = getattr(link.athlete, "athlete_profile", None)
         athlete_unit = athlete_profile.unit if athlete_profile else ""
-        ctx["athlete_record_form"] = AthleteRecordForm(initial={"unit": athlete_unit})
+        record_form = AthleteRecordForm(initial={"unit": athlete_unit})
+        # The unit select renders inside a card, away from the intake <form>
+        # (#646), so it joins that form by id.
+        record_form.fields["unit"].widget.attrs["form"] = "athlete-intake"
+        ctx["athlete_record_form"] = record_form
+        ctx["today"] = timezone.localdate()
         ctx["effective_unit"] = link.effective_unit()
         ctx["effective_unit_source"] = (
             "their own setting" if athlete_unit else "coach default"
@@ -731,6 +796,9 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         ctx["relationship"] = {
             "token": link.token,
             "can_end": not link.is_self and not link.is_demo,
+            "end_consequence": presenters.end_consequence(
+                link, athlete_name(link.athlete, link.label)
+            ),
         }
         return ctx
 
@@ -771,24 +839,87 @@ def _first_form_error(form):
     return str(next(iter(form.errors.values()))[0])
 
 
+def _apply_contraindication(athlete, text):
+    """Add or reactivate one contraindication; return the (level, message) to flash.
+
+    Must run inside the caller's transaction with ``athlete`` already locked.
+    """
+    duplicate = (
+        Contraindication.objects.select_for_update(no_key=True)
+        .filter(athlete=athlete, text__iexact=text)
+        .order_by("-active", "pk")
+        .first()
+    )
+    if duplicate is not None and duplicate.active:
+        return messages.INFO, "That contraindication is already active."
+    if duplicate is not None:
+        duplicate.active = True
+        duplicate.save(update_fields=["active"])
+        return messages.SUCCESS, "Contraindication restored."
+    Contraindication.objects.create(athlete=athlete, text=text)
+    return messages.SUCCESS, "Contraindication added."
+
+
 @login_required
 @require_POST
 def athlete_record_update(request, pk):
-    """Update only the submitted parts of an active athlete's global record."""
+    """Update only the submitted parts of an active athlete's record.
+
+    The profile page is one form with one Save (#646), so this also applies the
+    coach's ``label`` for the athlete and a pending ``new_contraindication`` in the
+    same transaction. Everything is validated before anything is written: a bad
+    field rejects the whole POST rather than half-applying it.
+    """
+    # Browsers count a textarea newline as 1 char for maxlength but submit CRLF
+    # (2 chars), so a valid-looking note would fail max_length server-side.
+    # Normalise on a copy; ``request.POST`` itself stays untouched.
+    post = request.POST.copy()
+    for key in ("goals", "notes", "label", "new_contraindication"):
+        if key in post:
+            post[key] = post[key].replace("\r\n", "\n").replace("\r", "\n")
     with transaction.atomic():
         athlete = _locked_active_coached_athlete(request, pk)
-        form = AthleteRecordForm(request.POST)
+        form = AthleteRecordForm(post)
         if not form.is_valid():
             messages.error(request, _first_form_error(form))
             return redirect("meso:athlete", pk=pk)
 
-        received = form.fields.keys() & request.POST.keys()
+        label = None
+        if "label" in post:
+            label = clean_name(post["label"])
+            if len(label) > 255:
+                messages.error(request, "Name must be 255 characters or fewer.")
+                return redirect("meso:athlete", pk=pk)
+
+        new_text = None
+        if post.get("new_contraindication", "").strip():
+            text_form = ContraindicationForm({"text": post["new_contraindication"]})
+            if not text_form.is_valid():
+                messages.error(request, _first_form_error(text_form))
+                return redirect("meso:athlete", pk=pk)
+            new_text = text_form.cleaned_data["text"]
+
+        received = form.fields.keys() & post.keys()
         profile, _ = AthleteProfile.objects.get_or_create(user=athlete)
         for field in received:
             setattr(profile, field, form.cleaned_data[field])
         if received:
             profile.save(update_fields=[*sorted(received), "modified"])
+
+        if label is not None:
+            # Lock order: User → CoachAthlete (docs/meso/decisions.md).
+            link = CoachAthlete.objects.select_for_update(no_key=True).get(
+                coach=request.user, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+            )
+            link.label = label
+            link.save(update_fields=["label"])
+
+        flash = (
+            _apply_contraindication(athlete, new_text) if new_text is not None else None
+        )
     messages.success(request, "Athlete record updated.")
+    if flash is not None:
+        messages.add_message(request, *flash)
     return redirect("meso:athlete", pk=pk)
 
 
@@ -802,24 +933,8 @@ def athlete_contraindication_add(request, pk):
         if not form.is_valid():
             messages.error(request, _first_form_error(form))
             return redirect("meso:athlete", pk=pk)
-
-        text = form.cleaned_data["text"]
-        duplicate = (
-            Contraindication.objects.select_for_update(no_key=True)
-            .filter(athlete=athlete, text__iexact=text)
-            .order_by("-active", "pk")
-            .first()
-        )
-        if duplicate is not None and duplicate.active:
-            messages.info(request, "That contraindication is already active.")
-            return redirect("meso:athlete", pk=pk)
-        if duplicate is not None:
-            duplicate.active = True
-            duplicate.save(update_fields=["active"])
-            messages.success(request, "Contraindication restored.")
-            return redirect("meso:athlete", pk=pk)
-        Contraindication.objects.create(athlete=athlete, text=text)
-    messages.success(request, "Contraindication added.")
+        level, message = _apply_contraindication(athlete, form.cleaned_data["text"])
+    messages.add_message(request, level, message)
     return redirect("meso:athlete", pk=pk)
 
 
@@ -4014,26 +4129,80 @@ def push_unsubscribe(request):
 # end), independent of who holds the token URL.
 
 
+def _waiting_connected_message(coach):
+    """What an athlete is told when their acceptance is parked (#649).
+
+    Deliberately neutral — nothing about the coach's plan, limit or billing.
+    """
+    return (
+        f"You're connected to {coach_name(coach)}. "
+        "They'll have your program ready soon."
+    )
+
+
+def _notify_coach_athlete_waiting(request, link):
+    """Email the coach that an athlete accepted and waits on their plan (#649).
+
+    Sent on commit, best-effort (a mail failure is logged, never a lost
+    acceptance), and never for a sandbox coach.
+    """
+    coach, athlete, label = link.coach, link.athlete, link.label
+    if meso_sandbox.is_sandbox(coach):
+        return
+    roster_url = request.build_absolute_uri(reverse("meso:roster"))
+
+    def _send():
+        try:
+            send_athlete_waiting_email(
+                athlete=athlete,
+                coach=coach,
+                roster_url=roster_url,
+                athlete_label=label,
+            )
+        except Exception:  # mail is best-effort; never fail the acceptance on it
+            logger.exception("Failed to send athlete-waiting email to %s", coach.email)
+
+    transaction.on_commit(_send)
+
+
 @login_required
 @require_POST
 def invite_accept(request, token):
     link = get_object_or_404(CoachAthlete, token=token)
     if not link.is_pending or request.user != link.recipient():
         return HttpResponseForbidden("You cannot respond to this invite.")
-    # Seat gate (D4): activating this link consumes one of the coach's seats. A
-    # free coach at the cap can't accept an athlete's request (and can't have a
-    # coach-invite they sent accepted) until they upgrade. Worded for whichever
-    # side is acting — the coach themselves vs. the athlete accepting the coach.
-    if not billing_access.can_add_athlete(link.coach):
-        if request.user == link.coach:
-            messages.error(request, SEAT_LIMIT_MESSAGE)
-        else:
-            messages.error(
-                request,
-                f"{coach_name(link.coach)} can't take on new athletes right now.",
-            )
-        return redirect("meso:roster")
-    link.accept()
+    with transaction.atomic():
+        # LOCK ORDER (decisions.md § Row-lock order), as in ``invite_claim``:
+        # both User parents in ascending pk, then the link by the submitted token,
+        # re-validated under the lock so two accepts (or an accept racing a
+        # decline) can't both pass the pending check.
+        list(
+            User.objects.select_for_update(no_key=True)
+            .filter(pk__in={link.coach_id, link.athlete_id})
+            .order_by("pk")
+        )
+        link = get_object_or_404(
+            CoachAthlete.objects.select_for_update(no_key=True).select_related(
+                "coach", "athlete"
+            ),
+            token=token,
+        )
+        if not link.is_pending or request.user != link.recipient():
+            return HttpResponseForbidden("You cannot respond to this invite.")
+        # Seat gate (D4): activating this link consumes one of the coach's seats. A
+        # free coach at the cap can't accept an athlete's request until they upgrade
+        # (their own plan, so SEAT_LIMIT_MESSAGE is theirs to read). When the *athlete*
+        # accepts a coach's invite, the acceptance is parked as waiting instead (#649):
+        # the coach's plan is never the athlete's problem, so nothing about it is said.
+        if not billing_access.can_add_athlete(link.coach):
+            if request.user == link.coach:
+                messages.error(request, SEAT_LIMIT_MESSAGE)
+                return redirect("meso:roster")
+            link.accept(waiting=True)
+            _notify_coach_athlete_waiting(request, link)
+            messages.success(request, _waiting_connected_message(link.coach))
+            return redirect("meso:athlete_home")
+        link.accept()
     messages.success(request, "Relationship accepted.")
     return redirect("meso:roster")
 
@@ -4042,7 +4211,11 @@ def invite_accept(request, token):
 @require_POST
 def invite_decline(request, token):
     link = get_object_or_404(CoachAthlete, token=token)
-    if not link.is_pending or request.user != link.recipient():
+    # A coach may also remove an athlete's waiting acceptance (#649).
+    is_waiting_removal = link.is_waiting and request.user == link.coach
+    if not is_waiting_removal and (
+        not link.is_pending or request.user != link.recipient()
+    ):
         return HttpResponseForbidden("You cannot respond to this invite.")
     link.decline()
     messages.success(request, "Invite declined.")
@@ -4052,11 +4225,142 @@ def invite_decline(request, token):
 @login_required
 @require_POST
 def relationship_end(request, token):
+    """End an active link — only with the confirm step's ``confirm=1`` marker (#651).
+
+    The marker is rendered only inside the profile's confirm panel, so a stale
+    page or a scripted bare POST ends nothing. Lock order is User (ascending pk)
+    → CoachAthlete → Plan (ascending pk), all ``no_key``; the link is re-read
+    under the lock and must still be active.
+    """
     link = get_object_or_404(CoachAthlete, token=token)
     if not link.is_active or request.user not in (link.coach, link.athlete):
         return HttpResponseForbidden("You cannot end this relationship.")
-    link.end()
+    by = "coach" if request.user == link.coach else "athlete"
+    if request.POST.get("confirm") != "1":
+        messages.info(request, "Nothing was ended. Confirm to end the relationship.")
+        if by == "coach":
+            return redirect("meso:athlete", pk=link.athlete_id)
+        return redirect("meso:athlete_home")
+    with transaction.atomic():
+        # LOCK ORDER (decisions.md § Row-lock order): User → CoachAthlete → Plan.
+        list(
+            User.objects.select_for_update(no_key=True)
+            .filter(pk__in={link.coach_id, link.athlete_id})
+            .order_by("pk")
+        )
+        link = get_object_or_404(
+            CoachAthlete.objects.select_for_update(no_key=True)
+            .select_related("coach", "athlete")
+            .active(),
+            token=token,
+        )
+        list(
+            Plan.objects.select_for_update(no_key=True)
+            .filter(relationship=link)
+            .order_by("pk")
+        )
+        link.end(by=by)
+    if by == "coach":
+        _notify_athlete_relationship_ended(request, link)
     messages.success(request, "Relationship ended.")
+    return redirect("meso:roster")
+
+
+def _notify_athlete_relationship_ended(request, link):
+    """Best-effort email telling the athlete their coach ended the coaching (#651).
+
+    Coach-initiated ends only (the caller gates that). Never for self/demo links
+    or sandbox coaches, honours the athlete's delivery-email opt-out, runs on
+    commit, and swallows+logs any failure so it can never undo the end.
+    """
+    if link.is_self or link.is_demo or meso_sandbox.is_sandbox(link.coach):
+        return
+    home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
+    unsubscribe_url = request.build_absolute_uri(
+        reverse(
+            "meso:unsubscribe_delivery_email",
+            kwargs={"token": make_unsubscribe_token(link.athlete)},
+        )
+    )
+
+    def _send():
+        try:
+            if not athlete_opted_out(link.athlete):
+                send_relationship_ended_email(
+                    athlete=link.athlete,
+                    coach=link.coach,
+                    home_url=home_url,
+                    unsubscribe_url=unsubscribe_url,
+                    athlete_label=link.label,
+                )
+        except Exception:  # mail is best-effort; never fail an end on it
+            logger.exception(
+                "Failed to send relationship-ended email for link %s", link.pk
+            )
+
+    transaction.on_commit(_send)
+
+
+@login_required
+@require_POST
+def relationship_restore(request, token):
+    """Coach restores a coach-ended link within the window, no re-invite (#651).
+
+    The athlete already consented once and the coach caused the end, so there is
+    no fresh consent: the link goes straight back to active and every plan the
+    end archived returns to the status it had (plans archived earlier stay
+    archived). Coach-scoped (foreign token is a 404); the seat gate applies like
+    accept's. Sends no email. Lock order User → CoachAthlete → Plan, all no_key.
+    """
+    with transaction.atomic():
+        locked_athlete_id = get_object_or_404(
+            CoachAthlete, token=token, coach=request.user
+        ).athlete_id
+        list(
+            User.objects.select_for_update(no_key=True)
+            .filter(pk__in={request.user.pk, locked_athlete_id})
+            .order_by("pk")
+        )
+        link = get_object_or_404(
+            CoachAthlete.objects.select_for_update(no_key=True).select_related(
+                "athlete"
+            ),
+            token=token,
+            coach=request.user,
+        )
+        if link.status == CoachAthlete.Status.ACTIVE:
+            # A double submit: the first POST already did it.
+            messages.info(request, "Already restored.")
+            return redirect("meso:roster")
+        if not link.can_restore:
+            messages.error(request, "That relationship can't be restored any more.")
+            return redirect("meso:relationship_history")
+        if not billing_access.can_add_athlete(request.user):
+            messages.error(request, SEAT_LIMIT_MESSAGE)
+            return redirect("meso:relationship_history")
+        snapshot = {int(pk): status for pk, status in link.ended_archived_plans.items()}
+        plans = list(
+            Plan.objects.select_for_update(no_key=True)
+            .filter(relationship=link, pk__in=snapshot, status=Plan.Status.ARCHIVED)
+            .order_by("pk")
+        )
+        for plan in plans:
+            Plan.objects.filter(pk=plan.pk).update(status=snapshot[plan.pk])
+        restored_plans = bool(plans)
+        link.status = CoachAthlete.Status.ACTIVE
+        link.ended_at = None
+        link.ended_by = ""
+        link.ended_archived_plans = {}
+        link.save(
+            update_fields=["status", "ended_at", "ended_by", "ended_archived_plans"]
+        )
+    name = athlete_name(link.athlete, link.label)
+    messages.success(
+        request,
+        f"Restored {name}. Their program is back in their app."
+        if restored_plans
+        else f"Restored {name}.",
+    )
     return redirect("meso:roster")
 
 
@@ -4195,6 +4499,9 @@ def athlete_request_coach(request):
         if existing and existing.is_active:
             messages.info(request, f"You're already training with {coach_name(coach)}.")
             return redirect("meso:athlete_home")
+        if existing and existing.is_waiting:
+            messages.info(request, f"You're already connected to {coach_name(coach)}.")
+            return redirect("meso:athlete_home")
         if existing and existing.status == CoachAthlete.Status.PENDING_ATHLETE_REQUEST:
             messages.info(
                 request, f"You've already asked to train with {coach_name(coach)}."
@@ -4331,11 +4638,9 @@ def coach_invite(request):
     if email == CoachInvite.normalize_email(request.user.email):
         messages.error(request, "You can't invite yourself.")
         return redirect("meso:roster")
-    # Seat gate (D4): a free coach at the cap can't open a new invite — accepting
-    # it would create a billable seat they aren't paying for.
-    if not billing_access.can_add_athlete(request.user):
-        messages.error(request, SEAT_LIMIT_MESSAGE)
-        return redirect("meso:roster")
+    # No seat gate here (#649): the invite goes out even at the free cap, since
+    # the coach may be about to upgrade. An invitee who can't be seated yet is
+    # parked as a waiting acceptance when they claim; the warning below says so.
     with transaction.atomic():
         # LOCK ORDER (#611) — CoachInvite is a child of the coach User row.
         # Reserve the parent before open_for can insert, matching a User-rooted
@@ -4350,6 +4655,11 @@ def coach_invite(request):
         invite, created = CoachInvite.open_for(
             coach=request.user, email=email, label=label
         )
+        # Counts this invite (it's claimable now): over the limit means this
+        # invitee can't be seated until the coach starts a trial or subscribes.
+        over_free_cover = billing_access.committed_seat_count(
+            request.user
+        ) > billing_access.effective_seat_limit(request.user)
     track(EventName.INVITE_SENT, actor=request.user, subject=invite, new=created)
     accept_url = request.build_absolute_uri(
         reverse("meso:invite_claim", kwargs={"token": invite.token})
@@ -4378,6 +4688,14 @@ def coach_invite(request):
         )
 
     transaction.on_commit(_send)
+    if over_free_cover:
+        messages.warning(
+            request,
+            f"Free covers {CoachSubscription.FREE_SEAT_LIMIT} "
+            f"athlete{'s' if CoachSubscription.FREE_SEAT_LIMIT != 1 else ''}. "
+            f"{label or email} won't be able to join until you start your trial "
+            "or subscribe.",
+        )
     return redirect("meso:roster")
 
 
@@ -4562,25 +4880,24 @@ def invite_claim(request, token):
                 return redirect("meso:athlete_home")
             if action == "accept":
                 # Seat gate (D4): claiming materializes an active link — a billable
-                # seat for the coach. A coach who has since hit their cap can't take
-                # on the athlete until they upgrade; the athlete sees why.
-                if not billing_access.can_add_athlete(invite.coach):
-                    messages.error(
-                        request,
-                        f"{coach_name(invite.coach)} has reached their athlete "
-                        "limit and can't add you right now.",
-                    )
-                    return redirect("meso:athlete_home")
+                # seat for the coach. A coach with no seat left still gets the
+                # athlete recorded, as a waiting acceptance (#649): the athlete is
+                # told nothing about the coach's plan; the coach is emailed.
+                waiting = not billing_access.can_add_athlete(invite.coach)
                 try:
-                    invite.accept(request.user)
+                    link = invite.accept(request.user, waiting=waiting)
                 except InvalidTransition as exc:
                     messages.error(request, str(exc))
                     return redirect("meso:roster")
                 track(EventName.INVITE_ACCEPTED, actor=request.user, subject=invite)
-                messages.success(
-                    request,
-                    f"You're now training with {coach_name(invite.coach)}.",
-                )
+                if link.is_waiting:
+                    _notify_coach_athlete_waiting(request, link)
+                    messages.success(request, _waiting_connected_message(invite.coach))
+                else:
+                    messages.success(
+                        request,
+                        f"You're now training with {coach_name(invite.coach)}.",
+                    )
                 return redirect("meso:athlete_home")
             invite.decline()
         messages.success(request, "Invite declined.")

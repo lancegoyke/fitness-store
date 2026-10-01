@@ -210,7 +210,10 @@ class TestEndedSelfLink:
         client.post(reverse("meso:roster_add_self"))
         link = CoachAthlete.objects.get(coach=user, athlete=user)
 
-        client.post(reverse("meso:relationship_end", kwargs={"token": link.token}))
+        client.post(
+            reverse("meso:relationship_end", kwargs={"token": link.token}),
+            {"confirm": "1"},
+        )
 
         link.refresh_from_db()
         assert link.status == CoachAthlete.Status.ENDED
@@ -222,7 +225,10 @@ class TestEndedSelfLink:
         client.force_login(user)
         client.post(reverse("meso:roster_add_self"))
         link = CoachAthlete.objects.get(coach=user, athlete=user)
-        client.post(reverse("meso:relationship_end", kwargs={"token": link.token}))
+        client.post(
+            reverse("meso:relationship_end", kwargs={"token": link.token}),
+            {"confirm": "1"},
+        )
 
         resp = client.get(reverse("meso:relationship_history"))
 
@@ -242,7 +248,10 @@ class TestEndedSelfLink:
         client.force_login(user)
         client.post(reverse("meso:roster_add_self"))
         link = CoachAthlete.objects.get(coach=user, athlete=user)
-        client.post(reverse("meso:relationship_end", kwargs={"token": link.token}))
+        client.post(
+            reverse("meso:relationship_end", kwargs={"token": link.token}),
+            {"confirm": "1"},
+        )
         link.refresh_from_db()
 
         resp = client.post(

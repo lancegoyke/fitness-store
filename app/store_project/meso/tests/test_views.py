@@ -123,7 +123,10 @@ class TestInviteActions:
         link = CoachAthlete.invite(coach=coach, athlete=athlete)
         link.accept()
         client.force_login(coach)
-        client.post(reverse("meso:relationship_end", kwargs={"token": link.token}))
+        client.post(
+            reverse("meso:relationship_end", kwargs={"token": link.token}),
+            {"confirm": "1"},
+        )
         link.refresh_from_db()
         assert link.status == CoachAthlete.Status.ENDED
 
