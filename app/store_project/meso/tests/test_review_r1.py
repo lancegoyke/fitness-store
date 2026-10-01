@@ -257,3 +257,37 @@ class TestHasHistory:
 
 
 assert CoachProfile  # keep import used
+
+
+@pytest.mark.django_db
+def test_stale_instance_cannot_overwrite_who_ended_the_link():
+    from store_project.meso.factories import CoachAthleteFactory
+    from store_project.meso.models import CoachAthlete
+    from store_project.meso.models import InvalidTransition
+
+    link = CoachAthleteFactory(status=CoachAthlete.Status.ACTIVE)
+    athlete_copy = CoachAthlete.objects.get(pk=link.pk)
+    coach_copy = CoachAthlete.objects.get(pk=link.pk)
+    athlete_copy.end(by=CoachAthlete.InvitedBy.ATHLETE)
+    with pytest.raises(InvalidTransition):
+        coach_copy.end(by=CoachAthlete.InvitedBy.COACH)
+    link.refresh_from_db()
+    assert link.ended_by == "athlete"
+    assert not link.can_restore
+
+
+@pytest.mark.django_db
+def test_demo_reload_resets_ending_metadata():
+    from store_project.meso.demo import _ensure_demo_link
+    from store_project.meso.factories import CoachAthleteFactory
+    from store_project.meso.models import CoachAthlete
+
+    link = CoachAthleteFactory(status=CoachAthlete.Status.ACTIVE, is_demo=True)
+    link.end(by="coach")
+    link.refresh_from_db()
+    assert link.ended_by == "coach"
+    _ensure_demo_link(link.coach, link.athlete)
+    link.refresh_from_db()
+    assert link.status == CoachAthlete.Status.ACTIVE
+    assert link.ended_by == ""
+    assert link.ended_archived_plans == {}

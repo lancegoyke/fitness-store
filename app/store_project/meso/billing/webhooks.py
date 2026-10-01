@@ -503,7 +503,12 @@ def _nudge_status(invoice_obj, *, from_statuses, to_status):
         try:
             from store_project.meso.billing import activation
 
-            coach_id = locked.coach_id
+            # Re-read: ``locked`` is None when the mirror landed after our first read.
+            coach_id = (
+                CoachSubscription.objects.filter(stripe_subscription_id=sub_id)
+                .values_list("coach_id", flat=True)
+                .first()
+            )
             transaction.on_commit(lambda: activation._activate_after_commit(coach_id))
         except Exception:
             logger.exception(

@@ -555,6 +555,12 @@ class CoachAthlete(models.Model):
         if self.status != self.Status.ACTIVE:
             raise InvalidTransition(f"Cannot end a link that is {self.status}.")
         with transaction.atomic():
+            # A stale instance must not overwrite who ended the link (#651): the
+            # in-memory status above can lag a concurrent end.
+            if not CoachAthlete.objects.filter(
+                pk=self.pk, status=self.Status.ACTIVE
+            ).exists():
+                raise InvalidTransition("Cannot end a link that is no longer active.")
             to_archive = list(self.plans.exclude(status=Plan.Status.ARCHIVED))
             self.status = self.Status.ENDED
             self.ended_at = timezone.now()
