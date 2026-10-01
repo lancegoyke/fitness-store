@@ -8,9 +8,13 @@ accepted without their click.
 
 The flag lives for ``CLAIM_TTL_SECONDS`` and is cleared by any login that is not
 heading back to that token's claim page (#670), so a flag left behind by an
-abandoned signup cannot auto-accept after some unrelated login.
+abandoned signup cannot auto-accept after some unrelated login. allauth flows
+decide that from the redirect response; every other login (the admin, the
+sandbox entry, any ``login()`` call) clears it unless its ``next`` is the claim
+page (#677).
 """
 
+import posixpath
 import time
 from urllib.parse import urlsplit
 
@@ -109,12 +113,33 @@ def _connect():
     from django.contrib.auth.signals import user_logged_in as django_user_logged_in
 
     @receiver(django_user_logged_in, weak=False)
-    def clear_claim_on_admin_login(sender, request=None, **kwargs):
-        # Django-only logins (the /backside/ admin) never reach a claim page.
-        # allauth logins also fire this signal, so only the admin path clears.
-        if request is not None and hasattr(request, "session"):
-            if request.path.startswith("/backside/"):
-                forget_claim(request)
+    def clear_claim_on_django_only_login(sender, request=None, **kwargs):
+        # Django's signal also fires for every allauth login, BEFORE allauth's
+        # own receiver above, which alone knows the redirect target. So leave
+        # allauth flows (login, signup, social callbacks — all under its URL
+        # prefix) to that receiver, keep the flag when this login says it is
+        # heading back to the claim page, and clear it for everything else (the
+        # /backside/ admin, the sandbox entry, a bare ``login()``) — #677.
+        if request is None or not hasattr(request, "session"):
+            return
+        token = request.session.get(CLAIM_SESSION_KEY)
+        if not token:
+            return
+        if request.path.startswith(_allauth_prefix()):
+            return
+        try:
+            claim_path = reverse("meso:invite_claim", kwargs={"token": token})
+        except (NoReverseMatch, ValueError, TypeError):
+            claim_path = None
+        requested = request.POST.get("next") or request.GET.get("next") or ""
+        if claim_path and urlsplit(requested).path == claim_path:
+            return
+        forget_claim(request)
+
+
+def _allauth_prefix():
+    """The URL prefix allauth is mounted under (``/accounts/``)."""
+    return posixpath.dirname(reverse("account_login").rstrip("/")) + "/"
 
 
 _connect()

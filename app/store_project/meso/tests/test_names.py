@@ -447,6 +447,7 @@ class TestSettingsSingleNameField:
         body = client.post(
             reverse("meso:settings"),
             {"name": "Maya", "display_name": "Typed Name", "unit": "bogus"},
+            follow=True,
         ).content.decode()
         details = re.search(r"<details\b([^>]*)>", body)
         assert details is not None
@@ -461,6 +462,7 @@ class TestSettingsSingleNameField:
         body = client.post(
             reverse("meso:settings"),
             {"name": "Maya", "display_name": "", "unit": "bogus"},
+            follow=True,
         ).content.decode()
         details = re.search(r"<details\b([^>]*)>", body)
         assert details is not None

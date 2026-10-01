@@ -221,6 +221,8 @@ jobs:
       # The #587/#588/#589/#590/#596 files extend that same lock-order class
       # across hard deletes, athlete sessions, parent lock strength, demo
       # clear/load serialization, and creator paths.
+      # #673/#674/#679 (sandbox cap, reap-vs-load, decline-vs-activate) are the
+      # row/advisory-lock serialization class again.
       # Add a new Postgres-only file here in the same commit that creates it.
       - name: Run the PostgreSQL-only tests
         run: |
@@ -238,4 +240,7 @@ jobs:
             app/store_project/meso/tests/test_clear_load_demo_postgres.py \
             app/store_project/meso/tests/test_athlete_session_lock_order_postgres.py \
             app/store_project/meso/tests/test_creator_locks_postgres.py \
-            app/store_project/meso/tests/test_hard_delete_lock_order_postgres.py
+            app/store_project/meso/tests/test_hard_delete_lock_order_postgres.py \
+            app/store_project/meso/tests/test_sandbox_cap_postgres.py \
+            app/store_project/meso/tests/test_sandbox_reap_race_postgres.py \
+            app/store_project/meso/tests/test_decline_race_postgres.py

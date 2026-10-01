@@ -348,7 +348,16 @@ class TestClaimFlagLifetime:
         with mock.patch("store_project.meso.claim_session.time.time") as now:
             now.return_value = self.NOW
             client.get(_claim_url(invite))
-            client.force_login(athlete)
+            # A real allauth login heading back to the claim page: a bare
+            # ``force_login`` is a non-claim-bound login and clears the flag (#677).
+            client.post(
+                reverse("account_login"),
+                {
+                    "login": athlete.email,
+                    "password": PASSWORD,
+                    "next": _claim_url(invite),
+                },
+            )
             now.return_value = self.NOW + 3600
             resp = client.get(_claim_url(invite))
         assert resp.status_code == 302

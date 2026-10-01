@@ -219,6 +219,55 @@ def has_log(coach):
     return SessionLog.objects.filter(athlete__in=_demo_athletes(coach)).exists()
 
 
+# -- "live" variants for the tour (#675) --------------------------------------
+#
+# The predicates above count archived / soft-deleted demo data on purpose: they
+# answer "is there anything to REMOVE?" (the Remove-demo button). The tour asks
+# a different question — "is there anything to SEE?" — and an archived demo plan
+# is invisible, so reading it as loaded hid the only reload route. Same notion
+# of live as the roster checklist (``views._getting_started_steps``): plan not
+# archived, week / session soft-delete stamps null.
+
+
+def _live_demo_plans(coach):
+    return Plan.objects.filter(
+        relationship__coach=coach, relationship__is_demo=True
+    ).exclude(status=Plan.Status.ARCHIVED)
+
+
+def has_live_athletes(coach):
+    """Whether any demo athlete is still on the coach's active roster."""
+    return (
+        CoachAthlete.objects.for_coach(coach)
+        .filter(is_demo=True, status=CoachAthlete.Status.ACTIVE)
+        .exists()
+    )
+
+
+def has_live_program(coach):
+    """Whether a demo plan tree exists on a plan that isn't archived."""
+    return Mesocycle.objects.filter(plan__in=_live_demo_plans(coach)).exists()
+
+
+def has_live_delivery(coach):
+    """Whether a live (not soft-deleted) demo week of a live plan is delivered."""
+    return Week.objects.filter(
+        mesocycle__plan__in=_live_demo_plans(coach),
+        deleted_at__isnull=True,
+        delivered_at__isnull=False,
+    ).exists()
+
+
+def has_live_log(coach):
+    """Whether a demo athlete's log sits on a live session of a live demo plan."""
+    return SessionLog.objects.filter(
+        athlete__in=_demo_athletes(coach),
+        session__deleted_at__isnull=True,
+        session__week__deleted_at__isnull=True,
+        session__week__mesocycle__plan__in=_live_demo_plans(coach),
+    ).exists()
+
+
 def _lock_users(user_ids):
     return list(
         User.objects.select_for_update(no_key=True)

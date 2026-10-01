@@ -77,6 +77,9 @@ class CoachDisplayNameForm(forms.Form):
 
 
 class AthleteRecordForm(forms.Form):
+    # No ``max_length``: the cleaned (whitespace-collapsed) length is what the
+    # model column holds, and the message names the field (#680).
+    label = forms.CharField(required=False)
     goals = forms.CharField(max_length=2000, required=False)
     training_started = forms.DateField(required=False)
     notes = forms.CharField(max_length=5000, required=False)
@@ -85,6 +88,12 @@ class AthleteRecordForm(forms.Form):
         required=False,
         widget=forms.Select(attrs={"class": "meso-field"}),
     )
+
+    def clean_label(self):
+        label = clean_name(self.cleaned_data["label"])
+        if len(label) > 255:
+            raise ValidationError("Name must be 255 characters or fewer.")
+        return label
 
     def clean_goals(self):
         return self.cleaned_data["goals"].strip()

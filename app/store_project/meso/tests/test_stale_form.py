@@ -70,15 +70,16 @@ class TestIntakeStaleTab:
                 "notes": "tab A note",
                 "initial_notes": "",
             },
+            follow=True,
         )
         assert response.status_code == 200
         profile = AthleteProfile.objects.get(user=link.athlete)
         assert profile.goals == "tab B goal"
         assert profile.notes == "tab A note"
-        assert (
-            "Goals were changed elsewhere since you opened this page"
-            " — review and save again"
-        ) in texts(response)
+        # Some fields saved, one refused: the partial-save wording (#680).
+        assert "Saved notes. Goals changed elsewhere — review and save again." in (
+            texts(response)
+        )
         body = response.content.decode()
         assert re.search(r"<textarea[^>]*name=\"goals\"[^>]*>tab A goal<", body)
         assert hidden_initial(body, "goals") == "tab B goal"
@@ -92,6 +93,7 @@ class TestIntakeStaleTab:
                 "notes": "typed notes",
                 "label": "x" * 256,
             },
+            follow=True,
         )
         assert response.status_code == 200
         body = response.content.decode()
@@ -106,6 +108,7 @@ class TestIntakeStaleTab:
         response = client.post(
             record_url(link),
             {"goals": "typed goals", "training_started": "2999-01-01"},
+            follow=True,
         )
         assert response.status_code == 200
         assert "typed goals" in response.content.decode()
@@ -169,14 +172,14 @@ class TestSettingsStaleTab:
                 "display_name": "Tab A display",
                 "initial_display_name": "Old Display",
             },
+            follow=True,
         )
         assert response.status_code == 200
         coach.refresh_from_db()
         assert coach.name == "Tab A Name"
         assert CoachProfile.objects.get(user=coach).display_name == "Tab B display"
         assert (
-            "Display name was changed elsewhere since you opened this page"
-            " — review and save again"
+            "Saved your name. Display name changed elsewhere — review and save again."
         ) in texts(response)
         body = response.content.decode()
         assert 'value="Tab A display"' in body

@@ -170,9 +170,11 @@ class TestAthleteRecordSavesEverything:
         # typed beside it rather than half-applying the POST.
         client.force_login(link.coach)
         response = client.post(
-            record_url(link), {"label": "x" * 256, "goals": "Squat 315"}
+            record_url(link),
+            {"label": "x" * 256, "goals": "Squat 315"},
+            follow=True,
         )
-        # Re-rendered with the typed values (#657), not redirected.
+        # Redirected to the profile, which re-renders the typed values (#657/#680).
         assert response.status_code == 200
         assert not AthleteProfile.objects.filter(
             user=link.athlete, goals="Squat 315"
@@ -245,6 +247,7 @@ class TestSettingsOneForm:
                 "avoid_rules": "Typed rule",
                 "unit": "kg",
             },
+            follow=True,
         )
         assert response.status_code == 200
         coach.refresh_from_db()
