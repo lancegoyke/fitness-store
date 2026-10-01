@@ -61,6 +61,23 @@ def _parsed_bits(cell):
     }
 
 
+def recomposed_text(cell, component, value):
+    """``cell``'s text with one component (``sets``/``load``) replaced, or ``None``.
+
+    The pure half of ``_rewrite_cell`` — also what the review card shows as the
+    "after" of a progress/volume proposal, so the card and the apply can never
+    disagree about the value. ``None`` for a cell whose non-empty text yields no
+    structure (never overwrite notation the parser can't read).
+    """
+    if not value:
+        return None
+    bits = _parsed_bits(cell)
+    if bits is None:
+        return None
+    bits[component] = str(value)
+    return compose_prescription_text(**bits)
+
+
 def _rewrite_cell(change, component, value):
     """Recompose the cell's text with one component (``sets``/``load``) replaced.
 
@@ -70,13 +87,12 @@ def _rewrite_cell(change, component, value):
     safe skip (``None``) — never overwrite notation the parser can't read.
     """
     presc = change.prescription
-    if presc is None or not value:
+    if presc is None:
         return None
-    bits = _parsed_bits(presc)
-    if bits is None:
+    text = recomposed_text(presc, component, value)
+    if text is None:
         return None
-    bits[component] = str(value)
-    presc.text = compose_prescription_text(**bits)
+    presc.text = text
     presc.save(update_fields=["text"])
     return {"id": change.pk, "kind": change.kind, "field": component, "value": value}
 

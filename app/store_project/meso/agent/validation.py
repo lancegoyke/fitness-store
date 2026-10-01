@@ -18,6 +18,7 @@ screen. Two layers:
 import re
 
 from ..models import Prescription
+from ..models import ProposedChange
 from ..models import Session
 
 VALID_KINDS = {"swap", "progress", "volume", "deload", "add"}
@@ -180,6 +181,60 @@ def _percent_load(text):
 def _fmt_percent(value):
     """A bare percent string ('82' / '82.5'); no '%' so the suffix isn't doubled."""
     return str(int(value)) if value == int(value) else str(value)
+
+
+def _first_line(text):
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _fill_display(cleaned):
+    """Fill the review card's day tag and before → after from the program itself.
+
+    ``before``/``after``/``day_label`` are display text the model is *asked* for
+    but is free to leave blank (UAT round 2, #647: a deload-by-progress came
+    back with both empty, so the card showed a bare "→" over a pre-approved
+    Apply). The program already knows the answer — the target cell's current
+    text, and what ``agent.apply`` would recompose it to — so a blank is derived
+    here, at proposal time, and a model-supplied value is left as the model
+    wrote it. A change whose edit can't be shown at all (neither side) starts
+    ``rejected``: the coach must opt in to something they can't see.
+    """
+    from . import apply as agent_apply
+
+    kind = cleaned["kind"]
+    presc = cleaned["prescription"]
+    session = cleaned["session"]
+    payload = cleaned["payload"]
+
+    if not cleaned["day_label"] and session is not None:
+        cleaned["day_label"] = str(session)[:128]
+
+    before = after = ""
+    if kind == "swap" and presc is not None:
+        before = presc.name
+        after = payload.get("name") or cleaned["introduces_exercise"]
+    elif kind in ("progress", "volume") and presc is not None:
+        component = "load" if kind == "progress" else "sets"
+        new_text = agent_apply.recomposed_text(presc, component, payload.get(component))
+        if new_text is not None:
+            before = _first_line(presc.text)
+            after = new_text
+    elif kind == "volume" and session is not None and payload.get("sets"):
+        after = f"{payload['sets']} sets on every exercise"
+    elif kind == "deload":
+        before, after = "Training week", "Deload week"
+    elif kind == "add":
+        after = payload.get("name", "")
+
+    if not cleaned["before"]:
+        cleaned["before"] = before[:255]
+    if not cleaned["after"]:
+        cleaned["after"] = after[:255]
+    if not (cleaned["before"] or cleaned["after"]):
+        cleaned["status"] = ProposedChange.Status.REJECTED
 
 
 def clean_change(raw, plan, *, mesocycle, forbidden=None):
@@ -366,4 +421,5 @@ def clean_change(raw, plan, *, mesocycle, forbidden=None):
 
     if errors:
         return None, errors
+    _fill_display(cleaned)
     return cleaned, []

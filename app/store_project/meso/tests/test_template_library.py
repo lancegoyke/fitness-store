@@ -716,3 +716,58 @@ class TestTemplateRosterDiscoverability:
         assert "template" in body
         assert "Write it as a template" in body
         assert library_url() in body
+
+
+class TestDesignerTemplateStart:
+    """#637 — a template's designer carries what "Start for a client…" needs.
+
+    The island swaps Deliver (which a template refuses) for a client picker that
+    posts to ``template_use``; the server hands it the action URL and the
+    coach's deliverable clients through ``meso-designer-flags``.
+    """
+
+    @staticmethod
+    def _flags(client, plan):
+        import json
+        import re
+
+        resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
+        assert resp.status_code == 200
+        match = re.search(
+            r'<script id="meso-designer-flags"[^>]*>(.*?)</script>',
+            resp.content.decode(),
+            re.S,
+        )
+        return json.loads(match.group(1))
+
+    def test_template_flags_offer_start_for_client(self, client):
+        coach, rel = coach_with_client()
+        plan, _ = template_plan(owner=coach)
+        client.force_login(coach)
+        flags = self._flags(client, plan)
+        assert flags["is_template"] is True
+        assert flags["template_start"]["action"] == use_url(plan)
+        assert [c["id"] for c in flags["template_start"]["clients"]] == [rel.pk]
+
+    def test_suspended_client_is_not_offered(self, client):
+        coach, _kept, suspended = _over_limit_coach()
+        plan, _ = template_plan(owner=coach)
+        client.force_login(coach)
+        ids = [c["id"] for c in self._flags(client, plan)["template_start"]["clients"]]
+        assert suspended.pk not in ids
+
+    def test_client_plan_has_no_template_start(self, client):
+        coach, rel = coach_with_client()
+        plan = PlanFactory(relationship=rel)
+        MesocycleFactory(plan=plan, order=0)
+        client.force_login(coach)
+        assert self._flags(client, plan)["template_start"] is None
+
+    def test_start_lands_in_the_clients_copy(self, client):
+        coach, rel = coach_with_client()
+        plan, _ = template_plan(owner=coach)
+        client.force_login(coach)
+        resp = client.post(use_url(plan), {"relationship": rel.pk})
+        copy = Plan.objects.get(relationship=rel, is_template=False)
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:designer_plan", kwargs={"plan_id": copy.pk})
