@@ -68,36 +68,36 @@
             </ol>
             {# Tour/demo entry points only on the truly empty workspace; with athletes the card is just the checklist. #}
             {% if is_empty %}
-            {% if tour_entry_available %}
+              {% if tour_entry_available %}
               <!-- Tour entry (guided-tour Phase 3): the roster's empty-state card
                    is the on-ramp into the self-coaching tour for a real coach who
                    hasn't started (or has dismissed/completed) it. -->
-              <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                <form method="post" action="{% url 'meso:tour_state' %}" style="margin:0;">
-                  {% csrf_token %}
-                  <input type="hidden" name="action" value="restart" />
-                  <button type="submit" class="meso-btn meso-btn--primary">Start the guided tour</button>
-                </form>
-                <form method="post" action="{% url 'meso:demo_load' %}" style="margin:0;">
-                  {% csrf_token %}
-                  <button type="submit" class="meso-btn meso-btn--ghost">Load a demo athlete &amp; program</button>
-                </form>
-              </div>
-            {% else %}
-              <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                <form method="post" action="{% url 'meso:demo_load' %}" style="margin:0;">
-                  {% csrf_token %}
-                  <button type="submit" class="meso-btn meso-btn--primary">Load a demo athlete &amp; program</button>
-                </form>
-                {% if is_sandbox %}
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                  <form method="post" action="{% url 'meso:tour_state' %}" style="margin:0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="restart" />
+                    <button type="submit" class="meso-btn meso-btn--primary">Start the guided tour</button>
+                  </form>
+                  <form method="post" action="{% url 'meso:demo_load' %}" style="margin:0;">
+                    {% csrf_token %}
+                    <button type="submit" class="meso-btn meso-btn--ghost">Load a demo athlete &amp; program</button>
+                  </form>
+                </div>
+              {% else %}
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                  <form method="post" action="{% url 'meso:demo_load' %}" style="margin:0;">
+                    {% csrf_token %}
+                    <button type="submit" class="meso-btn meso-btn--primary">Load a demo athlete &amp; program</button>
+                  </form>
+                  {% if is_sandbox %}
                   <!-- A sandbox coach can't invite real athletes (S4), so the
                        fallback must not dangle that offer at them (#441 P2-6). -->
-                  <span class="meso-sub" style="margin:0;">Not sure yet? Load a populated workspace to explore — inviting real athletes is off in the demo.</span>
-                {% else %}
-                  <span class="meso-sub" style="margin:0;">Not sure yet? Explore a populated workspace first — or invite your first athlete below.</span>
-                {% endif %}
-              </div>
-            {% endif %}
+                    <span class="meso-sub" style="margin:0;">Not sure yet? Load a populated workspace to explore — inviting real athletes is off in the demo.</span>
+                  {% else %}
+                    <span class="meso-sub" style="margin:0;">Not sure yet? Explore a populated workspace first — or invite your first athlete below.</span>
+                  {% endif %}
+                </div>
+              {% endif %}
             {% endif %}
           </div>
         {% endif %}
