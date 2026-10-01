@@ -689,6 +689,12 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
           const key = tableCellDomKey(rowId, weekId, field, line);
           const value = focusValuesRef.current[key] ?? event.currentTarget.value;
           callbacks.onRevert(value);
+          // Spreadsheet Escape (#653): cancel AND leave the editor — focus
+          // parks on the enclosing cell (a tabindex=-1 <td>). The blur this
+          // causes finds the draft already reverted and not dirty, so it
+          // commits nothing; restoration won't fight it (the active element
+          // is not a grid input). A second Escape on the cell blurs the table.
+          event.currentTarget.closest<HTMLElement>("td")?.focus();
           return;
         }
         default:

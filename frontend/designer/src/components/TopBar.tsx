@@ -20,6 +20,10 @@ export interface TopBarProps {
   // rather than a link that would silently target a different block.
   deliverHref: string | null;
   saveAsTemplate?: { action: string; csrf: string } | null;
+  // A template can't be delivered (the server refuses): its primary action is
+  // starting it for a client (#637), via the same `template_use` the library
+  // uses — so the unit-mismatch confirm step still applies.
+  templateStart?: { action: string; csrf: string; clients: { id: number; name: string }[] } | null;
   sidebarOpen: boolean;
   onToggleSidebar(): void;
   // Undo/redo live here (global, Ctrl+Z-backed editor actions) rather than in
@@ -47,6 +51,7 @@ export function TopBar({
   cycleLabel,
   deliverHref,
   saveAsTemplate = null,
+  templateStart = null,
   sidebarOpen,
   onToggleSidebar,
   canUndo,
@@ -58,6 +63,7 @@ export function TopBar({
 }: TopBarProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(planTitle);
+  const [startOpen, setStartOpen] = useState(false);
 
   const beginTitleEdit = () => {
     setTitleDraft(planTitle);
@@ -193,7 +199,53 @@ export function TopBar({
           </button>
         </form>
       ) : null}
-      {deliverHref ? (
+      {templateStart ? (
+        <div className="meso-start-wrap">
+          <button
+            type="button"
+            data-testid="start-for-client"
+            data-hover="brighten"
+            className="meso-btn-deliver"
+            aria-expanded={startOpen}
+            onClick={() => setStartOpen((open) => !open)}
+          >
+            Start for a client…
+          </button>
+          {startOpen && (
+            <div
+              className="meso-start-pop"
+              role="dialog"
+              aria-label="Start for a client"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setStartOpen(false);
+              }}
+            >
+              {templateStart.clients.length ? (
+                <form method="post" action={templateStart.action} data-testid="start-for-client-form">
+                  <input type="hidden" name="csrfmiddlewaretoken" value={templateStart.csrf} />
+                  <label className="meso-start-label" htmlFor="meso-start-client">
+                    Client
+                  </label>
+                  <select id="meso-start-client" name="relationship" autoFocus className="meso-start-select">
+                    {templateStart.clients.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="submit" data-hover="brighten" className="meso-btn-deliver meso-btn-deliver--inline">
+                    Start
+                  </button>
+                </form>
+              ) : (
+                <p className="meso-footer-copy" data-testid="start-for-client-empty">
+                  You have no active clients yet. <a href="/meso/" className="meso-inline-link">Add a client</a> first.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      ) : deliverHref ? (
         <a data-testid="deliver-link" href={deliverHref} data-hover="brighten" className="meso-btn-deliver">
           Deliver
         </a>

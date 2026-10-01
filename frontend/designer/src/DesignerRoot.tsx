@@ -66,6 +66,7 @@ const DEFAULT_FLAGS: DesignerFlags = {
   price_summary: "",
   is_template: false,
   save_template_url: null,
+  template_start: null,
 };
 
 /** Reads the hydration json_script elements once. #meso-grid-data is now the
@@ -202,6 +203,7 @@ export function DesignerRoot() {
     !flags.is_template && flags.save_template_url
       ? { action: flags.save_template_url, csrf }
       : null;
+  const templateStart = flags.is_template && flags.template_start ? { ...flags.template_start, csrf } : null;
 
   return (
     <div className="meso-designer-root">
@@ -213,6 +215,7 @@ export function DesignerRoot() {
         cycleLabel={cycleLabel}
         deliverHref={deliverHref}
         saveAsTemplate={saveAsTemplate}
+        templateStart={templateStart}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
         canUndo={!gridState.busy && gridState.history.can_undo}
@@ -225,7 +228,7 @@ export function DesignerRoot() {
 
       <div className="meso-designer-body">
         <div className={`meso-sidebar${sidebarOpen ? "" : " meso-sidebar--collapsed"}`}>
-          <AthleteMeta athlete={grid?.athlete ?? null} />
+          {!flags.is_template && <AthleteMeta athlete={grid?.athlete ?? null} />}
 
           <ChatPanel
             messages={agentChat.messages}
