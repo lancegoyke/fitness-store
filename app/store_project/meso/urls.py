@@ -254,6 +254,11 @@ urlpatterns = [
         views.plan_title_patch,
         name="api_plan_title",
     ),
+    path(
+        "api/plan/<int:plan_id>/mesocycle/<int:mesocycle_id>/name/",
+        views.mesocycle_name_patch,
+        name="api_mesocycle_name",
+    ),
     # Soft-delete a week (designer framework Phase 0, issue #401).
     path(
         "api/plan/<int:plan_id>/week/<int:week_id>/delete/",

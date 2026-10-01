@@ -52,6 +52,10 @@ interface PlanTitleCarrier extends GridHistoryCarrier {
   plan?: { title?: string };
 }
 
+interface MesocycleNameCarrier extends GridHistoryCarrier {
+  mesocycle?: { id?: Id; name?: string };
+}
+
 const EMPTY_GRID_HISTORY: GridHistory = {
   can_undo: false,
   can_redo: false,
@@ -126,6 +130,23 @@ function updateCellInGrid(grid: MesoGrid, cellId: Id, patch: Partial<GridCell>):
         return changed ? { ...row, cells } : row;
       }),
     })),
+  };
+}
+
+function updateMesocycleNameInGrid(
+  grid: MesoGrid,
+  mesocycleId: Id,
+  name: string,
+): MesoGrid {
+  return {
+    ...grid,
+    phases: grid.phases?.map((phase) =>
+      phase.id === mesocycleId ? { ...phase, name } : phase,
+    ),
+    mesocycle:
+      grid.mesocycle.id === mesocycleId
+        ? { ...grid.mesocycle, name }
+        : grid.mesocycle,
   };
 }
 
@@ -294,6 +315,39 @@ export function useGrid(options: UseGridOptions) {
           adoptGridHistory(reply);
         })
         .catch((err) => console.error("Rename program failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
+    },
+    [planId, csrf, adoptGridHistory],
+  );
+
+  const renameMesocycle = useCallback(
+    (mesocycleId: Id, name: string) => {
+      setGrid((prev) =>
+        prev ? updateMesocycleNameInGrid(prev, mesocycleId, name) : prev,
+      );
+      const write = apiPost(
+        `/meso/api/plan/${planId}/mesocycle/${mesocycleId}/name/`,
+        { name },
+        csrf,
+      )
+        .then((data) => {
+          const reply = data as MesocycleNameCarrier;
+          if (
+            reply.mesocycle?.id != null &&
+            typeof reply.mesocycle.name === "string"
+          ) {
+            const returnedId = reply.mesocycle.id;
+            const returnedName = reply.mesocycle.name;
+            setGrid((prev) =>
+              prev
+                ? updateMesocycleNameInGrid(prev, returnedId, returnedName)
+                : prev,
+            );
+          }
+          adoptGridHistory(reply);
+        })
+        .catch((err) => console.error("Rename block failed", err));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
@@ -577,6 +631,7 @@ export function useGrid(options: UseGridOptions) {
     busy,
     patchCell,
     renamePlan,
+    renameMesocycle,
     renameExercise,
     writeCellLine,
     patchRowColumns,

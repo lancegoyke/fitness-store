@@ -58,7 +58,7 @@ function gridPayload(overrides: Record<string, unknown> = {}) {
   return {
     plan: { id: 7, title: "Maya's plan", goal: "Strength", status: "active", unit: "kg" },
     athlete: { name: "Maya Okonkwo", initials: "MO", goal: "Strength", contraindications: [] },
-    phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
+    phases: [{ id: 1, name: "Hypertrophy", weeks: "4 wk", state: "current" }],
     mesocycle: { id: 1, plan_id: 7, name: "Block 1", week_count: 1 },
     weeks: [
       { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, delivered_at: null, vol: 70, inten: 65 },
@@ -166,6 +166,54 @@ describe("hydration: full payload", () => {
         "Old program",
       ),
     );
+    expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/");
+  });
+
+  it("renames the block in Periodization and refreshes every block label after undo", async () => {
+    const user = userEvent.setup();
+    jsonScript("meso-grid-data", gridPayload({
+      phases: [{ id: 1, name: "Block 1", weeks: "1 wk", state: "current" }],
+    }));
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+
+    const undoGrid = gridPayload({
+      phases: [{ id: 1, name: "Block 1", weeks: "1 wk", state: "current" }],
+      mesocycle: { id: 1, plan_id: 7, name: "Block 1", week_count: 1 },
+      history: { can_undo: false, can_redo: true, undo_label: null, redo_label: "Renamed block" },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          mesocycle: { id: 1, name: "Strength block" },
+          history: { can_undo: true, can_redo: false, undo_label: "Renamed block", redo_label: null },
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true, ...undoGrid }) });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    await user.click(screen.getByText("Periodization"));
+    await user.click(screen.getByRole("button", { name: "Rename block: Block 1" }));
+    await user.clear(screen.getByRole("textbox", { name: "Block name" }));
+    await user.type(screen.getByRole("textbox", { name: "Block name" }), "Strength block{Enter}");
+
+    await waitFor(() => expect(screen.getByTestId("grid-undo")).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Rename block: Strength block" })).toBeInTheDocument();
+    expect(screen.getByText("This mesocycle · Strength block")).toBeInTheDocument();
+    await user.click(screen.getByText("Athlete view"));
+    expect(screen.getByText("Strength block · Wk 1")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("grid-undo"));
+    await waitFor(() => expect(screen.getByText("Block 1 · Wk 1")).toBeInTheDocument());
+    await user.click(screen.getByText("Periodization"));
+    expect(screen.getByRole("button", { name: "Rename block: Block 1" })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/");
   });
 

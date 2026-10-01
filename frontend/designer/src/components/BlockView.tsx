@@ -11,6 +11,7 @@
 // the first thing you see when the block view is open) — noted as a
 // deviation from CONTRACT.md's "(canvas header: view segmented control +
 // periodStyle control)" component-tree comment.
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import { barH, cellOn, cellStyle } from "../lib/grid";
 import type { GridDay, GridWeek, Phase } from "../lib/api";
@@ -24,6 +25,7 @@ export interface BlockViewProps {
   days: GridDay[];
   periodStyle: PeriodStyle;
   onSetPeriodStyle(style: PeriodStyle): void;
+  onRenameMesocycle(mesocycleId: Id, name: string): void;
   onSwitchWeek(weekId: Id): void;
 }
 
@@ -43,7 +45,78 @@ function parseStyleString(css: string): CSSProperties {
   return out as CSSProperties;
 }
 
-export function BlockView({ phases, weeks, days, periodStyle, onSetPeriodStyle, onSwitchWeek }: BlockViewProps) {
+function BlockNameEditor({
+  phase,
+  onRename,
+}: {
+  phase: Phase;
+  onRename(mesocycleId: Id, name: string): void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(phase.name);
+
+  const beginEdit = () => {
+    setDraft(phase.name);
+    setEditing(true);
+  };
+  const cancelEdit = () => {
+    setDraft(phase.name);
+    setEditing(false);
+  };
+  const commitEdit = () => {
+    const name = draft.trim();
+    setEditing(false);
+    if (!name) {
+      setDraft(phase.name);
+      return;
+    }
+    setDraft(name);
+    if (name !== phase.name) onRename(phase.id, name);
+  };
+
+  return editing ? (
+    <input
+      autoFocus
+      aria-label="Block name"
+      className="meso-block-name-input"
+      maxLength={255}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commitEdit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commitEdit();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          cancelEdit();
+        }
+      }}
+    />
+  ) : (
+    <button
+      type="button"
+      className="meso-block-name-button"
+      aria-label={`Rename block: ${phase.name}`}
+      title="Rename block"
+      onClick={beginEdit}
+    >
+      {phase.name}
+    </button>
+  );
+}
+
+export function BlockView({
+  phases,
+  weeks,
+  days,
+  periodStyle,
+  onSetPeriodStyle,
+  onRenameMesocycle,
+  onSwitchWeek,
+}: BlockViewProps) {
+  const currentPhase = phases.find((phase) => phase.state === "current") ?? phases[0];
+
   return (
     <div className="meso-block-view">
       <div className="meso-seg meso-block-periodseg">
@@ -76,11 +149,13 @@ export function BlockView({ phases, weeks, days, periodStyle, onSetPeriodStyle, 
       <div className="meso-macro-strip">
         {phases.map((p) => (
           <div
-            key={p.name}
+            key={p.id}
             className={`meso-macro-block meso-macro-block--${p.state}`}
             style={{ flex: p.weeks === "2 wk" ? 0.5 : 1 }}
           >
-            <div className="meso-macro-block-name">{p.name}</div>
+            <div className="meso-macro-block-name">
+              <BlockNameEditor phase={p} onRename={onRenameMesocycle} />
+            </div>
             <div className="meso-macro-block-weeks">
               {p.weeks + (p.state === "current" ? " · now" : p.state === "done" ? " · done" : "")}
             </div>
@@ -90,7 +165,9 @@ export function BlockView({ phases, weeks, days, periodStyle, onSetPeriodStyle, 
 
       <div className="meso-card meso-block-card">
         <div className="meso-block-legend">
-          <div className="meso-block-legend-title">This mesocycle</div>
+          <div className="meso-block-legend-title">
+            This mesocycle{currentPhase ? ` · ${currentPhase.name}` : ""}
+          </div>
           <div className="meso-legend-item">
             <span className="meso-legend-swatch meso-legend-swatch--vol" />
             Volume
@@ -137,7 +214,7 @@ export function BlockView({ phases, weeks, days, periodStyle, onSetPeriodStyle, 
         {periodStyle === "ladder" && (
           <div className="meso-flex meso-ladder">
             {phases.map((p, i) => (
-              <div key={p.name} className="meso-ladder-col">
+              <div key={p.id} className="meso-ladder-col">
                 <div className={`meso-ladder-block meso-ladder-block--${p.state}`} style={{ height: 66 + i * 32 }}>
                   {p.name}
                 </div>

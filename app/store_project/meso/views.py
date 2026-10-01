@@ -5350,6 +5350,44 @@ def plan_title_patch(request, plan_id):
 
 @login_required
 @require_POST
+def mesocycle_name_patch(request, plan_id, mesocycle_id):
+    """Rename one of a program's blocks from the periodization view."""
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    mesocycle = get_object_or_404(Mesocycle, pk=mesocycle_id, plan=plan)
+    payload, bad = _json_object_body(request)
+    if bad is not None:
+        return bad
+
+    name = payload.get("name")
+    if not isinstance(name, str):
+        return JsonResponse(
+            {"ok": False, "error": "name must be a string."}, status=400
+        )
+    name = name.strip()
+    if not name:
+        return JsonResponse({"ok": False, "error": "name is required."}, status=400)
+    if len(name) > 255:
+        return JsonResponse({"ok": False, "error": "name is too long."}, status=400)
+
+    if name != mesocycle.name:
+        with transaction.atomic():
+            record_plan_action(plan, "Renamed block")
+            mesocycle.name = name
+            mesocycle.save(update_fields=["name"])
+            _touch_plan(plan)
+    return JsonResponse(
+        {
+            "ok": True,
+            "mesocycle": {"id": mesocycle.pk, "name": mesocycle.name},
+            "history": serialize_plan_history(plan),
+        }
+    )
+
+
+@login_required
+@require_POST
 def api_plan_undo(request, plan_id):
     """Pop the plan's most recent undo action and restore it (Phase 1 op-log).
 
