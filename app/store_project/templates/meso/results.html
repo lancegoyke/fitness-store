@@ -10,7 +10,7 @@
   <div class="meso-page meso-coach">
     <div class="meso-crumbs">
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
-      <span>{{ athlete.name }}</span> <span>/</span> <span>Session results</span>
+      <a href="{% url 'meso:athlete' athlete.id %}">{{ athlete.name }}</a> <span>/</span> <span>Session results</span>
     </div>
 
     <div class="meso-pagehead">
@@ -58,7 +58,7 @@
         <div style="line-height:1.45;">
           <div style="font-size:13px;font-weight:700;color:var(--accent-deep);">New PR{{ summary.new_records|length|pluralize }} this session</div>
           <div style="font-size:12.5px;color:var(--ink);">
-            {% for pr in summary.new_records %}<span class="meso-mono">{{ pr.name }} — {{ pr.value }} {{ pr.unit }}{% if pr.is_first %} (first){% else %} (+{{ pr.delta }}){% endif %}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
+            {% for pr in summary.new_records %}<span class="meso-mono">{{ pr.name }} — {{ pr.value }} {{ pr.unit }}{% if pr.is_first %} (first){% elif pr.delta != "0" %} (+{{ pr.delta }}){% endif %}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
           </div>
         </div>
       </div>

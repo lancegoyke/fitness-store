@@ -215,14 +215,6 @@ class TestRestore:
             in client.get(reverse("meso:athlete_home")).content.decode()
         )
 
-    def test_restore_sends_no_email(self, client, django_capture_on_commit_callbacks):
-        link = make_link()
-        coach_ends(client, link)
-        mail.outbox.clear()
-        with django_capture_on_commit_callbacks(execute=True):
-            client.post(restore_url(link))
-        assert mail.outbox == []
-
     def test_refused_after_30_days(self, client):
         link = make_link()
         draft, live, _ = three_plans(link)
@@ -384,6 +376,151 @@ class TestEndedEmail:
         assert resp.status_code == 302
         link.refresh_from_db()
         assert link.status == ENDED
+
+
+# -- restored email (#687) --------------------------------------------------
+
+
+class TestRestoredEmail:
+    def _restore(self, client, link, capture):
+        client.force_login(link.coach)
+        mail.outbox.clear()
+        with capture(execute=True):
+            return client.post(restore_url(link))
+
+    def test_one_plan_named(self, client, django_capture_on_commit_callbacks):
+        link = make_link(coach=make_coach("Sam Rivera"))
+        PlanFactory(
+            relationship=link, title="Strength Foundations", status=Plan.Status.ACTIVE
+        )
+        coach_ends(client, link)
+        self._restore(client, link, django_capture_on_commit_callbacks)
+
+        assert len(mail.outbox) == 1
+        msg = mail.outbox[0]
+        assert msg.to == [link.athlete.email]
+        assert msg.subject == "You're back with Sam Rivera"
+        assert msg.body.startswith("Hi Jordan,")
+        assert (
+            "You're back with Sam Rivera. Strength Foundations is in your app again."
+        ) in msg.body
+        assert reverse("meso:athlete_home") in msg.body
+        assert "Open your training home" in msg.alternatives[0][0]
+        assert "relationship_restored" in msg.extra_headers.get(
+            "X-SES-MESSAGE-TAGS", ""
+        ).replace("-", "_")
+        assert "List-Unsubscribe" in msg.extra_headers
+
+    def test_two_plans_joined_with_and(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        link = make_link(coach=make_coach("Sam Rivera"))
+        PlanFactory(relationship=link, title="Alpha", status=Plan.Status.ACTIVE)
+        PlanFactory(relationship=link, title="Beta", status=Plan.Status.DRAFT)
+        coach_ends(client, link)
+        self._restore(client, link, django_capture_on_commit_callbacks)
+        assert "Alpha and Beta are in your app again." in mail.outbox[0].body
+
+    def test_three_plans_no_oxford_comma(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        link = make_link(coach=make_coach("Sam Rivera"))
+        for title in ("Alpha", "Beta", "Gamma"):
+            PlanFactory(relationship=link, title=title, status=Plan.Status.ACTIVE)
+        coach_ends(client, link)
+        self._restore(client, link, django_capture_on_commit_callbacks)
+        assert "Alpha, Beta and Gamma are in your app again." in mail.outbox[0].body
+
+    def test_no_plans_has_no_program_sentence(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        link = make_link(coach=make_coach("Sam Rivera"))
+        coach_ends(client, link)
+        self._restore(client, link, django_capture_on_commit_callbacks)
+        assert len(mail.outbox) == 1
+        assert "You're back with Sam Rivera." in mail.outbox[0].body
+        assert "in your app again" not in mail.outbox[0].body
+
+    def test_only_actually_restored_plans_named(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        link = make_link(coach=make_coach("Sam Rivera"))
+        three_plans(link)  # "Old Block" was archived before the end
+        coach_ends(client, link)
+        self._restore(client, link, django_capture_on_commit_callbacks)
+        body = mail.outbox[0].body
+        assert "Old Block" not in body
+        assert "Draft One and Strength Foundations are in your app again." in body
+
+    def test_opted_out_gets_nothing(self, client, django_capture_on_commit_callbacks):
+        link = make_link()
+        AthleteProfile.objects.create(user=link.athlete, delivery_email_opt_out=True)
+        coach_ends(client, link)
+        self._restore(client, link, django_capture_on_commit_callbacks)
+        assert mail.outbox == []
+        link.refresh_from_db()
+        assert link.status == ACTIVE
+
+    def test_self_demo_and_sandbox_send_nothing(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = make_coach()
+        self_link = CoachAthleteFactory(
+            coach=coach, athlete=coach, is_self=True, status=ACTIVE
+        )
+        demo = CoachAthleteFactory(coach=coach, is_demo=True, status=ACTIVE)
+        for link in (self_link, demo):
+            CoachAthlete.objects.filter(pk=link.pk).update(
+                status=ENDED, ended_at=timezone.now(), ended_by="coach"
+            )
+        client.force_login(coach)
+        mail.outbox.clear()
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(restore_url(self_link))
+            client.post(restore_url(demo))
+        assert mail.outbox == []
+
+        sandbox_link = make_link()
+        coach_ends(client, sandbox_link)
+        mail.outbox.clear()
+        with mock.patch.object(views.meso_sandbox, "is_sandbox", return_value=True):
+            self._restore(client, sandbox_link, django_capture_on_commit_callbacks)
+        assert mail.outbox == []
+
+    def test_double_submit_sends_once(self, client, django_capture_on_commit_callbacks):
+        link = make_link()
+        three_plans(link)
+        coach_ends(client, link)
+        self._restore(client, link, django_capture_on_commit_callbacks)
+        assert len(mail.outbox) == 1
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(restore_url(link))
+        assert len(mail.outbox) == 1
+
+    def test_identity_from_and_reply_to(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        link = make_link(coach=make_coach("Sam Rivera"))
+        coach_ends(client, link)
+        self._restore(client, link, django_capture_on_commit_callbacks)
+        ended_like = mail.outbox[0]
+        assert "Sam Rivera" in ended_like.from_email
+        assert ended_like.reply_to == [link.coach.email]
+
+    def test_email_failure_does_not_break_the_restore(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        link = make_link()
+        coach_ends(client, link)
+        client.force_login(link.coach)
+        with mock.patch.object(
+            views, "send_relationship_restored_email", side_effect=RuntimeError("x")
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(restore_url(link))
+        assert resp.status_code == 302
+        link.refresh_from_db()
+        assert link.status == ACTIVE
 
 
 # -- roster ----------------------------------------------------------------

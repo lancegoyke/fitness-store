@@ -42,6 +42,7 @@ class EmailKind(models.TextChoices):
     ATHLETE_WAITING = "athlete_waiting", _("Athlete accepted, waiting on plan")
     INVITE_ACCEPTED = "invite_accepted", _("Invite accepted")
     RELATIONSHIP_ENDED = "relationship_ended", _("Coaching ended")
+    RELATIONSHIP_RESTORED = "relationship_restored", _("Coaching restored")
     CONTACT_OWNER = "contact_owner", _("Contact form (owner copy)")
     CONTACT_ACK = "contact_ack", _("Contact form (sender ack)")
     MARGIN_ALERT = "margin_alert", _("Margin alert")

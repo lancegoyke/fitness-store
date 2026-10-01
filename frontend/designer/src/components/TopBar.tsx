@@ -23,7 +23,12 @@ export interface TopBarProps {
   // A template can't be delivered (the server refuses): its primary action is
   // starting it for a client (#637), via the same `template_use` the library
   // uses — so the unit-mismatch confirm step still applies.
-  templateStart?: { action: string; csrf: string; clients: { id: number; name: string }[] } | null;
+  templateStart?: {
+    action: string;
+    csrf: string;
+    clients: { id: number; name: string }[];
+    pending_invites: string[];
+  } | null;
   sidebarOpen: boolean;
   onToggleSidebar(): void;
   // Undo/redo live here (global, Ctrl+Z-backed editor actions) rather than in
@@ -42,6 +47,13 @@ const VIEW_TABS: { id: ViewMode; label: string }[] = [
   { id: "block", label: "Periodization" },
   { id: "athlete", label: "Athlete view" },
 ];
+
+/** "Jordan Ellis hasn't" / "Jordan Ellis and 2 others haven't" (#686). */
+function pendingWho(names: string[]): string {
+  if (names.length === 1) return `${names[0]} hasn't`;
+  const others = names.length - 1;
+  return `${names[0]} and ${others} ${others === 1 ? "other" : "others"} haven't`;
+}
 
 export function TopBar({
   planTitle,
@@ -239,7 +251,24 @@ export function TopBar({
                 </form>
               ) : (
                 <p className="meso-footer-copy" data-testid="start-for-client-empty">
-                  You have no active clients yet. <a href="/meso/" className="meso-inline-link">Add a client</a> first.
+                  {templateStart.pending_invites.length ? (
+                    <>
+                      {pendingWho(templateStart.pending_invites)} accepted yet. We'll email you when they do, and you can
+                      start this for them from{" "}
+                      <a href="/meso/" className="meso-inline-link">
+                        the roster
+                      </a>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      You have no active clients yet.{" "}
+                      <a href="/meso/" className="meso-inline-link">
+                        Add a client
+                      </a>{" "}
+                      to start this template for them.
+                    </>
+                  )}
                 </p>
               )}
             </div>

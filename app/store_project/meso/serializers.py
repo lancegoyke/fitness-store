@@ -532,22 +532,24 @@ def serialize_session_log(log, client_ids=None):
 def serialize_new_record(record):
     """A ``personal_records.NewRecord`` as the display dict the PR surface reads.
 
-    Formats the raw Epley e1RM floats into number strings the client renders
-    verbatim — so it never re-rounds and can't disagree with the pinned server
-    value — rounded to the 2-decimal convention the stored ``AthleteOneRm``
-    display already uses (``_fmt_num`` trims a trailing ``.0``). ``is_first`` is a
-    first-ever lift (no prior best to beat); ``delta`` is the gain over the
-    previous best, absent on a first PR.
+    Formats the raw Epley e1RM floats into whole-unit number strings the client
+    renders verbatim -- so it never re-rounds and can't disagree with the pinned
+    server value. Whole units, with plain ``round()`` (the athlete profile's
+    ``_fmt_num(round(e1rm))`` rounding), so 262.5 reads "262" on both surfaces;
+    the stored ``AthleteOneRm`` is untouched. ``delta`` is the difference of the
+    two displayed whole numbers (never of the raw floats), so the banner adds up.
+    ``is_first`` is a first-ever lift (no prior best to beat); ``delta`` is the
+    gain over the previous best, absent on a first PR.
     """
-    value = round(record.value, 2)
-    previous = round(record.previous, 2) if record.previous is not None else None
+    value = round(record.value)
+    previous = round(record.previous) if record.previous is not None else None
     return {
         "key": record.key,
         "name": record.name,
         "unit": record.unit,
         "value": _fmt_num(value),
         "previous": _fmt_num(previous) if previous is not None else None,
-        "delta": _fmt_num(round(value - previous, 2)) if previous is not None else None,
+        "delta": _fmt_num(value - previous) if previous is not None else None,
         "is_first": record.previous is None,
     }
 
@@ -625,6 +627,19 @@ def _fmt_num(value):
     """A number without a trailing ``.0`` (70.0 → "70", 72.5 → "72.5")."""
     f = float(value)
     return str(int(f)) if f == int(f) else str(f)
+
+
+def rep_missed(target_reps, reps) -> bool:
+    """Whether a set's ``reps`` fell short of the prescribed ``target_reps`` (#676, #688).
+
+    Only meaningful when the prescription's reps are a plain number ("AMRAP" /
+    "8-10" never miss) and the set's reps parse too. Shared by the results page
+    (``presenters._worst_rep_shortfall``) and the designer's logged-set marker,
+    so both count the same sets as missed.
+    """
+    target = _num(target_reps)
+    done = _num(reps)
+    return target is not None and done is not None and done < target
 
 
 def _exercise_key(exercise_id, name):
@@ -1038,11 +1053,14 @@ def week_readouts(weeks, exercise_slot_ids, cells_by_key, unit="kg"):
     return readouts
 
 
-def athlete_line_summary(lines, unit, log_id=None):
+def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
     """One compact summary of a cell's logged athlete lines, or None.
 
-    ``{"sets": n, "load": "225", "unit": "lb", "rpe": "9"}`` -- the top set's
-    own load number and unit. The top set is the heaviest by kg-equivalent, but
+    ``{"sets": n, "load": "225", "unit": "lb", "rpe": "9", "missed": 1}`` -- the
+    top set's own load number and unit. ``rpe`` is instead the HIGHEST RPE over
+    every logged set of the cell (``""`` if none), and ``missed`` counts the
+    logged sets whose reps fell short of ``target_reps`` (the prescription's
+    reps, ``rep_missed``'s notion -- 0 unless they are a plain number). The top set is the heaviest by kg-equivalent, but
     the display is never converted. A %1RM set is never compared with an
     absolute one (no 1RM to convert by, #663): if any set carries an absolute
     load the top is chosen among those alone; a %-only log shows its top % as
@@ -1063,6 +1081,8 @@ def athlete_line_summary(lines, unit, log_id=None):
         return None
     best = {"abs": None, "pct": None}  # kind -> (value, load text, unit, rpe)
     bodyweight = None  # (load text, rpe)
+    rpes = []  # every logged set's numeric RPE
+    missed = 0
     for lc in logged:
         behind = [
             s
@@ -1071,7 +1091,12 @@ def athlete_line_summary(lines, unit, log_id=None):
         ]
         candidates = []  # (load text, unit, rpe)
         for s in behind:
-            if not s.load or s.session_log_id != log_id:
+            if s.session_log_id != log_id:
+                continue
+            if _num(s.rpe) is not None:
+                rpes.append(_num(s.rpe))
+            missed += rep_missed(target_reps, s.reps)
+            if not s.load:
                 continue
             text, suffix = _split_suffix(s.load)
             candidates.append((text, s.unit or suffix or "", s.rpe))
@@ -1079,6 +1104,9 @@ def athlete_line_summary(lines, unit, log_id=None):
         # line whose sets all belong to an older log is that log's, not ours.
         if not candidates and not behind:
             parsed = parsing.parse_performed(lc.text) or {}
+            if _num(parsed.get("rpe")) is not None:
+                rpes.append(_num(parsed["rpe"]))
+            missed += rep_missed(target_reps, parsed.get("reps"))
             if parsed.get("load"):
                 text, suffix = _split_suffix(parsed["load"])
                 candidates = [(text, suffix or unit, parsed.get("rpe") or "")]
@@ -1097,11 +1125,17 @@ def athlete_line_summary(lines, unit, log_id=None):
             if top is None or value[0] > top[0]:
                 best[kind] = (value[0], text, set_unit, rpe)
     top = best["abs"] or best["pct"]
-    summary = {"sets": len(logged), "load": "", "unit": "", "rpe": ""}
+    summary = {
+        "sets": len(logged),
+        "load": "",
+        "unit": "",
+        "rpe": _fmt_num(max(rpes)) if rpes else "",
+        "missed": missed,
+    }
     if top:
-        summary.update(load=top[1], unit=top[2] or "", rpe=top[3] or "")
+        summary.update(load=top[1], unit=top[2] or "")
     elif bodyweight:
-        summary.update(load="BW", unit="", rpe=bodyweight[1] or "")
+        summary.update(load="BW", unit="")
     return summary
 
 
@@ -1219,6 +1253,7 @@ def serialize_mesocycle_grid(mesocycle):
                                 week.pk
                             )
                         ),
+                        (cell.parsed() or {}).get("reps"),
                     ),
                 }
                 cells[str(week.pk)] = cell_data

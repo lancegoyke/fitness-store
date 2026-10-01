@@ -1,0 +1,15 @@
+<p>Hi{% if greeting_name %} {{ greeting_name }}{% endif %},</p>
+
+<p>You're back with {{ coach_name }}.{% if restored_count == 1 %} {{ restored_programs }} is in your app again.{% elif restored_count %} {{ restored_programs }} are in your app again.{% endif %}</p>
+
+<p><a href="{{ home_url }}">Open your training home</a> any time.</p>
+
+<p>Mastering Fitness</p>
+
+{% if unsubscribe_url %}
+  <hr>
+  <p style="font-size:12px;color:#888;">
+    You're getting this because {{ coach_name }} coaches you on Mastering Fitness.
+    <a href="{{ unsubscribe_url }}">Unsubscribe from training emails</a>.
+  </p>
+{% endif %}

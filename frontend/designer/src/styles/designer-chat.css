@@ -276,6 +276,8 @@
   line-height: 1.4;
 }
 .meso-inline-link {
-  color: var(--accent-ink);
+  /* --accent-ink is the text-on-accent token (white); a link on the light
+     popover/panel surface needs the accent ink (#686). */
+  color: var(--accent-deep);
   text-decoration: underline;
 }

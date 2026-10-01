@@ -1,4 +1,4 @@
-{% autoescape off %}Hi,
+{% autoescape off %}Hi{% if greeting_name %} {{ greeting_name }}{% endif %},
 
 {{ athlete_name }} accepted your invite on Mastering Fitness and is ready to
 train with you.{% if template_title %} The template you wrote, {{ template_title }}, is ready to start for them: open your roster and press Start {{ template_title }} on their row.{% else %} Open your roster to build their first program.{% endif %}

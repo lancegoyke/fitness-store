@@ -373,8 +373,12 @@ function GridCellEditor({
   const athleteSetCount = cell.athlete_summary?.sets ?? athleteLines.length;
   const summary = cell.athlete_summary;
   const loadPart = summary && summary.load ? ` · ${summary.load}${summary.unit ? ` ${summary.unit}` : ""}` : "";
+  const missed = summary?.missed ?? 0;
   const athleteMarkerText = `✓ ${athleteSetCount} ${athleteSetCount === 1 ? "set" : "sets"}${loadPart}${
     summary && summary.rpe ? ` @${summary.rpe}` : ""
+  }${missed > 0 ? ` · ${missed} ${missed === 1 ? "miss" : "misses"}` : ""}`;
+  const athleteSetsLabel = `${athleteSetCount} ${athleteSetCount === 1 ? "set" : "sets"} logged by your athlete${
+    missed > 0 ? `, ${missed} missed` : ""
   }`;
 
   function onAthleteKeyDown(e: KeyboardEvent<HTMLDivElement>) {
@@ -498,7 +502,10 @@ function GridCellEditor({
             className="meso-athlete-marker"
             data-testid={`cell-athlete-marker-${cellId}`}
             aria-expanded={athleteOpen}
-            aria-label={`${athleteSetCount} ${athleteSetCount === 1 ? "set" : "sets"} logged by your athlete — ${athleteOpen ? "hide" : "show"} lines`}
+            // The cell column is narrow, so the marker wraps; the title
+            // carries the full roll-up as a tooltip.
+            title={athleteMarkerText}
+            aria-label={`${athleteSetsLabel} — ${athleteOpen ? "hide" : "show"} lines`}
             onClick={() => {
               // Collapsing unmounts the athlete inputs that may own the nav
               // anchor — re-anchor on the cell's text input first.

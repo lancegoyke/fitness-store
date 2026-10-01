@@ -10,12 +10,15 @@ from django.core import mail
 
 from store_project.notifications.emails import client_email_identity
 from store_project.notifications.emails import first_name
+from store_project.notifications.emails import send_athlete_waiting_email
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_invite_reminder_email
 from store_project.notifications.emails import send_coach_request_email
 from store_project.notifications.emails import send_contact_emails
+from store_project.notifications.emails import send_invite_accepted_email
 from store_project.notifications.emails import send_relationship_ended_email
+from store_project.notifications.emails import send_relationship_restored_email
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -65,7 +68,18 @@ def _ended(coach, athlete=None, **kwargs):
     )
 
 
-SENDERS = [_invite, _reminder, _delivered, _ended]
+def _restored(coach, athlete=None, **kwargs):
+    athlete = athlete or UserFactory(name="Jordan Ellis")
+    return send_relationship_restored_email(
+        athlete=athlete,
+        coach=coach,
+        home_url=URL,
+        restored_plan_titles=["Strength Foundations"],
+        **kwargs,
+    )
+
+
+SENDERS = [_invite, _reminder, _delivered, _ended, _restored]
 
 
 @pytest.mark.parametrize("send", SENDERS)
@@ -154,7 +168,7 @@ class TestGreeting:
 
         assert mail.outbox[0].body.startswith("Hi,")
 
-    @pytest.mark.parametrize("send", [_delivered, _ended])
+    @pytest.mark.parametrize("send", [_delivered, _ended, _restored])
     def test_delivery_and_ended_greet_by_first_name(self, send):
         send(_coach())
 
@@ -163,7 +177,7 @@ class TestGreeting:
         assert "Hi Jordan," in message.alternatives[0][0]
         assert "Hi Jordan Ellis" not in message.body
 
-    @pytest.mark.parametrize("send", [_delivered, _ended])
+    @pytest.mark.parametrize("send", [_delivered, _ended, _restored])
     def test_label_is_used_when_the_athlete_has_no_name(self, send):
         athlete = UserFactory(name="", email="jordan.ellis@example.com")
 
@@ -171,7 +185,7 @@ class TestGreeting:
 
         assert mail.outbox[0].body.startswith("Hi Jordan,")
 
-    @pytest.mark.parametrize("send", [_delivered, _ended])
+    @pytest.mark.parametrize("send", [_delivered, _ended, _restored])
     def test_no_name_at_all_is_plain_hi_not_email_stem(self, send):
         athlete = UserFactory(name="", email="jordan.ellis@example.com")
 
@@ -181,6 +195,49 @@ class TestGreeting:
         assert body.startswith("Hi,")
         assert "Hi jordan" not in body
         assert "Hi Your" not in body
+
+
+def _coach_request(coach):
+    return send_coach_request_email(
+        athlete=UserFactory(name="Jordan Ellis"), coach=coach, roster_url=URL
+    )
+
+
+def _athlete_waiting(coach):
+    return send_athlete_waiting_email(
+        athlete=UserFactory(name="Jordan Ellis"), coach=coach, roster_url=URL
+    )
+
+
+def _invite_accepted(coach):
+    return send_invite_accepted_email(
+        athlete=UserFactory(name="Jordan Ellis"), coach=coach, roster_url=URL
+    )
+
+
+COACH_FACING = [_coach_request, _athlete_waiting, _invite_accepted]
+
+
+class TestCoachFacingGreeting:
+    """#688.4: mail TO the coach greets them by first name."""
+
+    @pytest.mark.parametrize("send", COACH_FACING)
+    def test_named_coach_is_greeted_by_first_name(self, send):
+        send(_coach(name="Sam Rivera"))
+
+        message = mail.outbox[0]
+        assert message.body.startswith("Hi Sam,")
+        assert "<p>Hi Sam,</p>" in message.alternatives[0][0]
+        assert "Hi Sam Rivera" not in message.body
+
+    @pytest.mark.parametrize("send", COACH_FACING)
+    def test_unnamed_coach_is_plain_hi_not_email_stem(self, send):
+        send(_coach(name="", email="sam.rivera@coach.test"))
+
+        message = mail.outbox[0]
+        assert message.body.startswith("Hi,")
+        assert "<p>Hi,</p>" in message.alternatives[0][0]
+        assert "Hi sam" not in message.body
 
 
 class TestUnchangedEmails:

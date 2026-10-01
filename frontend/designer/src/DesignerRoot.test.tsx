@@ -149,7 +149,7 @@ describe("hydration: full payload", () => {
       flagsPayload({
         is_template: true,
         save_template_url: null,
-        template_start: { action: "/meso/template/7/use/", clients: [{ id: 4, name: "Maya Okonkwo" }] },
+        template_start: { action: "/meso/template/7/use/", clients: [{ id: 4, name: "Maya Okonkwo" }], pending_invites: [] },
       }),
     );
 

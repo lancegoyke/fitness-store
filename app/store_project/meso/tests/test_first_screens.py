@@ -133,7 +133,12 @@ def test_roster_names_pending_invite_as_blocker(client):
     body = client.get(reverse("meso:roster")).content.decode()
 
     assert body.count("1 invite pending") == 2
-    assert "No athletes yet — Jordan hasn't accepted your invite yet." in body
+    assert "No athletes yet." in body
+    # #688.6: the pending claim is made once, by the write-ahead explanation.
+    assert (
+        body.replace("&#x27;", "'").count("Jordan hasn't accepted your invite yet.")
+        == 1
+    )
     assert "+ Add yourself as an athlete" in body
     assert "Invite an athlete first to build them a program." not in body
 

@@ -76,6 +76,7 @@ from .serializers import _week_label
 from .serializers import current_week
 from .serializers import diff_week_snapshots
 from .serializers import initials
+from .serializers import rep_missed
 from .serializers import serialize_mesocycle
 from .serializers import serialize_mesocycle_grid
 from .serializers import serialize_new_record
@@ -1157,10 +1158,9 @@ def _worst_rep_shortfall(prescription, logged_sets):
         return None
     worst = None
     for s in logged_sets:
-        reps = _num(s.reps)
-        if reps is None or reps >= target_reps:
+        if not rep_missed(target_reps, s.reps):
             continue
-        deficit = target_reps - reps
+        deficit = target_reps - _num(s.reps)
         if worst is None or deficit > worst[0]:
             worst = (deficit, s.set_number)
     return worst
@@ -1394,7 +1394,10 @@ def session_results(session):
         flag = ""
 
     return {
-        "athlete": {"name": link_athlete_name(plan.relationship)},
+        "athlete": {
+            "id": plan.relationship.athlete_id,
+            "name": link_athlete_name(plan.relationship),
+        },
         "plan_id": plan.pk,
         "rows": rows,
         "summary": {

@@ -296,3 +296,78 @@ class TestResultsRendersNewRecords:
         client.force_login(s.coach)
         body = client.get(results_url(s.session)).content.decode()
         assert "New PR" not in body
+
+
+# -- #688.1: PR values are whole units everywhere --------------------------
+
+
+class TestWholeUnitRecords:
+    def _record(self, value, previous):
+        from store_project.meso.personal_records import NewRecord
+
+        return NewRecord(
+            key="box squat",
+            name="Box Squat",
+            unit="lb",
+            value=value,
+            previous=previous,
+            reps="5",
+            load="225",
+            logged_set_id=1,
+        )
+
+    def test_serializer_rounds_value_previous_and_delta(self):
+        from store_project.meso.serializers import serialize_new_record
+
+        out = serialize_new_record(self._record(262.5, 196.33))
+        assert out["value"] == "262"  # banker's, same as the athlete profile
+        assert out["previous"] == "196"
+        assert out["delta"] == "66"  # whole(262) - whole(196), self-consistent
+
+    def test_first_record_has_no_previous_or_delta(self):
+        from store_project.meso.serializers import serialize_new_record
+
+        out = serialize_new_record(self._record(262.5, None))
+        assert out["value"] == "262"
+        assert out["previous"] is None
+        assert out["delta"] is None
+
+    def test_sub_unit_gain_has_zero_delta_and_no_plus_zero_label(self):
+        """A real PR (116.67 -> 117.25) rounds to one whole number.
+
+        The delta is "0" and no surface may print "(+0)" (#688 review).
+        """
+        from pathlib import Path
+
+        from django.template.loader import get_template
+
+        from store_project.meso.serializers import serialize_new_record
+
+        assert serialize_new_record(self._record(117.25, 116.67))["delta"] == "0"
+        root = Path(__file__).resolve().parents[2]
+        js = (root / "static/js/meso_athlete.js").read_text()
+        label = js[js.index("prLabel(pr)") : js.index("rowFilled(r)")]
+        assert 'pr.delta === "0"' in label
+        html = get_template("meso/results.html").template.source
+        assert '{% elif pr.delta != "0" %}' in html
+
+    def test_results_banner_shows_whole_units(self, client):
+        s = seed(athlete_unit=Unit.POUNDS)
+        log_done(s.session, s.athlete, s.squat, [("5", "225", "8")])  # e1RM 262.5
+        client.force_login(s.coach)
+        body = client.get(results_url(s.session)).content.decode()
+        assert "Box Squat — 262 lb" in body
+        assert "262.5" not in body
+
+
+# -- #688.7: the results breadcrumb links the athlete ----------------------
+
+
+class TestResultsBreadcrumb:
+    def test_athlete_name_links_to_their_profile(self, client):
+        s = seed()
+        client.force_login(s.coach)
+        body = client.get(results_url(s.session)).content.decode()
+        href = reverse("meso:athlete", kwargs={"pk": s.athlete.pk})
+        crumbs = body.split('class="meso-crumbs"', 1)[1].split("</div>", 1)[0]
+        assert f'<a href="{href}">Maya Okonkwo</a>' in crumbs
