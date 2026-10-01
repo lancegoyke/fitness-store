@@ -56,6 +56,10 @@ interface MesocycleNameCarrier extends GridHistoryCarrier {
   mesocycle?: { id?: Id; name?: string };
 }
 
+interface DayNameCarrier extends GridHistoryCarrier {
+  day?: { session_slot_id?: Id; name?: string; day_number?: number };
+}
+
 const EMPTY_GRID_HISTORY: GridHistory = {
   can_undo: false,
   can_redo: false,
@@ -147,6 +151,15 @@ function updateMesocycleNameInGrid(
       grid.mesocycle.id === mesocycleId
         ? { ...grid.mesocycle, name }
         : grid.mesocycle,
+  };
+}
+
+function updateDayNameInGrid(grid: MesoGrid, sessionSlotId: Id, name: string): MesoGrid {
+  return {
+    ...grid,
+    days: grid.days.map((day) =>
+      day.session_slot_id === sessionSlotId ? { ...day, name } : day,
+    ),
   };
 }
 
@@ -348,6 +361,37 @@ export function useGrid(options: UseGridOptions) {
           adoptGridHistory(reply);
         })
         .catch((err) => console.error("Rename block failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
+    },
+    [planId, csrf, adoptGridHistory],
+  );
+
+  const renameDay = useCallback(
+    (sessionSlotId: Id, name: string) => {
+      setGrid((prev) =>
+        prev ? updateDayNameInGrid(prev, sessionSlotId, name) : prev,
+      );
+      const write = apiPost(
+        `/meso/api/plan/${planId}/day/${sessionSlotId}/name/`,
+        { name },
+        csrf,
+      )
+        .then((data) => {
+          const reply = data as DayNameCarrier;
+          if (
+            reply.day?.session_slot_id != null &&
+            typeof reply.day.name === "string"
+          ) {
+            const returnedId = reply.day.session_slot_id;
+            const returnedName = reply.day.name;
+            setGrid((prev) =>
+              prev ? updateDayNameInGrid(prev, returnedId, returnedName) : prev,
+            );
+          }
+          adoptGridHistory(reply);
+        })
+        .catch((err) => console.error("Rename day failed", err));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
@@ -632,6 +676,7 @@ export function useGrid(options: UseGridOptions) {
     patchCell,
     renamePlan,
     renameMesocycle,
+    renameDay,
     renameExercise,
     writeCellLine,
     patchRowColumns,

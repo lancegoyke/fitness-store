@@ -33,10 +33,35 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.meso-day-name {
+.meso-day-name,
+.meso-day-name-input {
+  box-sizing: border-box;
   font-size: 14.5px;
   font-weight: 700;
   letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.meso-day-name {
+  appearance: none;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  cursor: text;
+}
+.meso-day-name:hover,
+.meso-day-name:focus-visible {
+  border-color: var(--line);
+  outline: none;
+}
+.meso-day-name-input {
+  width: 190px;
+  padding: 2px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--surface);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(49, 117, 157, 0.14);
 }
 .meso-day-bias {
   font-size: 11.5px;

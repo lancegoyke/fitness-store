@@ -243,6 +243,37 @@ describe("renameMesocycle", () => {
   });
 });
 
+describe("renameDay", () => {
+  it("optimistically updates the day, applies the reply, and adopts history", async () => {
+    const { result } = setup(grid({ days: [day({ name: "Old day" })] }));
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: true,
+        day: { session_slot_id: 1, name: "Server day", day_number: 1 },
+        history: {
+          can_undo: true,
+          can_redo: false,
+          undo_label: "Renamed day",
+          redo_label: null,
+        },
+      }),
+    ) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.renameDay(1, "Power day");
+    });
+
+    expect(result.current.grid?.days[0]?.name).toBe("Power day");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/meso/api/plan/7/day/1/name/",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(sentBody()).toEqual({ name: "Power day" });
+    await waitFor(() => expect(result.current.grid?.days[0]?.name).toBe("Server day"));
+    expect(result.current.history.undo_label).toBe("Renamed day");
+  });
+});
+
 describe("renameExercise", () => {
   it("POSTs {name} to the row's FIRST live week's cell (the identity cell), optimistically updating row.name", async () => {
     // Phase 2a: the one-week swap fields are gone, so identity is always the

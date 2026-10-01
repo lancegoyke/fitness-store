@@ -81,6 +81,7 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     onWriteCellLine: vi.fn(),
     onPatchRowColumns: vi.fn(),
     onRenameExercise: vi.fn(),
+    onRenameDay: vi.fn(),
     onAddExercise: vi.fn(),
     onRemoveExercise: vi.fn(),
     onAddDay: vi.fn(),
@@ -110,6 +111,32 @@ describe("layout", () => {
   it("renders nothing when grid is null", () => {
     const { container } = render(<MesoTable {...baseProps({ grid: null })} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders an unnamed day as Day N", () => {
+    render(<MesoTable {...baseProps({ grid: grid({ days: [day({ day_number: 3, name: "" })] }) })} />);
+    expect(screen.getByRole("button", { name: "Rename day: Day 3" })).toHaveTextContent("Day 3");
+  });
+
+  it("edits a day name inline, commits blank, and cancels with Escape", async () => {
+    const user = userEvent.setup();
+    const onRenameDay = vi.fn();
+    render(<MesoTable {...baseProps({ onRenameDay })} />);
+
+    await user.click(screen.getByRole("button", { name: "Rename day: Lower" }));
+    const input = screen.getByRole("textbox", { name: "Day name" });
+    await user.clear(input);
+    await user.type(input, "  Power  {Enter}");
+    expect(onRenameDay).toHaveBeenCalledWith(1, "Power");
+
+    await user.click(screen.getByRole("button", { name: "Rename day: Lower" }));
+    await user.clear(screen.getByRole("textbox", { name: "Day name" }));
+    await user.tab();
+    expect(onRenameDay).toHaveBeenLastCalledWith(1, "");
+
+    await user.click(screen.getByRole("button", { name: "Rename day: Lower" }));
+    await user.type(screen.getByRole("textbox", { name: "Day name" }), " discard{Escape}");
+    expect(onRenameDay).toHaveBeenCalledTimes(2);
   });
 });
 

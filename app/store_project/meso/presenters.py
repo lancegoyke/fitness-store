@@ -1321,7 +1321,7 @@ def _athlete_session_row(session, *, done):
     return {
         "id": session.pk,
         "n": session.day_number,
-        "name": session.name,
+        "name": session.name or f"Day {session.day_number}",
         "bias": session.bias,
         # Trainable rows only — live + non-skipped (P0 fixed-lineup cutover); a
         # week-skipped exercise doesn't count toward the day's "N exercises" chip.
