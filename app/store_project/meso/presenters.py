@@ -338,6 +338,27 @@ def _profile_plan(link):
     )
 
 
+def end_consequence(link, athlete_display_name):
+    """The sentence the end-coaching confirm panel shows (#651).
+
+    Names the athlete and every program that will leave their app (the link's
+    non-archived plans). Programs are date-less (§4a), so there is no "current
+    week" to derive a remaining-weeks range from; the plan titles stand alone.
+    """
+    titles = list(
+        link.plans.exclude(status=Plan.Status.ARCHIVED)
+        .order_by("pk")
+        .values_list("title", flat=True)
+    )
+    lead = f"End coaching with {athlete_display_name}?"
+    if not titles:
+        return f"{lead} They'll move to Past athletes."
+    if len(titles) == 1:
+        return f"{lead} {titles[0]} will disappear from their app."
+    names = ", ".join(titles[:-1]) + f" and {titles[-1]}"
+    return f"{lead} {names} will disappear from their app."
+
+
 def profile_program(link, working_plan):
     """The athlete-profile program block — the athlete's cadence + macrocycle.
 
@@ -603,6 +624,7 @@ def relationship_history(coach):
             "token": link.token,
             "status": link.status,
             "status_label": _HISTORY_STATUS_LABELS[link.status],
+            "can_restore": link.can_restore,
         }
         if link.is_closed:
             # ``closed_at`` is set for any link closed through the state machine;

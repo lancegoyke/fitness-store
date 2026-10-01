@@ -48,6 +48,7 @@ from store_project.analytics.track import track
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
+from store_project.notifications.emails import send_relationship_ended_email
 from store_project.notifications.push import record_push_click
 
 from . import adherence as meso_adherence
@@ -498,7 +499,16 @@ class RosterView(TemplateView):
         # onboarding card that teaches the model and offers the one-click demo;
         # once demo data is loaded a banner offers to remove it (Q3).
         ctx["has_demo"] = meso_demo.has_demo(self.request.user)
-        ctx["is_empty"] = not athletes
+        # "Never coached anyone": any past/pending/waiting link (bar demo/self)
+        # means this isn't a first-run workspace, so no onboarding checklist (#651).
+        ctx["has_history"] = (
+            CoachAthlete.objects.for_coach(self.request.user)
+            .exclude(is_demo=True)
+            .exclude(is_self=True)
+            .exclude(status=CoachAthlete.Status.ACTIVE)
+            .exists()
+        )
+        ctx["is_empty"] = not athletes and not ctx["has_history"]
         # Self-coaching (guided-tour Phase 0): the roster offers "Add yourself as
         # an athlete" until the coach's one self-link is active.
         ctx["has_self_link"] = any(link.is_self for link in links)
@@ -710,6 +720,9 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         ctx["relationship"] = {
             "token": link.token,
             "can_end": not link.is_self and not link.is_demo,
+            "end_consequence": presenters.end_consequence(
+                link, athlete_name(link.athlete, link.label)
+            ),
         }
         return ctx
 
@@ -4031,11 +4044,134 @@ def invite_decline(request, token):
 @login_required
 @require_POST
 def relationship_end(request, token):
+    """End an active link — only with the confirm step's ``confirm=1`` marker (#651).
+
+    The marker is rendered only inside the profile's confirm panel, so a stale
+    page or a scripted bare POST ends nothing. Lock order is User (ascending pk)
+    → CoachAthlete → Plan (ascending pk), all ``no_key``; the link is re-read
+    under the lock and must still be active.
+    """
     link = get_object_or_404(CoachAthlete, token=token)
     if not link.is_active or request.user not in (link.coach, link.athlete):
         return HttpResponseForbidden("You cannot end this relationship.")
-    link.end()
+    by = "coach" if request.user == link.coach else "athlete"
+    if request.POST.get("confirm") != "1":
+        messages.info(request, "Nothing was ended. Confirm to end the relationship.")
+        if by == "coach":
+            return redirect("meso:athlete", pk=link.athlete_id)
+        return redirect("meso:athlete_home")
+    with transaction.atomic():
+        # LOCK ORDER (decisions.md § Row-lock order): User → CoachAthlete → Plan.
+        list(
+            User.objects.select_for_update(no_key=True)
+            .filter(pk__in={link.coach_id, link.athlete_id})
+            .order_by("pk")
+        )
+        link = get_object_or_404(
+            CoachAthlete.objects.select_for_update(no_key=True)
+            .select_related("coach", "athlete")
+            .active(),
+            token=token,
+        )
+        list(
+            Plan.objects.select_for_update(no_key=True)
+            .filter(relationship=link)
+            .order_by("pk")
+        )
+        link.end(by=by)
+    if by == "coach":
+        _notify_athlete_relationship_ended(request, link)
     messages.success(request, "Relationship ended.")
+    return redirect("meso:roster")
+
+
+def _notify_athlete_relationship_ended(request, link):
+    """Best-effort email telling the athlete their coach ended the coaching (#651).
+
+    Coach-initiated ends only (the caller gates that). Never for self/demo links
+    or sandbox coaches, honours the athlete's delivery-email opt-out, runs on
+    commit, and swallows+logs any failure so it can never undo the end.
+    """
+    if link.is_self or link.is_demo or meso_sandbox.is_sandbox(link.coach):
+        return
+    home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
+    unsubscribe_url = request.build_absolute_uri(
+        reverse(
+            "meso:unsubscribe_delivery_email",
+            kwargs={"token": make_unsubscribe_token(link.athlete)},
+        )
+    )
+
+    def _send():
+        try:
+            if not athlete_opted_out(link.athlete):
+                send_relationship_ended_email(
+                    athlete=link.athlete,
+                    coach=link.coach,
+                    home_url=home_url,
+                    unsubscribe_url=unsubscribe_url,
+                    athlete_label=link.label,
+                )
+        except Exception:  # mail is best-effort; never fail an end on it
+            logger.exception(
+                "Failed to send relationship-ended email for link %s", link.pk
+            )
+
+    transaction.on_commit(_send)
+
+
+@login_required
+@require_POST
+def relationship_restore(request, token):
+    """Coach restores a coach-ended link within the window, no re-invite (#651).
+
+    The athlete already consented once and the coach caused the end, so there is
+    no fresh consent: the link goes straight back to active and every plan the
+    end archived returns to the status it had (plans archived earlier stay
+    archived). Coach-scoped (foreign token is a 404); the seat gate applies like
+    accept's. Sends no email. Lock order User → CoachAthlete → Plan, all no_key.
+    """
+    with transaction.atomic():
+        locked_athlete_id = get_object_or_404(
+            CoachAthlete, token=token, coach=request.user
+        ).athlete_id
+        list(
+            User.objects.select_for_update(no_key=True)
+            .filter(pk__in={request.user.pk, locked_athlete_id})
+            .order_by("pk")
+        )
+        link = get_object_or_404(
+            CoachAthlete.objects.select_for_update(no_key=True).select_related(
+                "athlete"
+            ),
+            token=token,
+            coach=request.user,
+        )
+        if not link.can_restore:
+            messages.error(request, "That relationship can't be restored any more.")
+            return redirect("meso:relationship_history")
+        if not billing_access.can_add_athlete(request.user):
+            messages.error(request, SEAT_LIMIT_MESSAGE)
+            return redirect("meso:relationship_history")
+        snapshot = {int(pk): status for pk, status in link.ended_archived_plans.items()}
+        plans = list(
+            Plan.objects.select_for_update(no_key=True)
+            .filter(relationship=link, pk__in=snapshot, status=Plan.Status.ARCHIVED)
+            .order_by("pk")
+        )
+        for plan in plans:
+            Plan.objects.filter(pk=plan.pk).update(status=snapshot[plan.pk])
+        link.status = CoachAthlete.Status.ACTIVE
+        link.ended_at = None
+        link.ended_by = ""
+        link.ended_archived_plans = {}
+        link.save(
+            update_fields=["status", "ended_at", "ended_by", "ended_archived_plans"]
+        )
+    messages.success(
+        request,
+        f"Restored {athlete_name(link.athlete, link.label)}. Their program is back in their app.",
+    )
     return redirect("meso:roster")
 
 

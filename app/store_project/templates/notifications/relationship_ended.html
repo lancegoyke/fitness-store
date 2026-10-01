@@ -1,0 +1,16 @@
+<p>Hi {{ athlete_name }},</p>
+
+<p>{{ coach_name }} has ended your coaching on Meso. Your training history stays
+  in your account.</p>
+
+<p><a href="{{ home_url }}">Open your training home</a> any time.</p>
+
+<p>Mastering Fitness</p>
+
+{% if unsubscribe_url %}
+  <hr>
+  <p style="font-size:12px;color:#888;">
+    You're getting this because {{ coach_name }} coached you on Mastering Fitness.
+    <a href="{{ unsubscribe_url }}">Unsubscribe from training emails</a>.
+  </p>
+{% endif %}
