@@ -175,7 +175,7 @@
       </div>
     {% endfor %}
 
-    {# Prompt cards (#641): at most ONE shows, below the program. Each is rendered hidden/eligible and meso_onboarding.js reveals only the highest-priority eligible, undismissed one (data-prompt-priority, lowest number wins). #}
+    {# Prompt cards (#641): at most ONE shows, below the program. Each is rendered hidden/eligible (the server-rendered tip starts suppressed) and meso_onboarding.js reveals only the highest-priority eligible, undismissed one — so if it never runs, the tip stays hidden and at most the push card shows (#669) (data-prompt-priority, lowest number wins). #}
     <style>[data-prompt-priority][hidden],[data-prompt-priority][data-prompt-suppressed]{display:none !important;}</style>
     {% if push_enabled %}
       {# Revealed by meso_push.js only when notifications are usable + undecided. #}
@@ -217,7 +217,7 @@
       <!-- First-log coachmark (first-time UX Phase 4): server-driven (shown only
            until the athlete's first log lands), so it's one-time + cross-device;
            meso_onboarding.js persists a manual dismiss across reloads. -->
-      <div class="meso-card meso-card--pad" data-coachmark-key="firstlog-home" data-prompt-priority="3" data-prompt-dismiss-key="meso-coachmark-firstlog-home"
+      <div class="meso-card meso-card--pad" data-coachmark-key="firstlog-home" data-prompt-priority="3" data-prompt-dismiss-key="meso-coachmark-firstlog-home" data-prompt-suppressed
            style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
         <span style="font-size:18px;line-height:1.3;">👇</span>
         <span style="flex:1;min-width:0;">
@@ -238,7 +238,7 @@
           <div class="meso-avatar meso-avatar--sm">{{ c.initials }}</div>
           <div style="min-width:0;">
             <div class="meso-row-name">{{ c.coach }}</div>
-            <div class="meso-row-meta">Coaching you since {{ c.since|date:"M j" }}</div>
+            <div class="meso-row-meta">{% if c.is_self %}Coaching yourself since{% else %}Coaching you since{% endif %} {{ c.since|date:"M j" }}</div>
           </div>
         </div>
       {% endfor %}
@@ -299,7 +299,7 @@
         </div>
       {% endfor %}
 
-      <details {% if not pending.invites and not pending.requests and not pending.has_coach %}open{% endif %} style="margin-top:6px;">
+      <details {% if not pending.invites and not pending.requests and not pending.coaches and not pending.waiting %}open{% endif %} style="margin-top:6px;">
         <summary style="list-style:none;cursor:pointer;font-size:12.5px;font-weight:650;color:var(--accent);">+ Request a coach</summary>
         <form method="post" action="{% url 'meso:athlete_request_coach' %}" style="display:flex;gap:9px;margin-top:10px;">
           {% csrf_token %}
@@ -350,7 +350,7 @@
     {# Personal records (Phase 4d) — standing bests below the live programs. #}
     {% include "meso/_pr_list.html" %}
 
-    {% if not pending.has_coach %}
+    {% if not pending.has_coach and not pending.is_coach %}
     <!-- Self-serve coach signup (S6 Phase 4): the way into the coach surface. -->
       <a class="meso-card meso-card--pad" href="{% url 'meso:become_coach' %}"
          style="display:flex;align-items:center;gap:12px;margin-top:14px;text-decoration:none;color:inherit;border:1px solid var(--line);">

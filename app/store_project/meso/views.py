@@ -143,6 +143,36 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
+def _getting_started_steps(user):
+    """Which of the roster's three getting-started steps the coach has done (#654.2).
+
+    ``invited``: an email invite sent, or any real (non-demo) athlete link —
+    self-coaching included. ``written``: a template (the write-ahead path), or
+    a non-template plan with at least one live exercise. ``delivered``: a live
+    week of a real athlete's plan has been delivered. Demo data never counts.
+    """
+    real_links = CoachAthlete.objects.for_coach(user).exclude(is_demo=True)
+    real_plans = Plan.objects.filter(relationship__in=real_links).exclude(
+        status=Plan.Status.ARCHIVED
+    )
+    return {
+        "invited": CoachInvite.objects.for_coach(user).exists() or real_links.exists(),
+        "written": Plan.objects.filter(is_template=True, owner=user)
+        .exclude(status=Plan.Status.ARCHIVED)
+        .exists()
+        or ExerciseSlot.objects.filter(
+            deleted_at__isnull=True,
+            session_slot__deleted_at__isnull=True,
+            session_slot__mesocycle__plan__in=real_plans,
+        ).exists(),
+        "delivered": Week.objects.filter(
+            deleted_at__isnull=True,
+            delivered_at__isnull=False,
+            mesocycle__plan__in=real_plans,
+        ).exists(),
+    }
+
+
 def _is_coach(user):
     """Whether ``user`` is acting as a coach (the roster / billing surfaces' gate).
 
@@ -576,6 +606,13 @@ class RosterView(TemplateView):
             .exists()
         )
         ctx["is_empty"] = not athletes and not ctx["has_history"]
+        # Getting-started checklist (#654.2): each step ticks from real data
+        # and the card goes away once all three are done (or the coach has
+        # past/ended history, #651/#662). Demo rows never count.
+        ctx["checklist"] = checklist = _getting_started_steps(self.request.user)
+        ctx["show_getting_started"] = not ctx["has_history"] and not all(
+            checklist.values()
+        )
         # Invites out + athletes waiting beyond the free seats (#649): the cue
         # to show the upgrade CTA right by the list, not only in the billing card.
         ctx["seat_pressure"] = not ctx["billing"][
@@ -4108,7 +4145,10 @@ def manifest_webmanifest(request):
 #     so installed clients need a fresh cache namespace.
 # v9: athlete home leads with the program and shows one prompt at a time
 #     (#641); meso_onboarding.js/meso_push.js coordinate prompt priority.
-PWA_CACHE_VERSION = "meso-pwa-v9"
+# v10: meso_push.js honours its own dismiss key and the first-log tip renders
+#     suppressed until the coordinator runs (#669), so prompt exclusivity no
+#     longer depends on script order; the athlete home also changes (#667).
+PWA_CACHE_VERSION = "meso-pwa-v10"
 
 
 @require_GET

@@ -724,15 +724,16 @@ class TestTourEntryCard:
         assert "Welcome to your coaching workspace" in body
         assert "Start the guided tour" not in body
 
-    def test_a_non_empty_workspace_never_shows_the_get_started_card(self, client):
+    def test_a_non_empty_workspace_never_shows_the_tour_entry(self, client):
         coach = _coach()
         CoachAthleteFactory(coach=coach)
         client.force_login(coach)
 
         body = client.get(reverse("meso:roster")).content.decode()
 
-        assert "Welcome to your coaching workspace" not in body
+        # The checklist card may show (#654.2) but never the tour/demo entry.
         assert "Start the guided tour" not in body
+        assert "Load a demo athlete" not in body
 
     def test_posting_restart_from_the_entry_card_mounts_the_tour(self, client):
         coach = _coach()

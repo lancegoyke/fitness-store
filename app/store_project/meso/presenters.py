@@ -45,6 +45,7 @@ from .models import MAX_LOGGED_SET_NUMBER
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
+from .models import CoachProfile
 from .models import CoachSubscription
 from .models import LoggedSet
 from .models import Mesocycle
@@ -906,27 +907,42 @@ def athlete_pending(user):
     # The coaches actually training the athlete (#640): this panel is "who is
     # coaching me", so it lists ACTIVE links too — the accept path leaves a link
     # ``active`` (not pending), which the pending-only query above never saw. A
-    # self-coaching link is the coach's own, not a coach "of" them.
-    coaches = [
-        {
-            "coach": (name := coach_name(link.coach)),
-            "initials": initials(name),
-            "since": link.responded_at or link.created_at,
-        }
-        for link in CoachAthlete.objects.for_athlete(user)
+    # self-coaching link is the coach's own: it is listed as "You
+    # (self-coached)" (#667) but is not a coach *of* them, so it stays out of
+    # ``has_coach``.
+    coaches = []
+    has_self_link = False
+    for link in (
+        CoachAthlete.objects.for_athlete(user)
         .active()
-        .exclude(is_self=True)
         .select_related("coach", "coach__coach_profile")
         .order_by("responded_at", "pk")
-    ]
+    ):
+        if link.is_self:
+            has_self_link = True
+            name = "You (self-coached)"
+        else:
+            name = coach_name(link.coach)
+        coaches.append(
+            {
+                "coach": name,
+                "initials": initials(user.display_name())
+                if link.is_self
+                else initials(name),
+                "since": link.responded_at or link.created_at,
+                "is_self": link.is_self,
+            }
+        )
     return {
         "invites": invites,
         "requests": requests,
         "waiting": waiting,
         "coaches": coaches,
-        # Active or accepted-waiting: drives the collapsed request form and the
-        # "Are you a coach?" cross-sell (#640/#641).
-        "has_coach": bool(coaches or waiting),
+        # Active or accepted-waiting, bar self-coaching: drives the collapsed
+        # request form and the "Are you a coach?" cross-sell (#640/#641).
+        "has_coach": bool(any(not c["is_self"] for c in coaches) or waiting),
+        # Already a coach (#667): the cross-sell has nothing to offer them.
+        "is_coach": has_self_link or CoachProfile.objects.filter(user=user).exists(),
     }
 
 
