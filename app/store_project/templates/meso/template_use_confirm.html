@@ -1,0 +1,33 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Start template · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page meso-coach">
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Coach workspace</p>
+        <h1 class="meso-h1">Start template</h1>
+        <p class="meso-sub">This template uses a different unit than the athlete's current setting.</p>
+      </div>
+      <div class="meso-spacer"></div>
+      <a class="meso-btn meso-btn--ghost" href="{% url 'meso:template_library' %}">Back to templates</a>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;max-width:640px;">
+      <div class="meso-card meso-card--pad">
+        <p class="meso-sub" style="margin:0 0 12px;">This template is written in {{ template_unit }}; {{ athlete_name }} trains in {{ athlete_unit }}.</p>
+        <p class="meso-sub" style="margin:0 0 16px;">Starting it keeps the numbers as written, in {{ template_unit }} &#8212; nothing is converted.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <form method="post" action="{% url 'meso:template_use' plan_id=template.pk %}" style="margin:0;">
+            {% csrf_token %}
+            <input type="hidden" name="relationship" value="{{ relationship.pk }}">
+            <input type="hidden" name="confirm_unit" value="1">
+            <button type="submit" class="meso-btn meso-btn--primary">Start anyway</button>
+          </form>
+          <a class="meso-btn meso-btn--ghost" href="{% url 'meso:template_library' %}">Back to templates</a>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

@@ -46,6 +46,8 @@ function flagsPayload(overrides: Record<string, unknown> = {}) {
     agent_allowance: { metered: false, allowance: 0, remaining: null, can_use: true, tier: "unlimited" },
     signup_url: "/meso/sandbox/signup/",
     price_summary: "$19/mo — unlimited athletes",
+    is_template: false,
+    save_template_url: "/meso/plan/7/save-as-template/",
     ...overrides,
   };
 }
@@ -122,6 +124,18 @@ describe("hydration: full payload", () => {
     // sidebar's AthleteMeta) — the duplicate top-bar identity chip is gone.
     expect(screen.getAllByText("Maya Okonkwo")).toHaveLength(1);
     expect(screen.getByTestId("week-col-1")).toBeInTheDocument();
+    expect(screen.getByTestId("save-as-template")).toBeInTheDocument();
+  });
+
+  it("omits save-as-template for template plans", () => {
+    jsonScript("meso-grid-data", gridPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan("tok123");
+    jsonScript("meso-designer-flags", flagsPayload({ is_template: true, save_template_url: null }));
+
+    render(<DesignerRoot />);
+
+    expect(screen.queryByTestId("save-as-template")).not.toBeInTheDocument();
   });
 
   it("renames the program from the header and refreshes that title after undo", async () => {

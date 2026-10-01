@@ -110,6 +110,20 @@ class TestTemplateDesignerAccess:
         body = resp.content.decode()
         assert 'id="meso-grid-data"' in body
         assert "A) Squat jump" in body
+        assert resp.context["designer_flags"]["is_template"] is True
+        assert resp.context["designer_flags"]["save_template_url"] is None
+
+    def test_live_plan_designer_flags_include_save_template_url(self, client):
+        plan = PlanFactory()
+        client.force_login(plan.coach)
+
+        resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
+
+        assert resp.status_code == 200
+        assert resp.context["designer_flags"]["is_template"] is False
+        assert resp.context["designer_flags"]["save_template_url"] == reverse(
+            "meso:plan_save_as_template", kwargs={"plan_id": plan.pk}
+        )
 
     def test_non_owner_coach_404s(self, client):
         plan, _ = template_plan()

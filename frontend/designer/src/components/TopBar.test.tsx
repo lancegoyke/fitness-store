@@ -81,6 +81,30 @@ describe("TopBar", () => {
     expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=2");
   });
 
+  it("renders a save-as-template form with action and csrf when provided", () => {
+    render(
+      <TopBar
+        {...baseProps({
+          saveAsTemplate: { action: "/meso/plan/7/save-as-template/", csrf: "csrf-123" },
+        })}
+      />,
+    );
+
+    const button = screen.getByTestId("save-as-template");
+    const form = button.closest("form");
+    expect(form).toHaveAttribute("method", "post");
+    expect(form).toHaveAttribute("action", "/meso/plan/7/save-as-template/");
+    expect(form?.querySelector('input[name="csrfmiddlewaretoken"]')).toHaveAttribute(
+      "value",
+      "csrf-123",
+    );
+  });
+
+  it("omits the save-as-template form when absent", () => {
+    render(<TopBar {...baseProps({ saveAsTemplate: null })} />);
+    expect(screen.queryByTestId("save-as-template")).not.toBeInTheDocument();
+  });
+
   // §4b (docs/meso/remove-current-week-plan.md): the default grid can open
   // on a block with zero live weeks while a later block has some. A live
   // deliverHref there would silently target that later block

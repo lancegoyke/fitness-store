@@ -35,6 +35,7 @@ from django.db import transaction
 from store_project.meso.management.commands.seed_meso_demo import build_block
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
+from store_project.meso.models import Unit
 from store_project.meso.sheet_import import SheetImportError
 from store_project.meso.sheet_import import parse_workbook
 from store_project.users.models import User
@@ -80,11 +81,18 @@ class Command(BaseCommand):
                 raise CommandError(f"Cannot read {path}: {exc}") from exc
 
         title = options["title"] or parsed[0][1].tab
+        profile = getattr(owner, "coach_profile", None)
+        owner_unit = getattr(profile, "default_unit", Unit.KILOGRAMS)
         plan, created = Plan.objects.update_or_create(
             owner=owner,
             title=title,
             is_template=True,
             defaults={"relationship": None, "status": Plan.Status.ACTIVE},
+            create_defaults={
+                "relationship": None,
+                "status": Plan.Status.ACTIVE,
+                "unit": owner_unit,
+            },
         )
         if not created:
             # Full rebuild (see module docstring): the workbook is the source
