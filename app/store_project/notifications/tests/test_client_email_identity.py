@@ -271,5 +271,5 @@ def test_encoded_word_name_cannot_smuggle_an_address():
 def test_overlapping_encoded_word_markers_cannot_reassemble():
     from store_project.notifications.emails import _safe_display_name
 
-    name = _safe_display_name("=?=?utf-8?b?c3VwcG9ydEBwYXlwYWwuY29t?=?=")
+    name = _safe_display_name("==??utf-8?b?c3VwcG9ydEBwYXlwYWwuY29t??==")
     assert "=?" not in name and "?=" not in name
