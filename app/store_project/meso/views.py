@@ -153,8 +153,7 @@ def _getting_started_steps(user):
         status=Plan.Status.ARCHIVED
     )
     return {
-        "invited": CoachInvite.objects.for_coach(user).exists()
-        or real_links.exists(),
+        "invited": CoachInvite.objects.for_coach(user).exists() or real_links.exists(),
         "written": Plan.objects.filter(is_template=True, owner=user)
         .exclude(status=Plan.Status.ARCHIVED)
         .exists()

@@ -926,7 +926,9 @@ def athlete_pending(user):
         coaches.append(
             {
                 "coach": name,
-                "initials": initials(user.display_name()) if link.is_self else initials(name),
+                "initials": initials(user.display_name())
+                if link.is_self
+                else initials(name),
                 "since": link.responded_at or link.created_at,
                 "is_self": link.is_self,
             }
