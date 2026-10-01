@@ -106,5 +106,15 @@ def _connect():
         if request is not None and hasattr(request, "session"):
             _clear_unless_claim_redirect(request, response)
 
+    from django.contrib.auth.signals import user_logged_in as django_user_logged_in
+
+    @receiver(django_user_logged_in, weak=False)
+    def clear_claim_on_admin_login(sender, request=None, **kwargs):
+        # Django-only logins (the /backside/ admin) never reach a claim page.
+        # allauth logins also fire this signal, so only the admin path clears.
+        if request is not None and hasattr(request, "session"):
+            if request.path.startswith("/backside/"):
+                forget_claim(request)
+
 
 _connect()

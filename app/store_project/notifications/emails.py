@@ -211,7 +211,8 @@ def _safe_display_name(raw) -> str:
     )
     # An RFC 2047 encoded word (``=?utf-8?b?...?=``) would be decoded by mail
     # clients back into the ``@`` this function just removed.
-    kept = kept.replace("=?", "").replace("?=", "")
+    while "=?" in kept or "?=" in kept:  # loop: "=?=?" must not reassemble
+        kept = kept.replace("=?", "").replace("?=", "")
     return clean_name(kept)[:DISPLAY_NAME_MAX].strip()
 
 

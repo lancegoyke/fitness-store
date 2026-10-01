@@ -450,3 +450,36 @@ class TestNoDuplicateAcceptedEmail:
         self._claim(client, invite, athlete, django_capture_on_commit_callbacks)
         assert mail.outbox == []
         assert CoachAthlete.objects.filter(coach=coach, athlete=athlete).count() == 1
+
+
+def test_job_aborts_when_link_ends_between_first_check_and_provider_call(monkeypatch):
+    """Review P1: client init sits between the first check and propose()."""
+    plan, _, _ = make_plan()
+    batch = service.create_drafting_batch(
+        plan,
+        "tweak it",
+        coach=plan.relationship.coach,
+        mesocycle=plan.mesocycles.first(),
+    )
+    client = CountingClient()
+
+    def end_then_client():
+        plan.relationship.end(by="coach")
+        return client
+
+    monkeypatch.setattr(service.client_module, "get_default_client", end_then_client)
+    service.run_proposal_job(batch.pk)
+    assert client.calls == 0
+
+
+def test_admin_login_clears_the_claim_flag(rf):
+    from django.contrib.auth import login
+    from django.contrib.sessions.backends.cache import SessionStore
+
+    staff = UserFactory(is_staff=True)
+    request = rf.post("/backside/login/")
+    request.session = SessionStore()
+    request.session["meso_claim_token"] = "t"
+    request.session["meso_claim_at"] = 1.0
+    login(request, staff, backend="django.contrib.auth.backends.ModelBackend")
+    assert "meso_claim_token" not in request.session

@@ -497,6 +497,10 @@ def run_proposal_job(batch_id, *, client=None):
         # Network call outside any DB transaction; wrap provider failures. Time it
         # for the usage ledger — recorded on both the success and the failure path.
         started = time.monotonic()
+        # Re-check as late as possible: the window between the first check and
+        # the provider call (client init, status read) is where a link could end.
+        if not _link_is_active(batch):
+            return _fail(batch, LINK_ENDED_MESSAGE, expect_status=drafting)
         try:
             result = client.propose(
                 context=build_context(batch.plan, batch.mesocycle),
