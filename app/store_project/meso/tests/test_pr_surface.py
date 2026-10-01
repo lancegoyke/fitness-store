@@ -332,6 +332,25 @@ class TestWholeUnitRecords:
         assert out["previous"] is None
         assert out["delta"] is None
 
+    def test_sub_unit_gain_has_zero_delta_and_no_plus_zero_label(self):
+        """A real PR (116.67 -> 117.25) rounds to one whole number.
+
+        The delta is "0" and no surface may print "(+0)" (#688 review).
+        """
+        from pathlib import Path
+
+        from django.template.loader import get_template
+
+        from store_project.meso.serializers import serialize_new_record
+
+        assert serialize_new_record(self._record(117.25, 116.67))["delta"] == "0"
+        root = Path(__file__).resolve().parents[2]
+        js = (root / "static/js/meso_athlete.js").read_text()
+        label = js[js.index("prLabel(pr)") : js.index("rowFilled(r)")]
+        assert 'pr.delta === "0"' in label
+        html = get_template("meso/results.html").template.source
+        assert '{% elif pr.delta != "0" %}' in html
+
     def test_results_banner_shows_whole_units(self, client):
         s = seed(athlete_unit=Unit.POUNDS)
         log_done(s.session, s.athlete, s.squat, [("5", "225", "8")])  # e1RM 262.5

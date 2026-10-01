@@ -417,7 +417,9 @@ function createLogger() {
     // the numbers (value/delta), so this only assembles them — never re-rounds.
     prLabel(pr) {
       const base = pr.name + " — " + pr.value + " " + pr.unit;
-      return pr.is_first ? base + " (first best)" : base + " (+" + pr.delta + ")";
+      if (pr.is_first) return base + " (first best)";
+      // A real PR can round to the same whole number as the old best.
+      return pr.delta === "0" ? base : base + " (+" + pr.delta + ")";
     },
 
     // A row is worth sending if it's checked or carries any entry.

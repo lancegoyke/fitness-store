@@ -4236,7 +4236,7 @@ def manifest_webmanifest(request):
 # v10: meso_push.js honours its own dismiss key and the first-log tip renders
 #     suppressed until the coordinator runs (#669), so prompt exclusivity no
 #     longer depends on script order; the athlete home also changes (#667).
-PWA_CACHE_VERSION = "meso-pwa-v10"
+PWA_CACHE_VERSION = "meso-pwa-v11"
 
 
 @require_GET
