@@ -23,6 +23,38 @@ from ._helpers import sub_line
 pytestmark = pytest.mark.django_db
 
 
+def _log(cell, **kwargs):
+    """A SessionLog for ``cell``'s session, owned by the plan's athlete."""
+    session = cell.exercise_slot.session_slot.sessions.get(week=cell.week)
+    athlete = cell.week.mesocycle.plan.athlete
+    return SessionLogFactory(session=session, athlete=athlete, **kwargs)
+
+
+def _summary(meso, cell):
+    data = serialize_mesocycle_grid(meso)
+    row = next(
+        r
+        for d in data["days"]
+        for r in d["rows"]
+        if r["exercise_slot_id"] == cell.exercise_slot_id
+    )
+    return row["cells"][str(cell.week_id)]["athlete_summary"]
+
+
+def _logged_set(cell, log, load, *, unit, rpe="8", n=1):
+    line = sub_line(cell, f"{load} x 5 @{rpe}", athlete_authored=True)
+    return LoggedSetFactory(
+        session_log=log,
+        prescription=cell,
+        source_line=line,
+        set_number=n,
+        load=load,
+        reps="5",
+        rpe=rpe,
+        unit=unit,
+    )
+
+
 def _block(rows, *, day_name="Lower A", unit=Unit.POUNDS):
     """A 4-week block; ``rows`` = {exercise name: [week1..week4 cell text]}."""
     plan = PlanFactory(
@@ -118,9 +150,7 @@ class TestAthleteSummary:
     def _logged(self, unit_on_set):
         meso, weeks, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
         cell = cells["Back Squat"][0]
-        log = SessionLogFactory(
-            session=cell.exercise_slot.session_slot.sessions.first()
-        )
+        log = _log(cell)
         for n, (load, rpe) in enumerate([("205", "7"), ("225", "9"), ("215", "8")], 1):
             line = sub_line(cell, f"{load} x 5 @{rpe}", athlete_authored=True)
             LoggedSetFactory(
@@ -168,9 +198,7 @@ class TestAthleteSummary:
         meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
         cell = cells["Back Squat"][0]
         line = sub_line(cell, "225 lb x 5", athlete_authored=True)
-        log = SessionLogFactory(
-            session=cell.exercise_slot.session_slot.sessions.first()
-        )
+        log = _log(cell)
         LoggedSetFactory(
             session_log=log,
             prescription=cell,
@@ -183,3 +211,118 @@ class TestAthleteSummary:
             "athlete_summary"
         ]
         assert (summary["load"], summary["unit"]) == ("225", "lb")
+
+
+class TestAthleteSummaryUnitsAndScope:
+    def test_mixed_units_compare_by_kg_equivalent(self):
+        # 150 lb is ~68 kg, so the 100 kg set is the heavier one.
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        log = _log(cell)
+        _logged_set(cell, log, "100", unit=Unit.KILOGRAMS, n=1)
+        _logged_set(cell, log, "150", unit=Unit.POUNDS, n=2)
+        summary = _summary(meso, cell)
+        assert (summary["load"], summary["unit"]) == ("100", "kg")
+
+    def test_bodyweight_top_set(self):
+        meso, _, cells = _block({"Pull-up": ["3x8"] * 4})
+        cell = cells["Pull-up"][0]
+        _logged_set(cell, _log(cell), "BW", unit="", rpe="8")
+        assert _summary(meso, cell) == {
+            "sets": 1,
+            "load": "BW",
+            "unit": "",
+            "rpe": "8",
+        }
+
+    def test_a_numeric_set_beats_a_bw_set(self):
+        meso, _, cells = _block({"Pull-up": ["3x8"] * 4})
+        cell = cells["Pull-up"][0]
+        log = _log(cell)
+        _logged_set(cell, log, "bw", unit="", rpe="6", n=1)
+        _logged_set(cell, log, "10", unit=Unit.POUNDS, rpe="9", n=2)
+        summary = _summary(meso, cell)
+        assert (summary["load"], summary["rpe"]) == ("10", "9")
+
+    def test_only_the_newest_log_counts(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        old = _log(cell)
+        _logged_set(cell, old, "315", unit=Unit.POUNDS, n=1)
+        new = _log(cell)
+        _logged_set(cell, new, "225", unit=Unit.POUNDS, n=1)
+        assert _summary(meso, cell)["load"] == "225"
+
+    def test_a_log_of_another_athlete_is_ignored(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        other = SessionLogFactory(
+            session=cell.exercise_slot.session_slot.sessions.get(week=cell.week)
+        )
+        _logged_set(cell, other, "315", unit=Unit.POUNDS)
+        sub_line(cell, "135 x 5", athlete_authored=True)
+        # No log of the plan's athlete: the text fallback applies.
+        assert _summary(meso, cell)["load"] == "135"
+
+    def test_stamped_unit_beats_a_typed_suffix(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        _logged_set(cell, _log(cell), "225lb", unit=Unit.KILOGRAMS)
+        summary = _summary(meso, cell)
+        assert (summary["load"], summary["unit"]) == ("225", "kg")
+
+    def test_text_fallback_suffix_is_that_sets_unit(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        sub_line(cell, "100kg x 5", athlete_authored=True)
+        summary = _summary(meso, cell)
+        assert (summary["load"], summary["unit"]) == ("100", "kg")
+
+
+class TestSkippedLiftReadsLower:
+    BLOCK = {
+        "Squat": ["3x5 @ 200"] * 4,
+        "Bench": ["3x5 @ 100", "3x5 @ 100", "skip", "3x5 @ 100"],
+    }
+
+    def test_skipping_a_lift_pulls_the_week_down(self):
+        meso, _, _ = _block(self.BLOCK)
+        wk = serialize_mesocycle_grid(meso)["weeks"]
+        assert wk[1]["inten"] == 100
+        assert wk[2]["inten"] == 50
+
+    def test_a_skipped_flag_and_a_blank_cell_count_as_absent(self):
+        meso, _, cells = _block(
+            {"Squat": ["3x5 @ 200"] * 4, "Bench": ["3x5 @ 100"] * 4}
+        )
+        cells["Bench"][1].skipped = True
+        cells["Bench"][1].save()
+        cells["Bench"][2].text = "  "
+        cells["Bench"][2].save()
+        wk = serialize_mesocycle_grid(meso)["weeks"]
+        assert [w["inten"] for w in wk] == [100, 50, 50, 100]
+
+    def test_a_present_rpe_only_week_does_not_pull_intensity_down(self):
+        # Guard: present-but-unloaded is excluded from the mean, not a zero.
+        meso, _, _ = _block(
+            {
+                "Squat": ["3x5 @ 200"] * 4,
+                "Bench": ["3x5 @ 100", "3x5 @ 100", "3x5 @ RPE 8", "3x5 @ 100"],
+            }
+        )
+        wk = serialize_mesocycle_grid(meso)["weeks"]
+        assert wk[2]["inten"] == 100
+
+
+class TestWeekReadoutsMixedUnits:
+    def test_kg_and_lb_tokens_compare_in_kg_equivalents(self):
+        # 225 lb = 102.06 kg vs 100 kg: week 1 is 100/102.06, week 2 is 1.0.
+        meso, _, _ = _block({"Squat": ["3x5 @ 100kg", "3x5 @ 225lb", "3x5", "3x5"]})
+        wk = serialize_mesocycle_grid(meso)["weeks"]
+        assert wk[0]["inten"] == 98
+        assert wk[1]["inten"] == 100
+
+    def test_bw_rpe_is_not_read_as_a_load(self):
+        meso, _, _ = _block({"Dip": ["3x8 BW @8"] * 4})
+        wk = serialize_mesocycle_grid(meso)["weeks"]
+        assert all(w["inten"] is None for w in wk)

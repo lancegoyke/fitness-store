@@ -2817,6 +2817,27 @@ def newest_session_logs(session, athlete, *, status=None):
     return logs.order_by("-created_at", "-pk")
 
 
+def newest_session_log_ids(session_ids, athlete):
+    """``{session_id: newest log pk}`` for one athlete, in one query.
+
+    The batched form of ``newest_session_logs(session, athlete)`` (first row
+    wins): it MUST keep the same ``-created_at, -pk`` ordering, so a grid that
+    asks "which log is current" for many sessions at once lands on the same
+    row the athlete's own page does. A session with no log is absent.
+    """
+    if athlete is None or not session_ids:
+        return {}
+    newest = {}
+    rows = (
+        SessionLog.objects.filter(session_id__in=list(session_ids), athlete=athlete)
+        .order_by("-created_at", "-pk")
+        .values_list("session_id", "pk")
+    )
+    for session_id, pk in rows:
+        newest.setdefault(session_id, pk)
+    return newest
+
+
 # A generous ceiling on a set's number — no real session has this many sets.
 # #570: lives HERE, not in views.py, because three places must agree on one
 # number and ``presenters.py`` cannot import from ``views.py`` (views already
