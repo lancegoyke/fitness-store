@@ -178,11 +178,32 @@ class TestSerializePlan:
     def test_phases_match_macrocycle(self):
         plan = build_maya_plan()
         result = serialize_plan(plan)
+        ids = list(plan.mesocycles.values_list("pk", flat=True))
         assert result["phases"] == [
-            {"name": "Base / GPP", "weeks": "4 wk", "state": "done"},
-            {"name": "Hypertrophy", "weeks": "4 wk", "state": "current"},
-            {"name": "Strength", "weeks": "4 wk", "state": "next"},
-            {"name": "Peak / Test", "weeks": "2 wk", "state": "future"},
+            {
+                "id": ids[0],
+                "name": "Base / GPP",
+                "weeks": "4 wk",
+                "state": "done",
+            },
+            {
+                "id": ids[1],
+                "name": "Hypertrophy",
+                "weeks": "4 wk",
+                "state": "current",
+            },
+            {
+                "id": ids[2],
+                "name": "Strength",
+                "weeks": "4 wk",
+                "state": "next",
+            },
+            {
+                "id": ids[3],
+                "name": "Peak / Test",
+                "weeks": "2 wk",
+                "state": "future",
+            },
         ]
 
     def test_weeks_match_current_mesocycle(self):
@@ -864,7 +885,12 @@ class TestSerializeMesocycleGridIdentity:
         f = _build_grid_meso()
         result = serialize_mesocycle_grid(f.meso)
         assert result["phases"] == [
-            {"name": "Hypertrophy", "weeks": "2 wk", "state": "current"}
+            {
+                "id": f.meso.pk,
+                "name": "Hypertrophy",
+                "weeks": "2 wk",
+                "state": "current",
+            }
         ]
 
     def test_current_phase_uses_live_week_count_and_other_phases_stay_planned(self):
@@ -877,8 +903,18 @@ class TestSerializeMesocycleGridIdentity:
 
         phases = serialize_mesocycle_grid(current)["phases"]
         assert phases == [
-            {"name": "Block 1", "weeks": "1 wk", "state": "current"},
-            {"name": future.name, "weeks": "6 wk", "state": "next"},
+            {
+                "id": current.pk,
+                "name": "Block 1",
+                "weeks": "1 wk",
+                "state": "current",
+            },
+            {
+                "id": future.pk,
+                "name": future.name,
+                "weeks": "6 wk",
+                "state": "next",
+            },
         ]
 
         current.append_week()

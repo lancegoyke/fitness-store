@@ -284,8 +284,8 @@ describe("gridToProgram", () => {
 
 describe("cycleLabelFromGrid", () => {
   const phases: Phase[] = [
-    { name: "Base", weeks: "4 wk", state: "done" },
-    { name: "Hypertrophy", weeks: "4 wk", state: "current" },
+    { id: 1, name: "Base", weeks: "4 wk", state: "done" },
+    { id: 2, name: "Hypertrophy", weeks: "4 wk", state: "current" },
   ];
 
   it("joins the current phase's name and the FIRST week's label/count", () => {
@@ -294,7 +294,7 @@ describe("cycleLabelFromGrid", () => {
   });
 
   it("falls back to the first phase when none is flagged current", () => {
-    const noCurrentPhases: Phase[] = [{ name: "Base", weeks: "4 wk", state: "done" }];
+    const noCurrentPhases: Phase[] = [{ id: 1, name: "Base", weeks: "4 wk", state: "done" }];
     const weeks = [week({ id: 1, label: "Wk 1" })];
     expect(cycleLabelFromGrid(noCurrentPhases, weeks)).toBe("Base · Wk 1 / 1");
   });

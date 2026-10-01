@@ -5313,6 +5313,126 @@ def _undo_redo_week_response(plan, week_id):
 
 @login_required
 @require_POST
+def plan_title_patch(request, plan_id):
+    """Rename a program from the designer header."""
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    payload, bad = _json_object_body(request)
+    if bad is not None:
+        return bad
+
+    title = payload.get("title")
+    if not isinstance(title, str):
+        return JsonResponse(
+            {"ok": False, "error": "title must be a string."}, status=400
+        )
+    title = title.strip()
+    if not title:
+        return JsonResponse({"ok": False, "error": "title is required."}, status=400)
+    if len(title) > 255:
+        return JsonResponse({"ok": False, "error": "title is too long."}, status=400)
+
+    if title != plan.title:
+        with transaction.atomic():
+            record_plan_action(plan, "Renamed program")
+            plan.title = title
+            plan.save(update_fields=["title"])
+            _touch_plan(plan)
+    return JsonResponse(
+        {
+            "ok": True,
+            "plan": {"title": plan.title},
+            "history": serialize_plan_history(plan),
+        }
+    )
+
+
+@login_required
+@require_POST
+def mesocycle_name_patch(request, plan_id, mesocycle_id):
+    """Rename one of a program's blocks from the periodization view."""
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    mesocycle = get_object_or_404(Mesocycle, pk=mesocycle_id, plan=plan)
+    payload, bad = _json_object_body(request)
+    if bad is not None:
+        return bad
+
+    name = payload.get("name")
+    if not isinstance(name, str):
+        return JsonResponse(
+            {"ok": False, "error": "name must be a string."}, status=400
+        )
+    name = name.strip()
+    if not name:
+        return JsonResponse({"ok": False, "error": "name is required."}, status=400)
+    if len(name) > 255:
+        return JsonResponse({"ok": False, "error": "name is too long."}, status=400)
+
+    if name != mesocycle.name:
+        with transaction.atomic():
+            record_plan_action(plan, "Renamed block")
+            mesocycle.name = name
+            mesocycle.save(update_fields=["name"])
+            _touch_plan(plan)
+    return JsonResponse(
+        {
+            "ok": True,
+            "mesocycle": {"id": mesocycle.pk, "name": mesocycle.name},
+            "history": serialize_plan_history(plan),
+        }
+    )
+
+
+@login_required
+@require_POST
+def session_slot_name_patch(request, plan_id, slot_id):
+    """Rename one of a block's day columns from the designer table."""
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    slot = get_object_or_404(
+        SessionSlot,
+        pk=slot_id,
+        mesocycle__plan=plan,
+        deleted_at__isnull=True,
+    )
+    payload, bad = _json_object_body(request)
+    if bad is not None:
+        return bad
+
+    name = payload.get("name")
+    if not isinstance(name, str):
+        return JsonResponse(
+            {"ok": False, "error": "name must be a string."}, status=400
+        )
+    name = name.strip()
+    if len(name) > 255:
+        return JsonResponse({"ok": False, "error": "name is too long."}, status=400)
+
+    if name != slot.name:
+        with transaction.atomic():
+            record_plan_action(plan, "Renamed day")
+            slot.name = name
+            slot.save(update_fields=["name"])
+            _touch_plan(plan)
+    return JsonResponse(
+        {
+            "ok": True,
+            "day": {
+                "session_slot_id": slot.pk,
+                "name": slot.name,
+                "day_number": slot.day_number,
+            },
+            "history": serialize_plan_history(plan),
+        }
+    )
+
+
+@login_required
+@require_POST
 def api_plan_undo(request, plan_id):
     """Pop the plan's most recent undo action and restore it (Phase 1 op-log).
 

@@ -45,6 +45,42 @@
   background: var(--line);
 }
 
+.meso-program-title,
+.meso-program-title-input {
+  width: 190px;
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.meso-program-title {
+  appearance: none;
+  overflow: hidden;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: text;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meso-program-title:hover,
+.meso-program-title:focus-visible {
+  border-color: var(--line);
+  outline: none;
+}
+.meso-program-title-input {
+  padding: 4px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(49, 117, 157, 0.14);
+}
+
 /* Sidebar collapse toggle (designer-simplify): a small icon button that hides
    the athlete+agent sidebar to give the grid full width. */
 .meso-sidebar-toggle {

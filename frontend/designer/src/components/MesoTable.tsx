@@ -95,6 +95,7 @@ export interface MesoTableProps {
   // (useGrid.patchRowColumns). Fire-and-forget, like onPatchCell.
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onRenameDay(sessionSlotId: Id, name: string): void;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
   onAddDay(): void;
@@ -805,6 +806,7 @@ interface TableDayBlockProps {
   onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onRenameDay(sessionSlotId: Id, name: string): void;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
   onRemoveDay(day: GridDay): void;
@@ -829,6 +831,7 @@ function TableDayBlock({
   onWriteCellLine,
   onPatchRowColumns,
   onRenameExercise,
+  onRenameDay,
   onAddExercise,
   onRemoveExercise,
   onRemoveDay,
@@ -836,6 +839,8 @@ function TableDayBlock({
   onFillAcrossWeeks,
   onAddExerciseThisWeek,
 }: TableDayBlockProps) {
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(day.name);
   const dayArmed = isArmed("day", day.session_slot_id);
   const dragData: TableDragData = { type: "day", sessionSlotId: day.session_slot_id };
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
@@ -844,6 +849,22 @@ function TableDayBlock({
     disabled: busy,
   });
   const dayHandleLabel = `Reorder ${day.name || `Day ${day.day_number}`}`;
+  const dayLabel = day.name || `Day ${day.day_number}`;
+
+  const beginNameEdit = () => {
+    setNameDraft(day.name);
+    setEditingName(true);
+  };
+  const cancelNameEdit = () => {
+    setNameDraft(day.name);
+    setEditingName(false);
+  };
+  const commitNameEdit = () => {
+    const name = nameDraft.trim();
+    setEditingName(false);
+    setNameDraft(name);
+    if (name !== day.name) onRenameDay(day.session_slot_id, name);
+  };
 
   return (
     <div className={`meso-table-day${isDragging ? " is-dragging" : ""}`} ref={setNodeRef}>
@@ -860,7 +881,38 @@ function TableDayBlock({
         >
           ⠿
         </button>
-        <div className="meso-day-name">{day.name}</div>
+        {editingName ? (
+          <input
+            autoFocus
+            aria-label="Day name"
+            className="meso-day-name-input"
+            maxLength={255}
+            value={nameDraft}
+            onChange={(event) => setNameDraft(event.target.value)}
+            onBlur={commitNameEdit}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitNameEdit();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                cancelNameEdit();
+              }
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className="meso-day-name"
+            aria-label={`Rename day: ${dayLabel}`}
+            title="Rename day"
+            disabled={busy}
+            onClick={beginNameEdit}
+          >
+            {dayLabel}
+          </button>
+        )}
         {day.bias && <div className="meso-day-bias">{day.bias}</div>}
         <div className="meso-flex-spacer" />
         {!dayArmed && (
@@ -993,6 +1045,7 @@ export function MesoTable(props: MesoTableProps) {
     onWriteCellLine,
     onPatchRowColumns,
     onRenameExercise,
+    onRenameDay,
     onAddExercise,
     onRemoveExercise,
     onAddDay,
@@ -1123,6 +1176,7 @@ export function MesoTable(props: MesoTableProps) {
               onWriteCellLine={onWriteCellLine}
               onPatchRowColumns={onPatchRowColumns}
               onRenameExercise={onRenameExercise}
+              onRenameDay={onRenameDay}
               onAddExercise={addExerciseAndFocus}
               onRemoveExercise={onRemoveExercise}
               onRemoveDay={onRemoveDay}

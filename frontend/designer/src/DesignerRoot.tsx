@@ -200,6 +200,8 @@ export function DesignerRoot() {
   return (
     <div className="meso-designer-root">
       <TopBar
+        planTitle={grid?.plan?.title ?? ""}
+        onRenamePlan={gridState.renamePlan}
         view={view}
         onSelectView={selectView}
         cycleLabel={cycleLabel}
@@ -242,6 +244,7 @@ export function DesignerRoot() {
                 onWriteCellLine={gridState.writeCellLine}
                 onPatchRowColumns={gridState.patchRowColumns}
                 onRenameExercise={gridState.renameExercise}
+                onRenameDay={gridState.renameDay}
                 onAddExercise={gridState.addExercise}
                 onRemoveExercise={gridState.removeExercise}
                 onAddDay={gridState.addDay}
@@ -262,6 +265,7 @@ export function DesignerRoot() {
                 days={grid?.days ?? []}
                 periodStyle={periodStyle}
                 onSetPeriodStyle={setPeriodStyle}
+                onRenameMesocycle={gridState.renameMesocycle}
                 // Issue #455 phase A5 product-behavior change: there is no
                 // more one-week "landing" view to preview a week into — the
                 // table already shows every week as columns at once, so a

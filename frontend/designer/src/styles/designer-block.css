@@ -38,6 +38,38 @@
 .meso-macro-block--done .meso-macro-block-name {
   color: var(--accent-deep);
 }
+.meso-block-name-button,
+.meso-block-name-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 1px 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+}
+.meso-block-name-button {
+  appearance: none;
+  overflow: hidden;
+  background: transparent;
+  cursor: text;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meso-block-name-button:hover,
+.meso-block-name-button:focus-visible {
+  border-color: currentColor;
+  outline: none;
+}
+.meso-block-name-input {
+  background: var(--surface);
+  border-color: var(--accent);
+  color: var(--ink);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(49, 117, 157, 0.14);
+}
 .meso-macro-block-weeks {
   font-size: 10.5px;
   margin-top: 2px;

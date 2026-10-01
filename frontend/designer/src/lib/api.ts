@@ -75,6 +75,7 @@ export interface Week {
 
 /** One macrocycle phase chip. */
 export interface Phase {
+  id: number | string;
   name: string;
   weeks: string;
   state: "done" | "current" | "next" | "future" | string;

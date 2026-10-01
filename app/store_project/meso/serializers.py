@@ -206,6 +206,7 @@ def serialize_week(week):
 def serialize_mesocycle(mesocycle, state):
     """One bar in the macrocycle rail."""
     return {
+        "id": mesocycle.pk,
         "name": mesocycle.name,
         "weeks": f"{mesocycle.week_count} wk",
         "state": state,

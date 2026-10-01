@@ -169,6 +169,111 @@ describe("patchCell", () => {
   });
 });
 
+describe("renamePlan", () => {
+  it("optimistically updates grid.plan, applies the reply, and adopts history", async () => {
+    const { result } = setup(
+      grid({ plan: { id: 7, title: "Old title", goal: "Strength" } }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: true,
+        plan: { title: "Server title" },
+        history: {
+          can_undo: true,
+          can_redo: false,
+          undo_label: "Renamed program",
+          redo_label: null,
+        },
+      }),
+    ) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.renamePlan("New title");
+    });
+
+    expect(result.current.grid?.plan?.title).toBe("New title");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/meso/api/plan/7/title/",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(sentBody()).toEqual({ title: "New title" });
+    await waitFor(() => expect(result.current.grid?.plan?.title).toBe("Server title"));
+    expect(result.current.history.undo_label).toBe("Renamed program");
+  });
+});
+
+describe("renameMesocycle", () => {
+  it("optimistically updates the phase/open block, applies the reply, and adopts history", async () => {
+    const { result } = setup(
+      grid({
+        phases: [
+          { id: 1, name: "Block 1", weeks: "4 wk", state: "current" },
+          { id: 2, name: "Block 2", weeks: "4 wk", state: "next" },
+        ],
+      }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: true,
+        mesocycle: { id: 1, name: "Server block" },
+        history: {
+          can_undo: true,
+          can_redo: false,
+          undo_label: "Renamed block",
+          redo_label: null,
+        },
+      }),
+    ) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.renameMesocycle(1, "Strength block");
+    });
+
+    expect(result.current.grid?.phases?.[0]?.name).toBe("Strength block");
+    expect(result.current.grid?.phases?.[1]?.name).toBe("Block 2");
+    expect(result.current.grid?.mesocycle.name).toBe("Strength block");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/meso/api/plan/7/mesocycle/1/name/",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(sentBody()).toEqual({ name: "Strength block" });
+    await waitFor(() => expect(result.current.grid?.mesocycle.name).toBe("Server block"));
+    expect(result.current.grid?.phases?.[0]?.name).toBe("Server block");
+    expect(result.current.history.undo_label).toBe("Renamed block");
+  });
+});
+
+describe("renameDay", () => {
+  it("optimistically updates the day, applies the reply, and adopts history", async () => {
+    const { result } = setup(grid({ days: [day({ name: "Old day" })] }));
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: true,
+        day: { session_slot_id: 1, name: "Server day", day_number: 1 },
+        history: {
+          can_undo: true,
+          can_redo: false,
+          undo_label: "Renamed day",
+          redo_label: null,
+        },
+      }),
+    ) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.renameDay(1, "Power day");
+    });
+
+    expect(result.current.grid?.days[0]?.name).toBe("Power day");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/meso/api/plan/7/day/1/name/",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(sentBody()).toEqual({ name: "Power day" });
+    await waitFor(() => expect(result.current.grid?.days[0]?.name).toBe("Server day"));
+    expect(result.current.history.undo_label).toBe("Renamed day");
+  });
+});
+
 describe("renameExercise", () => {
   it("POSTs {name} to the row's FIRST live week's cell (the identity cell), optimistically updating row.name", async () => {
     // Phase 2a: the one-week swap fields are gone, so identity is always the
@@ -707,7 +812,7 @@ describe("refetchGrid", () => {
     const data = grid({
       plan: { id: 7, title: "Renamed plan", status: "active", unit: "kg" },
       athlete: { name: "Devon Reyes", initials: "DR", goal: "Strength", contraindications: [] },
-      phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
+      phases: [{ id: 1, name: "Hypertrophy", weeks: "4 wk", state: "current" }],
     });
     globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, ...data })) as unknown as typeof fetch;
 

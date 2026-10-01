@@ -7,8 +7,8 @@ import { BlockView } from "./BlockView";
 import type { GridDay, GridWeek, Phase } from "../lib/api";
 
 const phases: Phase[] = [
-  { name: "Accumulation", weeks: "4 wk", state: "done" },
-  { name: "Hypertrophy", weeks: "4 wk", state: "current" },
+  { id: 10, name: "Accumulation", weeks: "4 wk", state: "done" },
+  { id: 20, name: "Hypertrophy", weeks: "4 wk", state: "current" },
 ];
 // Issue #455 phase A5: BlockView now takes GridWeek[] (sourced off the
 // grid), not the retired one-week Week[]. Programs are date-less and carry
@@ -57,6 +57,7 @@ function baseProps(overrides: Partial<Parameters<typeof BlockView>[0]> = {}) {
     days: calendarDays(3),
     periodStyle: "timeline" as const,
     onSetPeriodStyle: vi.fn(),
+    onRenameMesocycle: vi.fn(),
     onSwitchWeek: vi.fn(),
     ...overrides,
   };
@@ -67,6 +68,43 @@ describe("BlockView", () => {
     render(<BlockView {...baseProps()} />);
     expect(screen.getByText("Accumulation")).toBeInTheDocument();
     expect(screen.getByText("Hypertrophy")).toBeInTheDocument();
+    expect(screen.getByText("This mesocycle · Hypertrophy")).toBeInTheDocument();
+  });
+
+  it("renames a phase inline with a trimmed Enter commit", async () => {
+    const user = userEvent.setup();
+    const onRenameMesocycle = vi.fn();
+    render(<BlockView {...baseProps({ onRenameMesocycle })} />);
+
+    await user.click(screen.getByRole("button", { name: "Rename block: Hypertrophy" }));
+    const input = screen.getByRole("textbox", { name: "Block name" });
+    await user.clear(input);
+    await user.type(input, "  Strength  {Enter}");
+
+    expect(onRenameMesocycle).toHaveBeenCalledWith(20, "Strength");
+  });
+
+  it("commits on blur, while Escape and an empty draft revert", async () => {
+    const user = userEvent.setup();
+    const onRenameMesocycle = vi.fn();
+    render(<BlockView {...baseProps({ onRenameMesocycle })} />);
+
+    await user.click(screen.getByRole("button", { name: "Rename block: Accumulation" }));
+    await user.clear(screen.getByRole("textbox", { name: "Block name" }));
+    await user.type(screen.getByRole("textbox", { name: "Block name" }), "Base");
+    await user.tab();
+    expect(onRenameMesocycle).toHaveBeenCalledWith(10, "Base");
+
+    await user.click(screen.getByRole("button", { name: "Rename block: Hypertrophy" }));
+    await user.clear(screen.getByRole("textbox", { name: "Block name" }));
+    await user.type(screen.getByRole("textbox", { name: "Block name" }), "Discard{Escape}");
+    expect(onRenameMesocycle).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Rename block: Hypertrophy" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Rename block: Hypertrophy" }));
+    await user.clear(screen.getByRole("textbox", { name: "Block name" }));
+    await user.tab();
+    expect(onRenameMesocycle).toHaveBeenCalledTimes(1);
   });
 
   it("renders the period-style segmented control and switches styles", async () => {

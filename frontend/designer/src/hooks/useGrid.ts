@@ -48,6 +48,18 @@ interface GridHistoryCarrier {
   };
 }
 
+interface PlanTitleCarrier extends GridHistoryCarrier {
+  plan?: { title?: string };
+}
+
+interface MesocycleNameCarrier extends GridHistoryCarrier {
+  mesocycle?: { id?: Id; name?: string };
+}
+
+interface DayNameCarrier extends GridHistoryCarrier {
+  day?: { session_slot_id?: Id; name?: string; day_number?: number };
+}
+
 const EMPTY_GRID_HISTORY: GridHistory = {
   can_undo: false,
   can_redo: false,
@@ -122,6 +134,32 @@ function updateCellInGrid(grid: MesoGrid, cellId: Id, patch: Partial<GridCell>):
         return changed ? { ...row, cells } : row;
       }),
     })),
+  };
+}
+
+function updateMesocycleNameInGrid(
+  grid: MesoGrid,
+  mesocycleId: Id,
+  name: string,
+): MesoGrid {
+  return {
+    ...grid,
+    phases: grid.phases?.map((phase) =>
+      phase.id === mesocycleId ? { ...phase, name } : phase,
+    ),
+    mesocycle:
+      grid.mesocycle.id === mesocycleId
+        ? { ...grid.mesocycle, name }
+        : grid.mesocycle,
+  };
+}
+
+function updateDayNameInGrid(grid: MesoGrid, sessionSlotId: Id, name: string): MesoGrid {
+  return {
+    ...grid,
+    days: grid.days.map((day) =>
+      day.session_slot_id === sessionSlotId ? { ...day, name } : day,
+    ),
   };
 }
 
@@ -269,6 +307,95 @@ export function useGrid(options: UseGridOptions) {
       write.finally(() => pendingWritesRef.current.delete(write));
     },
     [grid, planId, csrf, adoptGridHistory],
+  );
+
+  const renamePlan = useCallback(
+    (title: string) => {
+      setGrid((prev) =>
+        prev?.plan ? { ...prev, plan: { ...prev.plan, title } } : prev,
+      );
+      const write = apiPost(`/meso/api/plan/${planId}/title/`, { title }, csrf)
+        .then((data) => {
+          const reply = data as PlanTitleCarrier;
+          if (typeof reply.plan?.title === "string") {
+            const returnedTitle = reply.plan.title;
+            setGrid((prev) =>
+              prev?.plan
+                ? { ...prev, plan: { ...prev.plan, title: returnedTitle } }
+                : prev,
+            );
+          }
+          adoptGridHistory(reply);
+        })
+        .catch((err) => console.error("Rename program failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
+    },
+    [planId, csrf, adoptGridHistory],
+  );
+
+  const renameMesocycle = useCallback(
+    (mesocycleId: Id, name: string) => {
+      setGrid((prev) =>
+        prev ? updateMesocycleNameInGrid(prev, mesocycleId, name) : prev,
+      );
+      const write = apiPost(
+        `/meso/api/plan/${planId}/mesocycle/${mesocycleId}/name/`,
+        { name },
+        csrf,
+      )
+        .then((data) => {
+          const reply = data as MesocycleNameCarrier;
+          if (
+            reply.mesocycle?.id != null &&
+            typeof reply.mesocycle.name === "string"
+          ) {
+            const returnedId = reply.mesocycle.id;
+            const returnedName = reply.mesocycle.name;
+            setGrid((prev) =>
+              prev
+                ? updateMesocycleNameInGrid(prev, returnedId, returnedName)
+                : prev,
+            );
+          }
+          adoptGridHistory(reply);
+        })
+        .catch((err) => console.error("Rename block failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
+    },
+    [planId, csrf, adoptGridHistory],
+  );
+
+  const renameDay = useCallback(
+    (sessionSlotId: Id, name: string) => {
+      setGrid((prev) =>
+        prev ? updateDayNameInGrid(prev, sessionSlotId, name) : prev,
+      );
+      const write = apiPost(
+        `/meso/api/plan/${planId}/day/${sessionSlotId}/name/`,
+        { name },
+        csrf,
+      )
+        .then((data) => {
+          const reply = data as DayNameCarrier;
+          if (
+            reply.day?.session_slot_id != null &&
+            typeof reply.day.name === "string"
+          ) {
+            const returnedId = reply.day.session_slot_id;
+            const returnedName = reply.day.name;
+            setGrid((prev) =>
+              prev ? updateDayNameInGrid(prev, returnedId, returnedName) : prev,
+            );
+          }
+          adoptGridHistory(reply);
+        })
+        .catch((err) => console.error("Rename day failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
+    },
+    [planId, csrf, adoptGridHistory],
   );
 
   // Phase 2a: write one freeform (week × line) sub-line of a row's stack —
@@ -547,6 +674,9 @@ export function useGrid(options: UseGridOptions) {
     history,
     busy,
     patchCell,
+    renamePlan,
+    renameMesocycle,
+    renameDay,
     renameExercise,
     writeCellLine,
     patchRowColumns,
