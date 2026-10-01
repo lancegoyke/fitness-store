@@ -7854,6 +7854,7 @@ def billing_start_trial(request):
 
 _COACH_PLAN_SIGNER = TimestampSigner(salt="meso.become_coach.plan")
 _COACH_PLAN_MAX_AGE = 24 * 60 * 60
+_COACH_PLAN_FRESH_ACCOUNT = datetime.timedelta(minutes=30)
 
 
 def _signed_plan(params):
@@ -7896,8 +7897,12 @@ class BecomeCoachView(TemplateView):
         # login() flushes a session that carried another account (#644). A bare
         # ``?plan=`` from a link does nothing (it would start a trial on a GET);
         # only the signed one our own CTA minted counts. It wins over the session.
+        # The signature is public (any anonymous visit mints one), so it only
+        # counts for an account created moments ago: a crafted link can't start
+        # a trial for someone who has been here a while.
         session_intent = request.session.pop("meso_coach_intent", None)
-        intent = _signed_plan(request.GET) or session_intent
+        fresh = timezone.now() - request.user.date_joined < _COACH_PLAN_FRESH_ACCOUNT
+        intent = (_signed_plan(request.GET) if fresh else None) or session_intent
         if _is_coach(request.user):
             return redirect("meso:roster")
         if intent in {"trial", "free"}:

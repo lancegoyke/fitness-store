@@ -414,7 +414,7 @@ def send_invite_accepted_email(
         return False
     context = {
         "athlete_name": athlete_name(athlete, athlete_label),
-        "template_title": template_title,
+        "template_title": " ".join((template_title or "").split()),
         "roster_url": roster_url,
     }
     subject = render_to_string(

@@ -8,6 +8,7 @@ being able to force an accept).
 """
 
 import re
+from datetime import timedelta
 from urllib.parse import parse_qs
 from urllib.parse import urlparse
 
@@ -15,6 +16,7 @@ import pytest
 from django.contrib.messages import get_messages
 from django.test import Client
 from django.urls import reverse
+from django.utils import timezone
 
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.models import CoachAthlete
@@ -142,6 +144,20 @@ class TestTrialChoiceThroughSignup:
             url + "x",
         ):
             assert client.get(forged).status_code == 200
+        assert not CoachProfile.objects.filter(user=user).exists()
+        assert not CoachSubscription.objects.filter(coach=user).exists()
+
+    def test_signed_plan_ignored_for_an_established_account(self, client):
+        # The signature is public (any anonymous visit mints one), so a crafted
+        # link must not start a trial for someone who has been here a while.
+        url = self._signed(client, "trial")
+        client = Client()
+        user = UserFactory()
+        User.objects.filter(pk=user.pk).update(
+            date_joined=timezone.now() - timedelta(days=2)
+        )
+        client.force_login(user)
+        assert client.get(url).status_code == 200
         assert not CoachProfile.objects.filter(user=user).exists()
         assert not CoachSubscription.objects.filter(coach=user).exists()
 
