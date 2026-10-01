@@ -22,7 +22,6 @@ from playwright.sync_api import expect
 from store_project.meso.factories import CoachSubscriptionFactory
 from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachSubscription
-from store_project.meso.views import SEAT_LIMIT_MESSAGE
 
 pytestmark = pytest.mark.django_db
 
@@ -186,15 +185,14 @@ def test_new_athlete_signs_up_from_an_invite(
 # ---------------------------------------------------------------------------
 
 
-def test_free_coach_at_the_cap_cannot_invite(
+def test_free_coach_at_the_cap_can_invite_and_is_warned(
     page, viewport, shot, press, login, delivered_plan
 ):
-    """A free coach with one active athlete (the cap) can't open a second invite."""
+    """A free coach at the cap still sends the invite, and is told on the spot (#649)."""
     coach = delivered_plan.coach
     login(coach)
     page.goto(reverse("meso:roster"))
     expect(page.get_by_text(re.compile(r"Free plan.*1 of 1 athlete"))).to_be_visible()
-    expect(page.get_by_role("button", name="Subscribe")).to_be_visible()
     shot("01-roster-at-cap")
 
     second_email = "taylor.second@example.com"
@@ -203,10 +201,14 @@ def test_free_coach_at_the_cap_cannot_invite(
     press(page.get_by_role("button", name="Send invite"))
 
     expect(page).to_have_url(re.compile(re.escape(reverse("meso:roster")) + r"$"))
-    expect(page.get_by_text(SEAT_LIMIT_MESSAGE)).to_be_visible()
-    expect(page.get_by_role("button", name="Subscribe")).to_be_visible()
-    expect(page.locator(".meso-row").filter(has_text=second_email)).to_have_count(0)
-    shot("02-seat-limit-message")
+    expect(
+        page.get_by_text(
+            f"Free covers 1 athlete. {second_email} won't be able to join until "
+            "you start your trial or subscribe."
+        )
+    ).to_be_visible()
+    expect(page.get_by_role("button", name="Subscribe").first).to_be_visible()
+    expect(page.locator(".meso-row").filter(has_text=second_email)).to_have_count(1)
+    shot("02-seat-limit-warning")
 
-    assert not CoachInvite.objects.filter(email=second_email).exists()
-    assert mail.outbox == []
+    assert CoachInvite.objects.filter(email=second_email).exists()
