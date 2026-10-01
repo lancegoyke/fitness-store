@@ -273,6 +273,42 @@
       </div>
     {% endfor %}
 
+    {% if on_file %}
+      <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+        <p class="meso-eyebrow">What your coach has on file</p>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          {% if on_file.goals %}
+            <div>
+              <div class="meso-row-name">Goals</div>
+              <div class="meso-row-meta">{{ on_file.goals|linebreaksbr }}</div>
+            </div>
+          {% endif %}
+          {% if on_file.training %}
+            <div>
+              <div class="meso-row-name">Training experience</div>
+              <div class="meso-row-meta">{{ on_file.training }}</div>
+            </div>
+          {% endif %}
+          {% if on_file.contraindications %}
+            <div>
+              <div class="meso-row-name">Contraindications</div>
+              <ul style="margin:4px 0 0;padding-left:18px;color:var(--dim);font-size:12px;line-height:1.45;">
+                {% for item in on_file.contraindications %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+          {% if on_file.notes %}
+            <div>
+              <div class="meso-row-name">Notes</div>
+              <div class="meso-row-meta">{{ on_file.notes|linebreaksbr }}</div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
     {# Personal records (Phase 4d) — standing bests below the live programs. #}
     {% include "meso/_pr_list.html" %}
 
