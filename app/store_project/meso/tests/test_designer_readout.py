@@ -290,6 +290,74 @@ class TestAthleteSummaryUnitsAndScope:
         assert (summary["load"], summary["unit"]) == ("100", "kg")
 
 
+class TestAthleteSummaryPctAndReclaimed:
+    def _pct_and_abs(self, order):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        log = _log(cell)
+        sets = {
+            "abs": lambda n: _logged_set(cell, log, "50", unit=Unit.KILOGRAMS, n=n),
+            "pct": lambda n: _logged_set(cell, log, "90%", unit="", n=n),
+        }
+        for n, kind in enumerate(order, start=1):
+            sets[kind](n)
+        return _summary(meso, cell)
+
+    def test_an_absolute_set_beats_a_pct_set_pct_first(self):
+        summary = self._pct_and_abs(["pct", "abs"])
+        assert (summary["load"], summary["unit"]) == ("50", "kg")
+
+    def test_an_absolute_set_beats_a_pct_set_abs_first(self):
+        summary = self._pct_and_abs(["abs", "pct"])
+        assert (summary["load"], summary["unit"]) == ("50", "kg")
+
+    def test_a_pct_only_log_picks_the_top_pct(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        log = _log(cell)
+        _logged_set(cell, log, "90%", unit="", n=1)
+        _logged_set(cell, log, "80%", unit="", n=2)
+        summary = _summary(meso, cell)
+        # The frontend renders ``load`` + optional `` unit``: "90%", no unit.
+        assert (summary["load"], summary["unit"]) == ("90%", "")
+
+    def test_an_older_logs_reclaimed_set_neither_wins_nor_falls_back(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        old = _log(cell)
+        old_line = sub_line(cell, "300 x 5", athlete_authored=True)
+        LoggedSetFactory(
+            session_log=old,
+            prescription=cell,
+            source_line=None,
+            reclaimed_line=old_line,
+            set_number=1,
+            load="300",
+            reps="5",
+            unit=Unit.POUNDS,
+        )
+        new = _log(cell)
+        _logged_set(cell, new, "100", unit=Unit.POUNDS, n=1)
+        assert _summary(meso, cell)["load"] == "100"
+
+    def test_a_reclaimed_set_of_the_newest_log_is_used(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        line = sub_line(cell, "100 x 5", athlete_authored=True)
+        LoggedSetFactory(
+            session_log=_log(cell),
+            prescription=cell,
+            source_line=None,
+            reclaimed_line=line,
+            set_number=1,
+            load="120",
+            reps="5",
+            unit=Unit.POUNDS,
+        )
+        # The text says 100; the set standing behind the line says 120.
+        assert _summary(meso, cell)["load"] == "120"
+
+
 class TestSkippedLiftReadsLower:
     BLOCK = {
         "Squat": ["3x5 @ 200"] * 4,

@@ -209,6 +209,83 @@ describe("keyboard after Escape (#656)", () => {
   });
 });
 
+describe("keyboard on a skipped cell td (#664)", () => {
+  // Two squat rows × two weeks; `skip` marks (row slot, week id) cells skipped.
+  const skippedGrid = (skip: Array<[number, number]>) => {
+    const c = (slot: number, wk: number, id: number) =>
+      cell({ prescription_id: id, skipped: skip.some(([s, w]) => s === slot && w === wk) });
+    return grid({
+      weeks: [week({ id: 1 }), week({ id: 2, index: 1, label: "Wk 2" })],
+      days: [
+        day({
+          rows: [
+            row({ exercise_slot_id: 9, cells: { "1": c(9, 1, 100), "2": c(9, 2, 101) } }),
+            row({ exercise_slot_id: 10, name: "Bench", cells: { "1": c(10, 1, 102), "2": c(10, 2, 103) } }),
+          ],
+        }),
+      ],
+    });
+  };
+  const tdOf = (slot: number, wk: number) => screen.getByTestId(`cell-${slot}-${wk}`);
+
+  it("Tab from a skipped td lands on the next editable cell, not the Unskip button", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: skippedGrid([[9, 1]]) })} />);
+    act(() => tdOf(9, 1).focus());
+    await user.tab();
+    expect(screen.getByTestId("cell-text-101")).toHaveFocus();
+    expect(screen.getByTestId("cell-unskip-100")).not.toHaveFocus();
+  });
+
+  it("Shift+Tab from a skipped td lands on the previous editable cell", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: skippedGrid([[9, 2]]) })} />);
+    act(() => tdOf(9, 2).focus());
+    await user.tab({ shift: true });
+    expect(screen.getByTestId("cell-text-100")).toHaveFocus();
+  });
+
+  it("ArrowRight / ArrowLeft / ArrowDown move off a skipped td", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: skippedGrid([[9, 1]]) })} />);
+    act(() => tdOf(9, 1).focus());
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByTestId("cell-text-101")).toHaveFocus();
+    act(() => tdOf(9, 1).focus());
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("cell-text-102")).toHaveFocus();
+  });
+
+  it("ArrowLeft from a skipped td moves to the previous editable cell", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: skippedGrid([[9, 2]]) })} />);
+    act(() => tdOf(9, 2).focus());
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByTestId("cell-text-100")).toHaveFocus();
+  });
+
+  it("real flow: edit -> Escape -> cell becomes skipped (undo) -> Tab", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<MesoTable {...baseProps({ grid: skippedGrid([]) })} />);
+    await user.click(screen.getByTestId("cell-text-100"));
+    await user.keyboard("zz{Escape}");
+    expect(tdOf(9, 1)).toHaveFocus();
+    rerender(<MesoTable {...baseProps({ grid: skippedGrid([[9, 1]]) })} />);
+    expect(tdOf(9, 1)).toHaveFocus();
+    await user.tab();
+    expect(screen.getByTestId("cell-text-101")).toHaveFocus();
+  });
+
+  it("Tab from a skipped td never enters the Unskip button and keeps a tab stop", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: skippedGrid([[10, 2]]) })} />);
+    act(() => tdOf(10, 2).focus());
+    await user.tab();
+    expect(screen.getByTestId("cell-unskip-103")).not.toHaveFocus();
+    expect(document.querySelector('[data-grid-cell][tabindex="0"]')).not.toBeNull();
+  });
+});
+
 describe("week columns", () => {
   it("renders each week's label and deload marker (no current-week highlight — programs are date-less)", () => {
     render(

@@ -957,12 +957,12 @@ class TestSerializeMesocycleGridQueries:
     """
 
     def test_individual_grid_query_count(self, django_assert_num_queries):
-        # 11 = weeks, session slots, sessions, newest session logs, exercise slots, cells,
-        # parsed_sets (athlete-line summary, #645),
+        # 12 = weeks, session slots, sessions, newest session logs, exercise slots, cells,
+        # parsed_sets + reclaimed_sets (athlete-line summary, #645, #665),
         # 2x PlanAction (serialize_plan_history), mesocycles (phases),
         # contraindications (serialize_athlete_identity).
         f = _build_grid_meso()
-        with django_assert_num_queries(11):
+        with django_assert_num_queries(12):
             serialize_mesocycle_grid(f.meso)
 
 
