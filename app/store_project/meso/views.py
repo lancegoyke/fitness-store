@@ -53,6 +53,7 @@ from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
 from store_project.notifications.emails import send_invite_accepted_email
 from store_project.notifications.emails import send_relationship_ended_email
+from store_project.notifications.emails import send_relationship_restored_email
 from store_project.notifications.push import record_push_click
 
 from . import adherence as meso_adherence
@@ -409,6 +410,16 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
                         )
                         .select_related("athlete")
                     ),
+                    # Names of invites still awaiting acceptance (the roster's
+                    # non-expired ones), so the empty picker can say who it is
+                    # waiting on instead of "add a client" (#686).
+                    "pending_invites": [
+                        presenters.invite_display_name(inv)
+                        for inv in CoachInvite.objects.for_coach(
+                            self.request.user
+                        ).outstanding()
+                        if not presenters.pending_invite(inv)["is_expired"]
+                    ],
                 }
                 if plan.is_template
                 else None
@@ -4633,6 +4644,43 @@ def _notify_athlete_relationship_ended(request, link):
     transaction.on_commit(_send)
 
 
+def _notify_athlete_relationship_restored(request, link, restored_plan_titles):
+    """Best-effort email telling the athlete their coach restored the coaching (#687).
+
+    Same gates and failure handling as ``_notify_athlete_relationship_ended``:
+    never for self/demo links or sandbox coaches, honours the athlete's
+    delivery-email opt-out, runs on commit, swallows+logs any failure. Names only
+    the plans the restore actually reset.
+    """
+    if link.is_self or link.is_demo or meso_sandbox.is_sandbox(link.coach):
+        return
+    home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
+    unsubscribe_url = request.build_absolute_uri(
+        reverse(
+            "meso:unsubscribe_delivery_email",
+            kwargs={"token": make_unsubscribe_token(link.athlete)},
+        )
+    )
+
+    def _send():
+        try:
+            if not athlete_opted_out(link.athlete):
+                send_relationship_restored_email(
+                    athlete=link.athlete,
+                    coach=link.coach,
+                    home_url=home_url,
+                    restored_plan_titles=restored_plan_titles,
+                    unsubscribe_url=unsubscribe_url,
+                    athlete_label=link.label,
+                )
+        except Exception:  # mail is best-effort; never fail a restore on it
+            logger.exception(
+                "Failed to send relationship-restored email for link %s", link.pk
+            )
+
+    transaction.on_commit(_send)
+
+
 @login_required
 @require_POST
 def relationship_restore(request, token):
@@ -4642,7 +4690,8 @@ def relationship_restore(request, token):
     no fresh consent: the link goes straight back to active and every plan the
     end archived returns to the status it had (plans archived earlier stay
     archived). Coach-scoped (foreign token is a 404); the seat gate applies like
-    accept's. Sends no email. Lock order User → CoachAthlete → Plan, all no_key.
+    accept's. Emails the athlete after commit (#687; never on a double submit).
+    Lock order User → CoachAthlete → Plan, all no_key.
     """
     with transaction.atomic():
         locked_athlete_id = get_object_or_404(
@@ -4679,6 +4728,7 @@ def relationship_restore(request, token):
         for plan in plans:
             Plan.objects.filter(pk=plan.pk).update(status=snapshot[plan.pk])
         restored_plans = bool(plans)
+        restored_titles = [plan.title for plan in plans]
         link.status = CoachAthlete.Status.ACTIVE
         link.ended_at = None
         link.ended_by = ""
@@ -4686,6 +4736,7 @@ def relationship_restore(request, token):
         link.save(
             update_fields=["status", "ended_at", "ended_by", "ended_archived_plans"]
         )
+        _notify_athlete_relationship_restored(request, link, restored_titles)
     name = athlete_name(link.athlete, link.label)
     messages.success(
         request,

@@ -170,4 +170,57 @@ describe("TopBar", () => {
     rerender(<TopBar {...baseProps({ cycleLabel: "" })} />);
     expect(screen.queryByText("Hypertrophy · Wk 2 / 4")).not.toBeInTheDocument();
   });
+
+  describe("template Start for a client popover (#686)", () => {
+    const start = (clients: { id: number; name: string }[], pending: string[]) => ({
+      action: "/meso/template/7/use/",
+      csrf: "tok",
+      clients,
+      pending_invites: pending,
+    });
+    async function open(pending: string[]) {
+      const user = userEvent.setup();
+      render(<TopBar {...baseProps({ templateStart: start([], pending) })} />);
+      await user.click(screen.getByTestId("start-for-client"));
+      return screen.getByTestId("start-for-client-empty");
+    }
+
+    it("with no clients and no invites: a whole sentence around a visible Add a client link", async () => {
+      const empty = await open([]);
+      expect(empty).toHaveTextContent("You have no active clients yet. Add a client to start this template for them.");
+      const link = screen.getByRole("link", { name: "Add a client" });
+      expect(link).toHaveAttribute("href", "/meso/");
+      expect(link).toHaveClass("meso-inline-link");
+    });
+
+    it("with one pending invite: names them and points at the roster", async () => {
+      const empty = await open(["Jordan Ellis"]);
+      expect(empty).toHaveTextContent(
+        "Jordan Ellis hasn't accepted yet. We'll email you when they do, and you can start this for them from the roster.",
+      );
+      const link = screen.getByRole("link", { name: "the roster" });
+      expect(link).toHaveAttribute("href", "/meso/");
+      expect(link).toHaveClass("meso-inline-link");
+    });
+
+    it("with several pending invites: first name and a count of the others", async () => {
+      const empty = await open(["Jordan Ellis", "Sam Park", "Lee Wu"]);
+      expect(empty).toHaveTextContent(
+        "Jordan Ellis and 2 others haven't accepted yet. We'll email you when they do, and you can start this for them from the roster.",
+      );
+    });
+
+    it("with exactly two: '1 other', singular", async () => {
+      const empty = await open(["Jordan Ellis", "Sam Park"]);
+      expect(empty).toHaveTextContent("Jordan Ellis and 1 other haven't accepted yet.");
+    });
+
+    it("with clients: shows the picker, not the empty copy", async () => {
+      const user = userEvent.setup();
+      render(<TopBar {...baseProps({ templateStart: start([{ id: 4, name: "Maya" }], ["Jordan Ellis"]) })} />);
+      await user.click(screen.getByTestId("start-for-client"));
+      expect(screen.getByTestId("start-for-client-form")).toBeInTheDocument();
+      expect(screen.queryByTestId("start-for-client-empty")).not.toBeInTheDocument();
+    });
+  });
 });

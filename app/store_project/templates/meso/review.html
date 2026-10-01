@@ -57,9 +57,8 @@
 
           <p style="margin:0 0 10px;font-size:12.5px;color:var(--ink);line-height:1.45;">{{ c.rationale }}</p>
 
-          <div class="meso-phone-wrap" style="display:flex;align-items:center;gap:10px;">
-            {% if c.honors %}<span class="meso-badge meso-badge--warn" style="font-weight:600;">Honors: {{ c.honors }}</span>{% endif %}
-            <div class="meso-spacer"></div>
+          <div class="meso-review-foot">
+            {% if c.honors %}<span class="meso-badge meso-badge--warn meso-review-honors" style="font-weight:600;">Honors: {{ c.honors }}</span>{% endif %}
             <div class="meso-seg">
               <button class="meso-seg-btn" :class="{ 'is-on': statuses[{{ c.id }}] === 'approved' }"
                       @click="setStatus({{ c.id }}, 'approved')" :disabled="!pending || busy">Approve</button>

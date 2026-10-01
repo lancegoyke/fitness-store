@@ -454,3 +454,25 @@ class TestMultilineTemplateTitle:
         assert mail.outbox[0].to == [coach.email]
         assert "\n" not in mail.outbox[0].subject
         assert "\r" not in mail.outbox[0].subject
+
+
+class TestRosterClaimsPendingOnce:
+    """#688.6: the "hasn't accepted" claim is stated once, by the explanation."""
+
+    def _html(self, client, coach):
+        client.force_login(coach)
+        return client.get(reverse("meso:roster")).content.decode()
+
+    def test_single_pending_invite_states_it_once(self, client):
+        coach = make_coach()
+        invited(coach)
+        html = self._html(client, coach).replace("&#x27;", "'")
+        assert html.count("hasn't accepted your invite yet") == 1
+        assert "Write it as a template" in html
+
+    def test_several_pending_invites_state_it_once(self, client):
+        coach = make_coach()
+        invited(coach)
+        CoachInvite.open_for(coach=coach, email="two@example.com", label="Two")
+        html = self._html(client, coach)
+        assert html.count("invites has been accepted yet") == 1

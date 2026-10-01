@@ -10,7 +10,7 @@
 
 {% block auth_description %}
   <p class="auth-card__description text-center">
-    {% if claim_invite %}Create your account to start training with {{ claim_coach_name }}.{% else %}{% trans "Create your account." %}{% endif %}
+    {% if claim_invite %}Create your account to start training with {{ claim_coach_name }}.{% else %}{% trans "Already have an account?" %}{% endif %}
     <a href="{{ login_url }}">{% trans "Sign in" %}</a>
   </p>
 {% endblock auth_description %}

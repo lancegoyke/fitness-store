@@ -35,6 +35,7 @@ from store_project.notifications.emails import send_contact_emails
 from store_project.notifications.emails import send_invite_accepted_email
 from store_project.notifications.emails import send_margin_alert_email
 from store_project.notifications.emails import send_relationship_ended_email
+from store_project.notifications.emails import send_relationship_restored_email
 from store_project.notifications.models import TEXT_ONLY_KINDS
 from store_project.notifications.models import EmailKind
 from store_project.payments.utils import order_confirmation_email
@@ -162,6 +163,15 @@ class TestTextOnlyKindsMatchRealSenders:
             athlete=athlete,
             coach=coach2,
             home_url="https://x.test/meso/me/",
+        )
+        kinds_seen.add(self._check(mail.outbox[0]))
+        mail.outbox.clear()
+
+        send_relationship_restored_email(
+            athlete=athlete,
+            coach=coach2,
+            home_url="https://x.test/meso/me/",
+            restored_plan_titles=["Strength Foundations"],
         )
         kinds_seen.add(self._check(mail.outbox[0]))
         mail.outbox.clear()

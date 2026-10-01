@@ -22,7 +22,12 @@ export interface DesignerFlags {
   save_template_url: string | null;
   // A template's "Start for a client…" picker (#637): the template_use URL and
   // the coach's deliverable clients. null on a client's plan.
-  template_start: { action: string; clients: { id: number; name: string }[] } | null;
+  template_start: {
+    action: string;
+    clients: { id: number; name: string }[];
+    /** Display names of the coach's unexpired, unaccepted invites (#686). */
+    pending_invites: string[];
+  } | null;
 }
 
 export interface ChatPanelProps {

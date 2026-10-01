@@ -471,6 +471,54 @@ describe("cell sub-lines", () => {
       expect(screen.getByTestId("cell-text-100")).toHaveFocus();
     });
 
+    it("shows the highest RPE and a miss count (#688)", () => {
+      withCell(
+        cell({ lines: three, athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9.5", missed: 1 } }),
+      );
+      const marker = screen.getByTestId("cell-athlete-marker-100");
+      expect(marker).toHaveTextContent("✓ 3 sets · 225 lb @9.5 · 1 miss");
+      expect(marker).toHaveAccessibleName("3 sets logged by your athlete, 1 missed — show lines");
+      expect(marker).toHaveAttribute("title", "✓ 3 sets · 225 lb @9.5 · 1 miss");
+    });
+
+    it("pluralises misses", () => {
+      withCell(
+        cell({ lines: three, athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9", missed: 2 } }),
+      );
+      const marker = screen.getByTestId("cell-athlete-marker-100");
+      expect(marker).toHaveTextContent("✓ 3 sets · 225 lb @9 · 2 misses");
+      expect(marker).toHaveAccessibleName("3 sets logged by your athlete, 2 missed — show lines");
+    });
+
+    it("has no miss text when missed is 0 or absent", () => {
+      const { unmount } = render(
+        <MesoTable
+          {...baseProps({
+            grid: grid({
+              days: [
+                day({
+                  rows: [
+                    row({
+                      cells: {
+                        "1": cell({ lines: three, athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9", missed: 0 } }),
+                      },
+                    }),
+                  ],
+                }),
+              ],
+            }),
+          })}
+        />,
+      );
+      expect(screen.getByTestId("cell-athlete-marker-100")).not.toHaveTextContent("miss");
+      expect(screen.getByTestId("cell-athlete-marker-100")).toHaveAccessibleName(
+        "3 sets logged by your athlete — show lines",
+      );
+      unmount();
+      withCell(cell({ lines: three, athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9" } }));
+      expect(screen.getByTestId("cell-athlete-marker-100")).not.toHaveTextContent("miss");
+    });
+
     it("shows no marker for a cleared (blank) athlete line", () => {
       withCell(
         cell({

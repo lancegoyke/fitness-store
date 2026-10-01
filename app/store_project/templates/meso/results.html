@@ -10,7 +10,7 @@
   <div class="meso-page meso-coach">
     <div class="meso-crumbs">
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
-      <span>{{ athlete.name }}</span> <span>/</span> <span>Session results</span>
+      <a href="{% url 'meso:athlete' athlete.id %}">{{ athlete.name }}</a> <span>/</span> <span>Session results</span>
     </div>
 
     <div class="meso-pagehead">

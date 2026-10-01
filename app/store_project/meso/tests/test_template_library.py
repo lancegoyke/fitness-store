@@ -749,6 +749,32 @@ class TestDesignerTemplateStart:
         assert flags["template_start"]["action"] == use_url(plan)
         assert [c["id"] for c in flags["template_start"]["clients"]] == [rel.pk]
 
+    def test_pending_invites_lists_names_of_unexpired_invites_only(self, client):
+        coach = CoachProfileFactory().user
+        plan, _ = template_plan(owner=coach)
+        CoachInviteFactory(
+            coach=coach, email="jordan@example.com", label="Jordan Ellis"
+        )
+        CoachInviteFactory(
+            coach=coach, email="sam@example.com"
+        )  # no label: email local part
+        CoachInviteFactory(
+            coach=coach,
+            email="old@example.com",
+            label="Stale Pat",
+            expires_at=timezone.now() - timedelta(days=1),
+        )
+        CoachInviteFactory(email="other-coach@example.com", label="Not Mine")
+        client.force_login(coach)
+        names = self._flags(client, plan)["template_start"]["pending_invites"]
+        assert sorted(names) == ["Jordan Ellis", "sam"]
+
+    def test_pending_invites_is_empty_without_invites(self, client):
+        coach, _rel = coach_with_client()
+        plan, _ = template_plan(owner=coach)
+        client.force_login(coach)
+        assert self._flags(client, plan)["template_start"]["pending_invites"] == []
+
     def test_suspended_client_is_not_offered(self, client):
         coach, _kept, suspended = _over_limit_coach()
         plan, _ = template_plan(owner=coach)
@@ -771,3 +797,28 @@ class TestDesignerTemplateStart:
         copy = Plan.objects.get(relationship=rel, is_template=False)
         assert resp.status_code == 302
         assert resp.url == reverse("meso:designer_plan", kwargs={"plan_id": copy.pk})
+
+
+class TestDesignerInlineLinkColour:
+    """#686 — ``.meso-inline-link`` rendered white on the white popover.
+
+    ``--accent-ink`` is the text-on-accent token (#fff); a link on the light
+    designer surface needs ``--accent-deep``. The designer has no dark mode (its
+    tokens are fixed inline in ``designer.html``), so one declaration is enough.
+    jsdom can't compute the cascade, hence the CSS-content guard.
+    """
+
+    def test_inline_link_uses_the_accent_ink_not_the_on_accent_token(self):
+        import re
+        from pathlib import Path
+
+        css = (
+            Path(__file__).resolve().parents[4]
+            / "frontend/designer/src/styles/designer-chat.css"
+        ).read_text()
+        match = re.search(r"^\.meso-inline-link\s*\{([^}]*)\}", css, re.M)
+        assert match, ".meso-inline-link rule missing"
+        body = re.sub(r"/\*.*?\*/", "", match.group(1), flags=re.S)
+        assert "color: var(--accent-deep)" in body
+        assert "--accent-ink" not in body
+        assert "underline" in body

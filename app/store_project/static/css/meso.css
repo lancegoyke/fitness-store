@@ -404,6 +404,27 @@ button.meso-card,
   flex: 1;
 }
 
+/* Review card footer: the "Honors:" pill and the Approve/Reject control. The
+   pill wraps (a long honors line must not shove the control past the card's
+   edge) and the control drops beneath it when the row is too narrow. */
+.meso-review-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.meso-review-honors {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border-radius: 12px;
+}
+.meso-review-foot > .meso-seg {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 /* The Meso shell's shared site nav lives in the cross-site nav.css (loaded by
    _meso_base alongside meso.css) — design-system unification PR 3. The earlier
    Meso-only `.meso-sitenav` partial was retired in favour of that one nav. */

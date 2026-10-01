@@ -1,4 +1,4 @@
-Hi,
+{% autoescape off %}Hi{% if greeting_name %} {{ greeting_name }}{% endif %},
 
 {{ athlete_name }} accepted your invite on Mastering Fitness and is ready to
 train with you. Your free plan has no open athlete spot right now, so they're
@@ -10,4 +10,4 @@ straight away:
 {{ roster_url }}
 
 Train hard,
-Mastering Fitness
+Mastering Fitness{% endautoescape %}

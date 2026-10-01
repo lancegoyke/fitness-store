@@ -152,7 +152,7 @@ export interface GridCell {
    * lines included so the editor can show a cleared line in place. */
   lines: CellLine[];
   /** Roll-up of the athlete-authored lines (null when there are none). */
-  athlete_summary?: { sets: number; load: string; unit: string; rpe: string } | null;
+  athlete_summary?: { sets: number; load: string; unit: string; rpe: string; missed?: number } | null;
 }
 
 export interface GridRow {

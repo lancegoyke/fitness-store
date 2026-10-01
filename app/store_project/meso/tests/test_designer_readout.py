@@ -175,6 +175,7 @@ class TestAthleteSummary:
             "load": "225",
             "unit": "kg",
             "rpe": "9",
+            "missed": 0,
         }
 
     def test_a_cell_with_no_athlete_lines_has_no_summary(self):
@@ -233,6 +234,7 @@ class TestAthleteSummaryUnitsAndScope:
             "load": "BW",
             "unit": "",
             "rpe": "8",
+            "missed": 1,  # the helper logs 5 reps against a prescribed 8
         }
 
     def test_a_numeric_set_beats_a_bw_set(self):
@@ -448,3 +450,56 @@ class TestLoadTokenEdges:
         )
         wk = serialize_mesocycle_grid(meso)["weeks"]
         assert (wk[0]["inten"], wk[1]["inten"]) == (75, 50)
+
+
+class TestAthleteSummaryRpeAndMisses:
+    """#688.2: the marker shows the highest RPE and how many sets missed reps."""
+
+    def _sets(self, text, sets):
+        """``sets`` = [(load, reps, rpe)] logged against a cell prescribed ``text``."""
+        meso, _, cells = _block({"Back Squat": [text] * 4})
+        cell = cells["Back Squat"][0]
+        log = _log(cell)
+        for n, (load, reps, rpe) in enumerate(sets, 1):
+            line = sub_line(cell, f"{load} x {reps} @{rpe}", athlete_authored=True)
+            LoggedSetFactory(
+                session_log=log,
+                prescription=cell,
+                source_line=line,
+                set_number=n,
+                load=load,
+                reps=reps,
+                rpe=rpe,
+                unit=Unit.POUNDS,
+            )
+        return _summary(meso, cell)
+
+    def test_highest_rpe_across_sets_and_one_miss(self):
+        # The top-load set (225) has RPE 8; the 9.5 is on a lighter, short set.
+        summary = self._sets(
+            "3x5 @ 225", [("225", "5", "8"), ("215", "5", "8.5"), ("205", "4", "9.5")]
+        )
+        assert summary["rpe"] == "9.5"
+        assert summary["missed"] == 1
+        assert summary["load"] == "225"
+
+    def test_no_miss_is_zero(self):
+        summary = self._sets("3x5 @ 225", [("225", "5", "8"), ("225", "6", "8")])
+        assert summary["missed"] == 0
+
+    def test_every_short_set_counts(self):
+        summary = self._sets("3x5 @ 225", [("225", "4", "8"), ("225", "3", "9")])
+        assert summary["missed"] == 2
+
+    @pytest.mark.parametrize("text", ["3x8-10 @ 225", "3xAMRAP @ 225"])
+    def test_non_numeric_prescribed_reps_never_miss(self, text):
+        summary = self._sets(text, [("225", "3", "8")])
+        assert summary["missed"] == 0
+
+    def test_text_fallback_counts_a_short_set(self):
+        meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        sub_line(cell, "225 x 3, RPE 9", athlete_authored=True)
+        summary = _summary(meso, cell)
+        assert summary["missed"] == 1
+        assert summary["rpe"] == "9"

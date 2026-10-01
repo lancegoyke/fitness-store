@@ -368,6 +368,7 @@ def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
         return False
     context = {
         "athlete_name": athlete_name(athlete),
+        "greeting_name": first_name(coach.name),
         "roster_url": roster_url,
     }
     subject = render_to_string(
@@ -403,6 +404,7 @@ def send_athlete_waiting_email(*, athlete, coach, roster_url, athlete_label="") 
         return False
     context = {
         "athlete_name": athlete_name(athlete, athlete_label),
+        "greeting_name": first_name(coach.name),
         "roster_url": roster_url,
     }
     subject = render_to_string(
@@ -439,6 +441,7 @@ def send_invite_accepted_email(
         return False
     context = {
         "athlete_name": athlete_name(athlete, athlete_label),
+        "greeting_name": first_name(coach.name),
         "template_title": " ".join((template_title or "").split()),
         "roster_url": roster_url,
     }
@@ -642,5 +645,68 @@ def send_relationship_ended_email(
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.RELATIONSHIP_ENDED)
+    sent = message.send(fail_silently=False)
+    return sent > 0
+
+
+def _plain_list(titles) -> str:
+    """``A``, ``A and B``, ``A, B and C`` -- no Oxford comma."""
+    titles = list(titles)
+    if len(titles) <= 1:
+        return "".join(titles)
+    return f"{', '.join(titles[:-1])} and {titles[-1]}"
+
+
+def send_relationship_restored_email(
+    *,
+    athlete,
+    coach,
+    home_url,
+    restored_plan_titles,
+    unsubscribe_url=None,
+    athlete_label="",
+) -> bool:
+    """Tell an athlete their coach restored the ended coaching (#687).
+
+    ``restored_plan_titles`` names the programs the restore actually put back
+    (an empty list drops the program sentence). The caller gates the athlete's
+    delivery-email opt-out; this only advertises the unsubscribe link, like
+    ``send_relationship_ended_email``.
+
+    Returns ``True`` if a message was sent, ``False`` if the athlete has no
+    email or the backend accepted no recipients. Raises on a mail backend error,
+    so callers must treat it as best-effort.
+    """
+    if not athlete.email:
+        return False
+    titles = [" ".join((t or "").split()) for t in restored_plan_titles]
+    titles = [t for t in titles if t]
+    context = {
+        "athlete_name": athlete_name(athlete, athlete_label),
+        "greeting_name": _greeting_name(athlete, athlete_label),
+        "coach_name": coach_name(coach),
+        "restored_programs": _plain_list(titles),
+        "restored_count": len(titles),
+        "home_url": home_url,
+        "unsubscribe_url": unsubscribe_url,
+    }
+    subject = render_to_string(
+        "notifications/relationship_restored_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/relationship_restored.md", context)
+    msg_html = render_to_string("notifications/relationship_restored.html", context)
+    headers = {}
+    if unsubscribe_url:
+        headers["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+        headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    message = EmailMultiAlternatives(
+        subject=subject,
+        body=msg_plain,
+        to=[athlete.email],
+        headers=headers,
+        **client_email_identity(coach),
+    )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.RELATIONSHIP_RESTORED)
     sent = message.send(fail_silently=False)
     return sent > 0

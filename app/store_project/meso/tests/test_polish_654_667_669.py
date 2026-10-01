@@ -128,8 +128,15 @@ class TestGettingStartedChecklist:
 class TestSignupSubtitle:
     def test_plain_signup_has_no_email_instruction(self, client):
         body = client.get(SIGNUP).content.decode()
-        assert "Create your account." in body
         assert "Enter your email below" not in body
+
+    def test_plain_signup_subtitle_does_not_repeat_the_heading(self, client):
+        # #688.5: the heading says "Create your account"; the subtitle offers
+        # the sign-in door instead of echoing it.
+        body = client.get(SIGNUP).content.decode()
+        assert "Already have an account?" in body
+        assert "Create your account." not in body
+        assert body.count("Create your account") == 1
 
     def test_claim_signup_keeps_coach_copy(self, client):
         invite = _invite()
