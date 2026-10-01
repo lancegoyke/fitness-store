@@ -66,6 +66,8 @@
                 <div style="min-width:0;"><div class="meso-row-name"{% if checklist.delivered %} style="color:var(--dim);"{% endif %}>Deliver the week</div><div class="meso-row-meta">Push it to their phone; their logged results flow back to you.</div></div>
               </li>
             </ol>
+            {# Tour/demo entry points only on the truly empty workspace; with athletes the card is just the checklist. #}
+            {% if is_empty %}
             {% if tour_entry_available %}
               <!-- Tour entry (guided-tour Phase 3): the roster's empty-state card
                    is the on-ramp into the self-coaching tour for a real coach who
@@ -95,6 +97,7 @@
                   <span class="meso-sub" style="margin:0;">Not sure yet? Explore a populated workspace first — or invite your first athlete below.</span>
                 {% endif %}
               </div>
+            {% endif %}
             {% endif %}
           </div>
         {% endif %}
@@ -389,7 +392,7 @@
         </div>
 
         {% if not show_meso_tour %}
-          {% if not show_getting_started or not tour_entry_available %}
+          {% if not is_empty or not tour_entry_available %}
             <!-- Durable tour restart (#441 P2): the empty-state entry card disappears
                  once the workspace has data or the tour is dismissed/completed, so this
                  is the always-available way back into the guided tour. Hidden while the
