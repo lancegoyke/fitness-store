@@ -206,6 +206,31 @@
   background: var(--rail);
 }
 
+.meso-athlete-marker {
+  appearance: none;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--rail);
+  color: var(--accent-deep, var(--dim));
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.meso-athlete-marker:hover,
+.meso-athlete-marker[aria-expanded="true"] {
+  color: var(--accent);
+}
+
 .meso-line-athlete-mark {
   padding-left: 4px;
   color: var(--dim);

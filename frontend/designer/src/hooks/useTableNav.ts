@@ -276,7 +276,14 @@ function nearestLineStop(stops: number[], line: number): number {
  * `line` (see nearestLineStop); row-scoped columns are single-line. */
 function clampLine(row: GridRow | undefined, col: TableColumnPos, line: number): number {
   if (col.field !== "text" || col.weekId === null) return 0;
-  return nearestLineStop(lineStops(row, col.weekId, col.field), line);
+  const stops = lineStops(row, col.weekId, col.field);
+  // Collapsed athlete lines (the roll-up marker) are in the data but not the
+  // DOM: clamp among the stops that actually render so a horizontal move
+  // from a deep line lands on the nearest rendered one instead of skidding.
+  const rowId = row?.exercise_slot_id;
+  const rendered =
+    rowId === undefined ? stops : stops.filter((s) => cellExists(rowId, col.weekId, col.field, s));
+  return nearestLineStop(rendered.length > 0 ? rendered : stops, line);
 }
 
 /** Every (rowId, line) of one column, day-major/row-minor/line-inner — the

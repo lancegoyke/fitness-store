@@ -14,6 +14,7 @@ athlete actually did last time, per lift) is derived from real logged sets here
 (athlete slice Phase 3).
 """
 
+import re
 from collections import Counter
 from collections import defaultdict
 
@@ -21,6 +22,7 @@ from django.db.models import Prefetch
 from django.urls import reverse
 
 from . import models
+from . import parsing
 from .names import link_athlete_name
 
 
@@ -906,6 +908,113 @@ def _pick_session_id(slot_id, sessions_by_slot, anchor_week_id, weeks):
     return None
 
 
+def _reps_value(parsed):
+    """Reps per set from a parsed prescription: the number, else a range's midpoint."""
+    if parsed.get("reps") is not None:
+        return parsed["reps"]
+    rng = parsed.get("reps_range")
+    if rng:
+        return (rng[0] + rng[1]) / 2
+    return None
+
+
+def _load_value(load):
+    """``(number, kind)`` for a parsed load token, or None ("BW", missing).
+
+    ``kind`` keeps a %1RM target apart from an absolute weight so one exercise
+    never divides 75 (%) by 225 (lb).
+    """
+    if not load:
+        return None
+    token = str(load).strip().lower()
+    kind = "pct" if token.endswith("%") else "abs"
+    digits = re.match(r"\d+(?:\.\d+)?", token)
+    if not digits:
+        return None
+    return float(digits.group()), kind
+
+
+def week_readouts(weeks, exercise_slot_ids, cells_by_key):
+    """Per-week ``(vol, inten)`` bar heights (0-100, or None) read off the block.
+
+    Volume = sum of sets x reps over the week's prescriptions that parse,
+    scaled so the block's biggest week is 100. Intensity = per exercise, the
+    week's top load / that exercise's max load anywhere in the block, averaged
+    over the exercises that have a load that week. A week where nothing parses
+    gets ``None`` for that bar, never a made-up number (#638).
+    """
+    volume = {}
+    top_loads = defaultdict(dict)  # (exercise_slot, kind) -> {week: top load}
+    for week in weeks:
+        total = 0
+        parsed_any = False
+        for slot_id in exercise_slot_ids:
+            cell = cells_by_key.get((slot_id, week.pk))
+            if cell is None or cell.skipped:
+                continue
+            parsed = parsing.parse_prescription(cell.text)
+            if not parsed or parsed.get("skip"):
+                continue
+            reps = _reps_value(parsed)
+            if parsed.get("sets") and reps:
+                total += parsed["sets"] * reps
+                parsed_any = True
+            load = _load_value(parsed.get("load"))
+            if load is not None:
+                number, kind = load
+                by_week = top_loads[(slot_id, kind)]
+                by_week[week.pk] = max(by_week.get(week.pk, 0), number)
+        volume[week.pk] = total if parsed_any else None
+    peak_volume = max((v for v in volume.values() if v), default=0)
+    readouts = {}
+    for week in weeks:
+        vol = volume[week.pk]
+        ratios = []
+        for by_week in top_loads.values():
+            if week.pk in by_week and max(by_week.values()) > 0:
+                ratios.append(by_week[week.pk] / max(by_week.values()))
+        readouts[week.pk] = (
+            round(vol / peak_volume * 100) if vol and peak_volume else None,
+            round(sum(ratios) / len(ratios) * 100) if ratios else None,
+        )
+    return readouts
+
+
+def athlete_line_summary(lines, unit):
+    """One compact summary of a cell's logged athlete lines, or None.
+
+    ``{"sets": n, "load": "225", "unit": "lb", "rpe": "9"}`` -- the top set's
+    load with the unit stamped on its LoggedSet (#630) when there is one, else
+    parsed from the line's own text and shown in the plan's unit.
+    """
+    logged = [lc for lc in lines if lc.athlete_authored and lc.text.strip()]
+    if not logged:
+        return None
+    best = None  # (load number, load text, unit, rpe)
+    for lc in logged:
+        candidates = [(s.load, s.unit, s.rpe) for s in lc.parsed_sets.all() if s.load]
+        if not candidates:
+            parsed = parsing.parse_performed(lc.text) or {}
+            if parsed.get("load"):
+                candidates = [(parsed["load"], unit, parsed.get("rpe") or "")]
+        for load, set_unit, rpe in candidates:
+            value = _load_value(load)
+            if value is not None and (best is None or value[0] > best[0]):
+                best = (value[0], load, set_unit, rpe)
+    summary = {"sets": len(logged), "load": "", "unit": "", "rpe": ""}
+    if best:
+        # A typed suffix ("225lb") rides in the load; show the number once and
+        # let the suffix be the unit.
+        load = str(best[1]).strip()
+        suffix = re.search(r"(kgs?|lbs?)$", load, re.IGNORECASE)
+        set_unit = best[2] or ""
+        if suffix:
+            set_unit = "kg" if suffix.group().lower().startswith("k") else "lb"
+            load = load[: suffix.start()].strip()
+        summary.update(load=load, unit=set_unit, rpe=best[3] or "")
+    return summary
+
+
 def serialize_mesocycle_grid(mesocycle):
     """The P1 multi-week table: every live day × row × week cell, densely.
 
@@ -970,6 +1079,7 @@ def serialize_mesocycle_grid(mesocycle):
             exercise_slot_id__in=exercise_slot_ids, week_id__in=week_ids
         )
         .select_related("exercise_slot")
+        .prefetch_related("parsed_sets")
         .order_by("line")
     ):
         if cell.line == 0:
@@ -1004,6 +1114,11 @@ def serialize_mesocycle_grid(mesocycle):
                         }
                         for lc in lines_by_key.get((exercise_slot.pk, week.pk), [])
                     ],
+                    # The designer collapses logged athlete lines to this one
+                    # marker (#645); None when the athlete logged nothing.
+                    "athlete_summary": athlete_line_summary(
+                        lines_by_key.get((exercise_slot.pk, week.pk), []), plan.unit
+                    ),
                 }
                 cells[str(week.pk)] = cell_data
             rows.append(
@@ -1061,6 +1176,7 @@ def serialize_mesocycle_grid(mesocycle):
             phase["weeks"] = f"{len(weeks)} wk"
         phases.append(phase)
 
+    readouts = week_readouts(weeks, exercise_slot_ids, cells_by_key)
     return {
         "plan": {
             "id": plan.pk,
@@ -1085,9 +1201,10 @@ def serialize_mesocycle_grid(mesocycle):
                 "phase": w.phase,
                 "deload": w.is_deload,
                 "delivered_at": w.delivered_at.isoformat() if w.delivered_at else None,
-                # BlockView's periodization timeline bar heights.
-                "vol": w.volume,
-                "inten": w.intensity,
+                # BlockView's periodization timeline bar heights, read off the
+                # block's own prescriptions (None = nothing parsed, #638).
+                "vol": readouts[w.pk][0],
+                "inten": readouts[w.pk][1],
             }
             for w in weeks
         ],

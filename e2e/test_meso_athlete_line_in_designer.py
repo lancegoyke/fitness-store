@@ -1,4 +1,8 @@
-"""Athlete-authored lines stay identifiable and out of the delivery diff (#599)."""
+"""Athlete-authored lines stay identifiable and out of the delivery diff (#599).
+
+The designer collapses them to one marker so a logged session doesn't grow the
+row (#645).
+"""
 
 import re
 
@@ -63,6 +67,26 @@ def test_athlete_lines_are_marked_in_designer_and_omitted_from_delivery_diff(
     coach_page.locator("a.meso-row").filter(has_text="Alex Athlete").click()
     coach_page.get_by_role("link", name="Open in designer").click()
     expect(coach_page.get_by_test_id("meso-table-view")).to_be_visible()
+
+    cell_pk = delivered_plan.squat.pk
+    editor = coach_page.locator(".meso-table-cell-editor").filter(
+        has=coach_page.get_by_test_id(f"cell-text-{cell_pk}")
+    )
+    marker = coach_page.get_by_test_id(f"cell-athlete-marker-{cell_pk}")
+    expect(marker).to_have_text(re.compile(r"^✓ 2 sets · 105"))
+    for line in athlete_lines:
+        expect(coach_page.get_by_test_id(f"cell-line-athlete-{line.pk}")).to_have_count(
+            0
+        )
+    # Row height: collapsed adds one marker line, expanded adds the two rows.
+    collapsed = editor.bounding_box()["height"]
+    line_height = coach_page.get_by_test_id(f"cell-line-{cell_pk}-3").bounding_box()[
+        "height"
+    ]
+    assert marker.bounding_box()["height"] <= line_height * 1.5
+    marker.click()
+    expanded = editor.bounding_box()["height"]
+    assert expanded - collapsed >= line_height
 
     for line in athlete_lines:
         mark = coach_page.get_by_test_id(f"cell-line-athlete-{line.pk}")

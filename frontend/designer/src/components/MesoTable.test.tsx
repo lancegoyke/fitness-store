@@ -244,6 +244,10 @@ describe("cell sub-lines", () => {
     });
     const view = render(<MesoTable {...baseProps({ grid: athleteGrid, onWriteCellLine })} />);
 
+    // #645: athlete lines collapse to one marker; expand to edit them.
+    expect(screen.queryByTestId("cell-line-100-1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cell-line-100-2")).toBeInTheDocument();
+    await user.click(screen.getByTestId("cell-athlete-marker-100"));
     const athleteMark = screen.getByTestId("cell-line-athlete-5");
     expect(athleteMark).toHaveTextContent("athlete");
     expect(athleteMark).toHaveAttribute("title", "Logged by your athlete");
@@ -280,6 +284,89 @@ describe("cell sub-lines", () => {
       <MesoTable {...baseProps({ grid: reclaimedGrid, onWriteCellLine })} />,
     );
     expect(screen.queryByTestId("cell-line-athlete-5")).not.toBeInTheDocument();
+  });
+
+  describe("athlete roll-up marker (#645)", () => {
+    const three = [
+      { id: 11, line: 1, text: "225 x 5", athlete_authored: true },
+      { id: 12, line: 2, text: "225 x 5", athlete_authored: true },
+      { id: 13, line: 3, text: "225 x 4 @9", athlete_authored: true },
+    ];
+    const withCell = (c: GridCell) =>
+      render(<MesoTable {...baseProps({ grid: grid({ days: [day({ rows: [row({ cells: { "1": c } })] })] }) })} />);
+
+    it("collapses athlete lines into one marker, expands on click, collapses on Escape", async () => {
+      const user = userEvent.setup();
+      withCell(
+        cell({
+          lines: [{ id: 10, line: 1, text: "tempo 3-1-1", athlete_authored: false }, ...three.map((l) => ({ ...l, line: l.line + 1 }))],
+          athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9" },
+        }),
+      );
+      expect(screen.getAllByTestId("cell-athlete-marker-100")).toHaveLength(1);
+      const marker = screen.getByTestId("cell-athlete-marker-100");
+      expect(marker).toHaveTextContent("✓ 3 sets · 225 lb @9");
+      expect(marker).toHaveAttribute("aria-expanded", "false");
+      expect(marker).toHaveAccessibleName("3 sets logged by your athlete — show lines");
+      // the coach's own sub-line is untouched
+      expect(screen.getByTestId("cell-line-100-1")).toHaveValue("tempo 3-1-1");
+      for (const n of [2, 3, 4]) expect(screen.queryByTestId(`cell-line-100-${n}`)).not.toBeInTheDocument();
+
+      await user.click(marker);
+      expect(marker).toHaveAttribute("aria-expanded", "true");
+      for (const n of [2, 3, 4]) expect(screen.getByTestId(`cell-line-100-${n}`)).toBeInTheDocument();
+      expect(screen.getByTestId("cell-line-athlete-11")).toBeInTheDocument();
+
+      await user.click(screen.getByTestId("cell-line-100-3"));
+      await user.keyboard("{Escape}");
+      expect(screen.queryByTestId("cell-line-100-3")).not.toBeInTheDocument();
+      expect(marker).toHaveAttribute("aria-expanded", "false");
+      // Focus lands on a real grid stop (not the marker) so keyboard nav keeps an anchor.
+      expect(screen.getByTestId("cell-text-100")).toHaveFocus();
+    });
+
+    it("shows no marker for a cleared (blank) athlete line", () => {
+      withCell(
+        cell({
+          lines: [{ id: 11, line: 1, text: "", athlete_authored: true }],
+          athlete_summary: null,
+        }),
+      );
+      expect(screen.queryByTestId("cell-athlete-marker-100")).not.toBeInTheDocument();
+    });
+
+    it("expands from the keyboard and collapses when focus leaves the group", async () => {
+      const user = userEvent.setup();
+      withCell(cell({ lines: three, athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "" } }));
+      const marker = screen.getByTestId("cell-athlete-marker-100");
+      expect(marker).toHaveTextContent("✓ 3 sets · 225 lb");
+      expect(marker).not.toHaveTextContent("@");
+      marker.focus();
+      await user.keyboard("{Enter}");
+      expect(screen.getByTestId("cell-line-100-1")).toBeInTheDocument();
+      // moving between the group's own inputs keeps it open
+      await user.click(screen.getByTestId("cell-line-100-1"));
+      await user.click(screen.getByTestId("cell-line-100-2"));
+      expect(screen.getByTestId("cell-line-100-2")).toBeInTheDocument();
+      // leaving to the cell's ghost collapses
+      await user.click(screen.getByTestId("cell-line-new-100"));
+      expect(screen.queryByTestId("cell-line-100-1")).not.toBeInTheDocument();
+    });
+
+    it("falls back to a bare set count without athlete_summary, and omits an empty load", () => {
+      withCell(cell({ lines: three }));
+      expect(screen.getByTestId("cell-athlete-marker-100")).toHaveTextContent(/^✓ 3 sets$/);
+    });
+
+    it("uses singular 'set' and omits the load part when load is blank", () => {
+      withCell(cell({ lines: [three[0]!], athlete_summary: { sets: 1, load: "", unit: "", rpe: "8" } }));
+      expect(screen.getByTestId("cell-athlete-marker-100")).toHaveTextContent(/^✓ 1 set @8$/);
+    });
+
+    it("keeps the ghost numbering after the athlete lines", () => {
+      withCell(cell({ lines: three }));
+      expect(screen.getByTestId("cell-line-new-100")).toBeInTheDocument();
+    });
   });
 
   // designer-simplify: the ghost must stay a real, focusable keyboard grid
