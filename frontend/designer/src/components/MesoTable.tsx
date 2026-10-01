@@ -713,9 +713,10 @@ function AddThisWeekControl({ day, weeks, busy, onAddExerciseThisWeek }: AddThis
 }
 
 /** Keys on the CELL itself (after Escape parked focus there, #653): a second
- * Escape leaves the table; Enter/F2 re-enter the cell's first input. Keys
+ * Escape leaves the table; Enter/F2 re-enter the cell's first input; Tab and
+ * arrows move on from the cell (useTableNav.cellKeyDown). Keys
  * bubbling up from the inputs are not ours (target check). */
-function cellKeyDown(event: KeyboardEvent<HTMLTableCellElement>) {
+function cellKeyDown(event: KeyboardEvent<HTMLTableCellElement>, tableNav: UseTableNavResult) {
   if (event.target !== event.currentTarget) return;
   if (event.key === "Escape") {
     event.preventDefault();
@@ -723,6 +724,9 @@ function cellKeyDown(event: KeyboardEvent<HTMLTableCellElement>) {
   } else if (event.key === "Enter" || event.key === "F2") {
     event.preventDefault();
     event.currentTarget.querySelector<HTMLInputElement>("input")?.focus();
+  } else {
+    // Tab / arrows move on from the cancelled cell (#656).
+    tableNav.cellKeyDown(event);
   }
 }
 
@@ -784,7 +788,7 @@ function TableRow({
       className={isDragging ? "is-dragging" : undefined}
       data-testid={`meso-row-${row.exercise_slot_id}`}
     >
-      <td className="meso-table-row-name-col" tabIndex={-1} onKeyDown={cellKeyDown}>
+      <td className="meso-table-row-name-col" tabIndex={-1} onKeyDown={(event) => cellKeyDown(event, tableNav)}>
         <div className="meso-table-row-name-row">
           <button
             type="button"
@@ -837,7 +841,7 @@ function TableRow({
             </span>
           )}
         </div>      </td>
-      <td className="meso-table-row-col meso-table-row-col--tempo" tabIndex={-1} onKeyDown={cellKeyDown}>
+      <td className="meso-table-row-col meso-table-row-col--tempo" tabIndex={-1} onKeyDown={(event) => cellKeyDown(event, tableNav)}>
         <RowColumnInput row={row} field="tempo" label="tempo" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
       {weeks.map((week) => {
@@ -845,7 +849,7 @@ function TableRow({
         const testId = `cell-${row.exercise_slot_id}-${week.id}`;
         if (!cell) return <td key={week.id} data-testid={testId} />;
         return (
-          <td key={week.id} data-testid={testId} className="meso-table-cell" tabIndex={-1} onKeyDown={cellKeyDown}>
+          <td key={week.id} data-testid={testId} className="meso-table-cell" tabIndex={-1} onKeyDown={(event) => cellKeyDown(event, tableNav)}>
             {cell.skipped ? (
               <>
                 <span className="meso-table-skipped" data-testid={`cell-skipped-${cell.prescription_id}`}>
@@ -878,10 +882,10 @@ function TableRow({
           </td>
         );
       })}
-      <td className="meso-table-row-col meso-table-row-col--note" tabIndex={-1} onKeyDown={cellKeyDown}>
+      <td className="meso-table-row-col meso-table-row-col--note" tabIndex={-1} onKeyDown={(event) => cellKeyDown(event, tableNav)}>
         <RowColumnInput row={row} field="note" label="notes" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
-      <td className="meso-table-row-col meso-table-row-col--rest" tabIndex={-1} onKeyDown={cellKeyDown}>
+      <td className="meso-table-row-col meso-table-row-col--rest" tabIndex={-1} onKeyDown={(event) => cellKeyDown(event, tableNav)}>
         <RowColumnInput row={row} field="rest" label="rest" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
     </tr>
