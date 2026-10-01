@@ -532,17 +532,26 @@ class CoachAthlete(models.Model):
 
         Also how a coach dismisses a waiting acceptance (#649).
         """
-        if (
-            self.status not in self.PENDING_STATUSES
-            and self.status != self.Status.ACCEPTED_WAITING
-        ):
-            raise InvalidTransition(f"Cannot decline a link that is {self.status}.")
-        was_waiting = self.status == self.Status.ACCEPTED_WAITING
-        self.status = self.Status.DECLINED
-        self.responded_at = timezone.now()
-        self.save(update_fields=["status", "responded_at"])
-        if was_waiting:
-            self._activate_waiting_after_commit()
+        declinable = (*self.PENDING_STATUSES, self.Status.ACCEPTED_WAITING)
+        with transaction.atomic():
+            # #679: the in-memory status can lag the row — ``activate_waiting``
+            # flips a waiting link ACTIVE from another request, and an
+            # unconditional write here would silently overwrite that seat with
+            # DECLINED (leaving its plans live). Lock the link and judge the
+            # fresh status, like ``end()`` does. Link row only: the callers
+            # hold no User lock, and this is the first lock they take.
+            fresh = CoachAthlete.objects.select_for_update(no_key=True).get(pk=self.pk)
+            if fresh.status not in declinable:
+                raise InvalidTransition(
+                    f"Cannot decline a link that is {fresh.status}."
+                )
+            self.status = fresh.status
+            was_waiting = self.status == self.Status.ACCEPTED_WAITING
+            self.status = self.Status.DECLINED
+            self.responded_at = timezone.now()
+            self.save(update_fields=["status", "responded_at"])
+            if was_waiting:
+                self._activate_waiting_after_commit()
         return self
 
     def _activate_waiting_after_commit(self):

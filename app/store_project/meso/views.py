@@ -99,7 +99,6 @@ from .models import PlanAction
 from .models import Prescription
 from .models import ProposedChange
 from .models import PushSubscription
-from .models import SandboxSession
 from .models import Session
 from .models import SessionLog
 from .models import SessionSlot
@@ -132,6 +131,7 @@ from .serializers import serialize_session_log
 from .serializers import serialize_week_snapshot
 from .stale_form import classify
 from .stale_form import conflict_message
+from .stale_form import partial_save_message
 from .stale_form import rerender_state
 from .unsubscribe import athlete_opted_out
 from .unsubscribe import make_unsubscribe_token
@@ -146,31 +146,48 @@ User = get_user_model()
 def _getting_started_steps(user):
     """Which of the roster's three getting-started steps the coach has done (#654.2).
 
-    ``invited``: an email invite sent, or any real (non-demo) athlete link —
-    self-coaching included. ``written``: a template (the write-ahead path), or
-    a non-template plan with at least one live exercise. ``delivered``: a live
-    week of a real athlete's plan has been delivered. Demo data never counts.
+    Each step is an *ever happened* fact, so archiving plans or ending links
+    never revives the card (#683). ``invited``: an email invite sent, or a real
+    (non-demo) link the coach did not merely receive — self-coaching counts, an
+    athlete's request still pending or declined does not. ``written``: a
+    template (archived included), or a non-template plan on a real link that
+    ever had an exercise. ``delivered``: any week of a real athlete's plan was
+    ever delivered. Demo data never counts.
     """
     real_links = CoachAthlete.objects.for_coach(user).exclude(is_demo=True)
-    real_plans = Plan.objects.filter(relationship__in=real_links).exclude(
-        status=Plan.Status.ARCHIVED
+    # An athlete-initiated request the coach hasn't (or won't) take is not an invite.
+    coach_side_links = real_links.exclude(
+        invited_by=CoachAthlete.InvitedBy.ATHLETE,
+        status__in=[
+            CoachAthlete.Status.PENDING_ATHLETE_REQUEST,
+            CoachAthlete.Status.DECLINED,
+        ],
     )
+    real_plans = Plan.objects.filter(relationship__in=real_links)
     return {
-        "invited": CoachInvite.objects.for_coach(user).exists() or real_links.exists(),
-        "written": Plan.objects.filter(is_template=True, owner=user)
-        .exclude(status=Plan.Status.ARCHIVED)
-        .exists()
+        "invited": CoachInvite.objects.for_coach(user).exists()
+        or coach_side_links.exists(),
+        "written": Plan.objects.filter(is_template=True, owner=user).exists()
         or ExerciseSlot.objects.filter(
-            deleted_at__isnull=True,
-            session_slot__deleted_at__isnull=True,
-            session_slot__mesocycle__plan__in=real_plans,
+            session_slot__mesocycle__plan__in=real_plans
         ).exists(),
         "delivered": Week.objects.filter(
-            deleted_at__isnull=True,
-            delivered_at__isnull=False,
-            mesocycle__plan__in=real_plans,
+            delivered_at__isnull=False, mesocycle__plan__in=real_plans
         ).exists(),
     }
+
+
+def _stash_rerender(request, key, payload):
+    """Carry a failed save's typed values to the next GET, one shot (#680).
+
+    Conflict/validation re-renders redirect instead of answering the POST, so a
+    refresh can't re-submit. The payload is plain JSON (no CSRF token).
+    """
+    request.session[key] = payload
+
+
+def _pop_rerender(request, key):
+    return request.session.pop(key, None)
 
 
 def _is_coach(user):
@@ -645,6 +662,7 @@ SETTINGS_LABELS = {
     "unit": "Default load unit",
 }
 COACH_SETTINGS = ("display_name", "programming_style", "avoid_rules", "unit")
+SETTINGS_STASH_KEY = "meso_settings_rerender"
 
 
 def _settings_current(user, profile):
@@ -656,6 +674,20 @@ def _settings_current(user, profile):
         "avoid_rules": getattr(profile, "avoid_rules", ""),
         "unit": getattr(profile, "default_unit", Unit.POUNDS),
     }
+
+
+def _flash_conflicts(request, labels, apply, conflicts):
+    """Flash a save that refused some fields: what saved, then what to redo."""
+    if apply:
+        messages.warning(
+            request,
+            partial_save_message(
+                [labels[f] for f in apply], [labels[f] for f in conflicts]
+            ),
+        )
+        return
+    for field in conflicts:
+        messages.error(request, conflict_message(labels[field]))
 
 
 class MesoSettingsView(LoginRequiredMixin, TemplateView):
@@ -670,6 +702,16 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
         current = _settings_current(self.request.user, profile)
         # A failed save re-renders the typed values (#657); otherwise the page
         # renders what is stored, twice: the box and its hidden ``initial_``.
+        stash = None
+        if "state" not in kwargs:
+            stash = _pop_rerender(self.request, SETTINGS_STASH_KEY)
+            if stash:
+                kwargs["state"] = tuple(stash["state"])
+                if stash["data"] is not None:
+                    if "name" in stash["forms"]:
+                        kwargs["name_form"] = UserNameForm(stash["data"])
+                    if "coach" in stash["forms"] and is_coach:
+                        kwargs["coach_form"] = CoachDisplayNameForm(stash["data"])
         values, initials = kwargs.get("state") or (current, current)
         ctx["name_form"] = kwargs.get("name_form") or UserNameForm(
             initial={"name": values["name"]}
@@ -766,13 +808,30 @@ class MesoSettingsView(LoginRequiredMixin, TemplateView):
             messages.success(request, done)
             return redirect("meso:settings")
         if conflicts:
-            messages.success(request, done)
-            for field in conflicts:
-                messages.error(request, conflict_message(SETTINGS_LABELS[field]))
-        request.user = user
-        return self.render_to_response(
-            self.get_context_data(state=state, **(rerender or {}))
+            _flash_conflicts(request, SETTINGS_LABELS, apply, conflicts)
+        # POST → redirect → GET (#680): a refresh must not re-submit.
+        _stash_rerender(
+            request,
+            SETTINGS_STASH_KEY,
+            {
+                "state": [state[0], state[1]],
+                # Invalid forms re-bind from the typed values to show their errors.
+                "data": (
+                    {f: data[f] for f in SETTINGS_LABELS if f in data}
+                    if rerender
+                    else None
+                ),
+                "forms": [
+                    key
+                    for key, form in (
+                        ("name", (rerender or {}).get("name_form")),
+                        ("coach", (rerender or {}).get("coach_form")),
+                    )
+                    if form is not None
+                ],
+            },
         )
+        return redirect("meso:settings")
 
 
 class RelationshipHistoryView(LoginRequiredMixin, TemplateView):
@@ -901,6 +960,13 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         current = _intake_current(link, athlete_profile)
         # A failed save re-renders the typed values (#657); otherwise the page
         # renders what is stored, twice: the box and its hidden ``initial_``.
+        if "intake_state" not in kwargs:
+            stash = _pop_rerender(
+                self.request, INTAKE_STASH_KEY.format(pk=kwargs["pk"])
+            )
+            if stash:
+                kwargs["intake_state"] = tuple(stash["state"])
+                kwargs["new_text"] = stash["new_text"]
         values, initials = kwargs.get("intake_state") or (current, current)
         ctx["intake"] = {**values, "new_contraindication": kwargs.get("new_text", "")}
         ctx["intake_initials"] = initials
@@ -965,6 +1031,9 @@ INTAKE_LABELS = {
 }
 
 
+INTAKE_STASH_KEY = "meso_intake_rerender:{pk}"
+
+
 def _intake_current(link, profile):
     """The intake's stored values as strings, as the page renders them."""
     return {
@@ -982,6 +1051,11 @@ def _intake_current(link, profile):
 
 def _first_form_error(form):
     return str(next(iter(form.errors.values()))[0])
+
+
+def _all_form_errors(form):
+    """Every validation message of ``form``, one per failing field (#680)."""
+    return [str(errors[0]) for errors in form.errors.values()]
 
 
 def _apply_contraindication(athlete, text):
@@ -1022,8 +1096,10 @@ def athlete_record_update(request, pk):
     for key in ("goals", "notes", "label", "new_contraindication"):
         if key in post:
             post[key] = post[key].replace("\r\n", "\n").replace("\r", "\n")
-    state = flash = error = None
+    state = flash = None
+    errors = []
     conflicts = []
+    apply = []
     with transaction.atomic():
         athlete = _locked_active_coached_athlete(request, pk)
         profile, _ = AthleteProfile.objects.get_or_create(user=athlete)
@@ -1034,20 +1110,20 @@ def athlete_record_update(request, pk):
         current = _intake_current(link, profile)
         fields = list(INTAKE_LABELS)
         form = AthleteRecordForm(post)
+        # Surface every failing field at once, not just the first (#680).
         if not form.is_valid():
-            error = _first_form_error(form)
-        elif len(clean_name(post.get("label", ""))) > 255:
-            error = "Name must be 255 characters or fewer."
+            errors.extend(_all_form_errors(form))
         new_text = None
-        if error is None and post.get("new_contraindication", "").strip():
+        if post.get("new_contraindication", "").strip():
             text_form = ContraindicationForm({"text": post["new_contraindication"]})
             if text_form.is_valid():
                 new_text = text_form.cleaned_data["text"]
             else:
-                error = _first_form_error(text_form)
+                errors.extend(_all_form_errors(text_form))
 
-        if error is not None:
-            messages.error(request, error)
+        if errors:
+            for error in errors:
+                messages.error(request, error)
             state = rerender_state(
                 post, current, fields, shown=fields, initial_from_post=True
             )
@@ -1072,20 +1148,20 @@ def athlete_record_update(request, pk):
                     post, current, fields, shown=[*apply, *conflicts]
                 )
     if state is not None:
-        view = AthleteProfileView()
-        view.setup(request, pk=pk)
-        ctx = view.get_context_data(
-            pk=pk,
-            intake_state=state,
-            new_text=post.get("new_contraindication", "") if error else "",
-        )
-        if error is None:
-            messages.success(request, "Athlete record updated.")
+        if not errors:
             if flash is not None:
                 messages.add_message(request, *flash)
-            for field in conflicts:
-                messages.error(request, conflict_message(INTAKE_LABELS[field]))
-        return view.render_to_response(ctx)
+            _flash_conflicts(request, INTAKE_LABELS, apply, conflicts)
+        # POST → redirect → GET (#680): a refresh must not re-submit.
+        _stash_rerender(
+            request,
+            INTAKE_STASH_KEY.format(pk=pk),
+            {
+                "state": [state[0], state[1]],
+                "new_text": post.get("new_contraindication", "") if errors else "",
+            },
+        )
+        return redirect("meso:athlete", pk=pk)
     messages.success(request, "Athlete record updated.")
     if flash is not None:
         messages.add_message(request, *flash)
@@ -1536,16 +1612,17 @@ def sandbox_enter(request):
 
     if request.user.is_authenticated:
         return _noindex(redirect("meso:roster"))
-    if (
-        SandboxSession.objects.count() >= settings.MESO_SANDBOX_MAX_CONCURRENT
-        or _sandbox_rate_limited(_client_ip(request))
-    ):
-        messages.info(
-            request,
-            "The demo is busy right now — please try again in a little while.",
-        )
+    busy = "The demo is busy right now — please try again in a little while."
+    # Cheap unlocked pre-check; the authoritative cap is re-checked under the
+    # creation lock inside ``create_sandbox`` (#673).
+    if meso_sandbox.at_capacity() or _sandbox_rate_limited(_client_ip(request)):
+        messages.info(request, busy)
         return _noindex(redirect("meso:roster"))
-    user = meso_sandbox.create_sandbox(source_ip=_client_ip(request))
+    try:
+        user = meso_sandbox.create_sandbox(source_ip=_client_ip(request))
+    except meso_sandbox.SandboxBusy:
+        messages.info(request, busy)
+        return _noindex(redirect("meso:roster"))
     # Two auth backends are configured (ModelBackend + allauth) — login() can't
     # infer which one, so it must be named explicitly.
     login(request, user, backend="django.contrib.auth.backends.ModelBackend")
@@ -4436,7 +4513,12 @@ def invite_decline(request, token):
         not link.is_pending or request.user != link.recipient()
     ):
         return HttpResponseForbidden("You cannot respond to this invite.")
-    link.decline()
+    try:
+        link.decline()
+    except InvalidTransition:
+        # Lost a race (#679): the link was answered or seated meanwhile.
+        messages.info(request, "That invite was already answered.")
+        return redirect("meso:roster")
     messages.success(request, "Invite declined.")
     return redirect("meso:roster")
 
@@ -4803,9 +4885,13 @@ def request_withdraw(request, token):
     link = get_object_or_404(CoachAthlete, token=token)
     if not link.is_pending or request.user != link.initiator():
         return HttpResponseForbidden("You cannot withdraw this request.")
-    link.decline()
-    messages.success(request, "Request withdrawn.")
     target = "meso:athlete_home" if request.user == link.athlete else "meso:roster"
+    try:
+        link.decline()
+    except InvalidTransition:
+        messages.info(request, "That request was already answered.")
+        return redirect(target)
+    messages.success(request, "Request withdrawn.")
     return redirect(target)
 
 

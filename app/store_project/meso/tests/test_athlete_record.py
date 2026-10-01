@@ -420,6 +420,7 @@ class TestCoachingSettings:
                 "avoid_rules": "Keep this",
                 "unit": Unit.KILOGRAMS,
             },
+            follow=True,
         )
         assert response.status_code == 200
         assert error in response.content.decode()

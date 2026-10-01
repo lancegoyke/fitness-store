@@ -364,7 +364,18 @@ class TestInviteThroughSignupAndLogin:
         invite = _invite(coach=coach)
         client.get(_claim(invite.token))
         athlete = UserFactory()
-        client.force_login(athlete)
+        athlete.set_password(PASSWORD)
+        athlete.save()
+        # A real allauth login heading back to the claim page (a bare
+        # ``force_login`` is a non-claim-bound login and clears the flag, #677).
+        client.post(
+            reverse("account_login"),
+            {
+                "login": athlete.email,
+                "password": PASSWORD,
+                "next": _claim(invite.token),
+            },
+        )
         resp = client.get(_claim(invite.token))
         assert resp.url == reverse("meso:athlete_home")
         link = CoachAthlete.objects.get(coach=coach, athlete=athlete)

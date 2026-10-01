@@ -46,6 +46,29 @@ def conflict_message(label):
     )
 
 
+def _join(labels):
+    labels = list(labels)
+    if len(labels) < 2:
+        return "".join(labels)
+    return ", ".join(labels[:-1]) + " and " + labels[-1]
+
+
+def partial_save_message(saved, conflicted):
+    """The notice for a partly saved form (#680).
+
+    E.g. ``Saved notes. Goals changed elsewhere — review and save again.``
+
+    ``saved`` / ``conflicted`` are field labels; used when some fields saved and
+    others conflicted. With nothing saved, use ``conflict_message`` instead.
+    """
+    refused = _join(label.lower() for label in conflicted)
+    return (
+        f"Saved {_join(label.lower() for label in saved)}. "
+        f"{refused[:1].upper()}{refused[1:]} changed elsewhere"
+        " — review and save again."
+    )
+
+
 def rerender_state(post, current, fields, *, shown, initial_from_post=False):
     """The ``(values, initials)`` dicts to re-render a form after a failed save.
 

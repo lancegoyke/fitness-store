@@ -31,7 +31,7 @@
           <span style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">{{ plan.title }}</span>
           {% if plan.block %}<span class="meso-row-meta">{{ plan.block }}</span>{% endif %}
         </div>
-        <p class="meso-row-meta" style="margin-bottom:12px;">Coach {{ plan.coach }}{% if plan.goal %} · {{ plan.goal }}{% endif %}</p>
+        <p class="meso-row-meta" style="margin-bottom:12px;">{% if plan.is_self %}Self-coached{% else %}Coach {{ plan.coach }}{% endif %}{% if plan.goal %} · {{ plan.goal }}{% endif %}</p>
 
         {% if plan.awaiting %}
           <p class="meso-row-meta">Nothing here yet — your coach is still building this program.</p>
@@ -287,12 +287,14 @@
             <div class="meso-row-meta">You're connected to {{ w.coach }}. They'll have your program ready soon.</div>
           </div>
           <div class="meso-spacer"></div>
-          <details>
+          <details class="meso-leave">
             <summary class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;cursor:pointer;">Leave</summary>
-            <form method="post" action="{% url 'meso:relationship_leave' token=w.token %}" style="margin:8px 0 0;">
+            {# One compact row when open (#680): "Leave? [Yes, leave] [Cancel]" — the summary doubles as Cancel. #}
+            <style>.meso-leave[open]{display:flex;align-items:center;gap:8px;white-space:nowrap;}.meso-leave[open]>form{order:-1;margin:0 !important;}.meso-leave[open]>summary{font-size:0 !important;}.meso-leave[open]>summary::after{content:"Cancel";font-size:12px;}@media (max-width:480px){.meso-row:has(.meso-leave[open])>div:nth-child(2) .meso-row-meta{display:none;}}</style>
+            <form method="post" action="{% url 'meso:relationship_leave' token=w.token %}" style="margin:8px 0 0;display:flex;align-items:center;gap:8px;flex-wrap:nowrap;white-space:nowrap;">
               {% csrf_token %}
               <input type="hidden" name="confirm" value="1" />
-              <p class="meso-row-meta" style="margin:0 0 8px;">Leave {{ w.coach }}? You can be invited again later.</p>
+              <span class="meso-row-meta" style="margin:0;">Leave?</span>
               <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Yes, leave</button>
             </form>
           </details>

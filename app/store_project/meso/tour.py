@@ -241,13 +241,15 @@ STEPS = [
 #: A ``tour_state.status`` that hides the tour entirely.
 _HIDDEN_STATUSES = {"dismissed", "completed"}
 
-#: segment name → the ``demo.has_*`` predicate that derives its loaded-ness
-#: (O7 — never stored, always read off the data). Sandbox variant only.
+#: segment name → the ``demo.has_live_*`` predicate that derives its loaded-ness
+#: (O7 — never stored, always read off the data). Sandbox variant only. The LIVE
+#: variants, not ``has_*`` (#675): archived demo data is invisible, so counting it
+#: as loaded would hide the skip form's only reload route.
 _HAS_PREDICATES = {
-    "athletes": meso_demo.has_athletes,
-    "program": meso_demo.has_program,
-    "delivery": meso_demo.has_delivery,
-    "log": meso_demo.has_log,
+    "athletes": meso_demo.has_live_athletes,
+    "program": meso_demo.has_live_program,
+    "delivery": meso_demo.has_live_delivery,
+    "log": meso_demo.has_live_log,
 }
 
 #: sandbox segment name → the step ``key`` that offers it (Phase 4 funnel

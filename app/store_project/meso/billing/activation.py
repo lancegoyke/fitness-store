@@ -11,6 +11,7 @@ import logging
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models.signals import post_delete
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -78,4 +79,20 @@ def activate_waiting_on_upgrade(sender, instance, **kwargs):
     # in flight (its row not yet committed). ``activate_waiting`` locks the coach
     # ``User`` row first and only then reads the waiting links, which is what
     # serialises it against that claim, so the receiver always schedules it.
+    transaction.on_commit(lambda: _activate_after_commit(coach_id))
+
+
+@receiver(post_delete, sender=CoachAthlete)
+def activate_waiting_on_seat_removal(sender, instance, **kwargs):
+    """Seat the next waiting athlete when an ACTIVE link is deleted (#678).
+
+    ``end()``/``decline()`` call the hook themselves; a User cascade (admin or
+    account delete, ``clear_demo``, the sandbox reap) removes the row without
+    them. Only a link that was ACTIVE held a seat. Runs on commit and is
+    idempotent; if the coach row is going away too, ``activate_waiting`` finds
+    no coach and returns, and ``_activate_after_commit`` swallows any failure.
+    """
+    if instance.status != CoachAthlete.Status.ACTIVE:
+        return
+    coach_id = instance.coach_id
     transaction.on_commit(lambda: _activate_after_commit(coach_id))
