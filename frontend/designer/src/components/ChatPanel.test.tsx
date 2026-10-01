@@ -20,6 +20,7 @@ function flags(overrides: Partial<DesignerFlags> = {}): DesignerFlags {
     price_summary: "$19/mo — unlimited athletes",
     is_template: false,
     save_template_url: null,
+    template_start: null,
     ...overrides,
   };
 }

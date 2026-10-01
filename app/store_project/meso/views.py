@@ -334,6 +334,27 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
                 if plan.is_template
                 else reverse("meso:plan_save_as_template", kwargs={"plan_id": plan.pk})
             ),
+            # A template's primary action is "Start for a client…" (#637) — the
+            # island posts to the same ``template_use`` the library uses (so the
+            # unit-mismatch confirm page applies unchanged). The same
+            # deliverable-client list as the library: active, not over-seat.
+            "template_start": (
+                {
+                    "action": reverse("meso:template_use", kwargs={"plan_id": plan.pk}),
+                    "clients": _client_choices(
+                        CoachAthlete.objects.for_coach(self.request.user)
+                        .active()
+                        .exclude(
+                            pk__in=billing_access.suspended_athlete_ids(
+                                self.request.user
+                            )
+                        )
+                        .select_related("athlete")
+                    ),
+                }
+                if plan.is_template
+                else None
+            ),
         }
         ctx["phone_fallback"] = self._phone_fallback(plan, ctx.get("grid_data"))
         return ctx

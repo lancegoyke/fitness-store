@@ -1300,7 +1300,7 @@ describe("keyboard grid navigation", () => {
       expect(onPatchCell).not.toHaveBeenCalledWith(900, expect.anything());
     });
 
-    it("Escape keeps focus on the cell and suppresses its next blur-commit", () => {
+    it("Escape reverts, parks focus on the cell (#653), and suppresses its next blur-commit", () => {
       const onPatchCell = vi.fn();
       render(<MesoTable {...baseProps({ grid: NAV_GRID, onPatchCell })} />);
       const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
@@ -1308,7 +1308,7 @@ describe("keyboard grid navigation", () => {
       fireEvent.change(textInput, { target: { value: "9 x 9" } });
       fireEvent.keyDown(textInput, { key: "Escape" });
       expect(textInput).toHaveValue("3 x 5, RPE 8, 100");
-      expect(textInput).toHaveFocus();
+      expect(textInput.closest("td")).toHaveFocus();
       fireEvent.blur(textInput);
       expect(onPatchCell).not.toHaveBeenCalled();
     });
@@ -1592,5 +1592,100 @@ describe("tableKeyboardCoordinates delegates to the real droppable map", () => {
     expect(coords).toBeTruthy();
     // Proposed target must be day-2 (top 200), never row-1-9 (top 30).
     expect(coords!.y).toBeGreaterThanOrEqual(150);
+  });
+});
+
+describe("UAT2 designer fixes (#636 #652 #653)", () => {
+  it("#636: a new exercise row starts empty with a placeholder, so typing is not appended", async () => {
+    const user = userEvent.setup();
+    const onRenameExercise = vi.fn();
+    const fresh = grid({ days: [day({ rows: [row({ exercise_slot_id: 20, name: "New exercise" })] })] });
+    render(<MesoTable {...baseProps({ grid: fresh, onRenameExercise })} />);
+    const input = screen.getByTestId("row-name-20") as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(input).toHaveAttribute("placeholder", "New exercise");
+    await user.click(input);
+    await user.keyboard("Romanian Deadlift");
+    expect(input.value).toBe("Romanian Deadlift");
+    await user.tab();
+    expect(onRenameExercise).toHaveBeenCalledWith(20, "Romanian Deadlift");
+  });
+
+  it("#636: clearing a name and leaving saves the server default, never a blank", async () => {
+    const user = userEvent.setup();
+    const onRenameExercise = vi.fn();
+    render(<MesoTable {...baseProps({ onRenameExercise })} />);
+    const input = screen.getByTestId("row-name-9");
+    await user.clear(input);
+    await user.tab();
+    expect(onRenameExercise).toHaveBeenCalledWith(9, "New exercise");
+  });
+
+  function twoDays(secondRows: GridRow[]) {
+    return grid({
+      days: [
+        day({ session_slot_id: 1, name: "Lower", rows: [row({ exercise_slot_id: 9 }), row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 101 }) } })] }),
+        day({ session_slot_id: 2, name: "Upper", rows: secondRows }),
+      ],
+    });
+  }
+
+  it("#652: Tab from a day name lands on that day's first exercise name", async () => {
+    const user = userEvent.setup();
+    const g = twoDays([row({ exercise_slot_id: 30, name: "Bench", cells: { "1": cell({ prescription_id: 300 }) } })]);
+    render(<MesoTable {...baseProps({ grid: g })} />);
+    screen.getByRole("button", { name: "Rename day: Upper" }).focus();
+    await user.keyboard("{Tab}");
+    expect(screen.getByTestId("row-name-30")).toHaveFocus();
+  });
+
+  it("#652: Tab from the day name while editing also lands there; Shift+Tab stays natural", async () => {
+    const user = userEvent.setup();
+    const g = twoDays([row({ exercise_slot_id: 30, name: "Bench", cells: { "1": cell({ prescription_id: 300 }) } })]);
+    render(<MesoTable {...baseProps({ grid: g })} />);
+    await user.click(screen.getByRole("button", { name: "Rename day: Upper" }));
+    await user.keyboard("{Tab}");
+    expect(screen.getByTestId("row-name-30")).toHaveFocus();
+    screen.getByRole("button", { name: "Rename day: Upper" }).focus();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(screen.getByTestId("day-drag-2")).toHaveFocus();
+  });
+
+  it("#652: Tab from an empty day's name goes to its + Add exercise control", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: twoDays([]) })} />);
+    screen.getByRole("button", { name: "Rename day: Upper" }).focus();
+    await user.keyboard("{Tab}");
+    expect(screen.getByTestId("add-exercise-2")).toHaveFocus();
+  });
+
+  it("#653: Escape cancels the edit, restores the value, and focuses the cell; second Escape blurs", async () => {
+    const user = userEvent.setup();
+    const onRenameExercise = vi.fn();
+    render(<MesoTable {...baseProps({ onRenameExercise })} />);
+    const input = screen.getByTestId("row-name-9") as HTMLInputElement;
+    await user.click(input);
+    await user.keyboard("garbage{Escape}");
+    expect(input.value).toBe("Squat");
+    expect(input).not.toHaveFocus();
+    const td = input.closest("td") as HTMLElement;
+    expect(td).toHaveFocus();
+    expect(onRenameExercise).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    expect(document.body).toHaveFocus();
+    expect(onRenameExercise).not.toHaveBeenCalled();
+  });
+
+  it("#653: Escape in the + line input closes it back to the cell without writing", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ onWriteCellLine })} />);
+    const ghost = screen.getByTestId("cell-line-new-100") as HTMLInputElement;
+    await user.click(ghost);
+    await user.keyboard("junk{Escape}");
+    expect(ghost.value).toBe("");
+    expect(ghost).not.toHaveFocus();
+    expect(ghost.closest("td")).toHaveFocus();
+    expect(onWriteCellLine).not.toHaveBeenCalled();
   });
 });

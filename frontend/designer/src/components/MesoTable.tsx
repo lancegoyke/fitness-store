@@ -535,19 +535,27 @@ interface RowNameEditorProps {
   onRename(exerciseSlotId: Id, name: string): void;
 }
 
+// The server names a freshly added exercise "New exercise" (views.py). The
+// input shows it as a PLACEHOLDER over an empty value (#636) so the coach's
+// first keystrokes replace rather than append. The server accepts a blank
+// name verbatim (an athlete would see an unnamed exercise), so a name left
+// empty is saved back as this default instead.
+const DEFAULT_EXERCISE_NAME = "New exercise";
+const displayName = (name: string) => (name === DEFAULT_EXERCISE_NAME ? "" : name);
+
 function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
-  const [value, setValue] = useState(row.name);
+  const [value, setValue] = useState(displayName(row.name));
   const dirtyRef = useRef(false);
 
   useEffect(() => {
-    setValue(row.name);
+    setValue(displayName(row.name));
     dirtyRef.current = false;
   }, [row.name]);
 
   function commitIfDirty() {
     if (!dirtyRef.current) return;
     dirtyRef.current = false;
-    onRename(row.exercise_slot_id, value);
+    onRename(row.exercise_slot_id, value.trim() === "" ? DEFAULT_EXERCISE_NAME : value);
   }
 
   // Mirrors GridCellEditor's revertField/ExerciseRow's revert: writes the
@@ -570,6 +578,7 @@ function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
       data-testid={`row-name-${row.exercise_slot_id}`}
       data-grid-cell={tableCellDomKey(row.exercise_slot_id, null, "name")}
       aria-label={tableCellAriaLabel(row.name, null, "name")}
+      placeholder={DEFAULT_EXERCISE_NAME}
       value={value}
       onChange={(e) => {
         dirtyRef.current = true;
@@ -632,6 +641,20 @@ function AddThisWeekControl({ day, weeks, busy, onAddExerciseThisWeek }: AddThis
   );
 }
 
+/** Keys on the CELL itself (after Escape parked focus there, #653): a second
+ * Escape leaves the table; Enter/F2 re-enter the cell's first input. Keys
+ * bubbling up from the inputs are not ours (target check). */
+function cellKeyDown(event: KeyboardEvent<HTMLTableCellElement>) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.currentTarget.blur();
+  } else if (event.key === "Enter" || event.key === "F2") {
+    event.preventDefault();
+    event.currentTarget.querySelector<HTMLInputElement>("input")?.focus();
+  }
+}
+
 interface TableRowProps {
   row: GridRow;
   day: GridDay;
@@ -690,7 +713,7 @@ function TableRow({
       className={isDragging ? "is-dragging" : undefined}
       data-testid={`meso-row-${row.exercise_slot_id}`}
     >
-      <td className="meso-table-row-name-col">
+      <td className="meso-table-row-name-col" tabIndex={-1} onKeyDown={cellKeyDown}>
         <div className="meso-table-row-name-row">
           <button
             type="button"
@@ -743,7 +766,7 @@ function TableRow({
             </span>
           )}
         </div>      </td>
-      <td className="meso-table-row-col meso-table-row-col--tempo">
+      <td className="meso-table-row-col meso-table-row-col--tempo" tabIndex={-1} onKeyDown={cellKeyDown}>
         <RowColumnInput row={row} field="tempo" label="tempo" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
       {weeks.map((week) => {
@@ -751,7 +774,7 @@ function TableRow({
         const testId = `cell-${row.exercise_slot_id}-${week.id}`;
         if (!cell) return <td key={week.id} data-testid={testId} />;
         return (
-          <td key={week.id} data-testid={testId} className="meso-table-cell">
+          <td key={week.id} data-testid={testId} className="meso-table-cell" tabIndex={-1} onKeyDown={cellKeyDown}>
             {cell.skipped ? (
               <>
                 <span className="meso-table-skipped" data-testid={`cell-skipped-${cell.prescription_id}`}>
@@ -784,10 +807,10 @@ function TableRow({
           </td>
         );
       })}
-      <td className="meso-table-row-col meso-table-row-col--note">
+      <td className="meso-table-row-col meso-table-row-col--note" tabIndex={-1} onKeyDown={cellKeyDown}>
         <RowColumnInput row={row} field="note" label="notes" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
-      <td className="meso-table-row-col meso-table-row-col--rest">
+      <td className="meso-table-row-col meso-table-row-col--rest" tabIndex={-1} onKeyDown={cellKeyDown}>
         <RowColumnInput row={row} field="rest" label="rest" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
     </tr>
@@ -851,6 +874,20 @@ function TableDayBlock({
   const dayHandleLabel = `Reorder ${day.name || `Day ${day.day_number}`}`;
   const dayLabel = day.name || `Day ${day.day_number}`;
 
+  // #652: day names are editable, so Tab out of one must continue INTO that
+  // day (its first exercise name, or "+ Add exercise" when empty). Native Tab
+  // would fall to the roving-tabindex anchor, which can sit in another day.
+  const tabIntoDay = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    const first = day.rows[0];
+    const target = first
+      ? document.querySelector<HTMLElement>(`[data-grid-cell="${tableCellDomKey(first.exercise_slot_id, null, "name")}"]`)
+      : document.querySelector<HTMLElement>(`[data-testid="add-exercise-${day.session_slot_id}"]`);
+    if (!target) return;
+    event.preventDefault();
+    target.focus();
+  };
+
   const beginNameEdit = () => {
     setNameDraft(day.name);
     setEditingName(true);
@@ -892,6 +929,7 @@ function TableDayBlock({
             onBlur={commitNameEdit}
             onKeyDown={(event) => {
               event.stopPropagation();
+              tabIntoDay(event);
               if (event.key === "Enter") {
                 event.preventDefault();
                 commitNameEdit();
@@ -908,6 +946,7 @@ function TableDayBlock({
             aria-label={`Rename day: ${dayLabel}`}
             title="Rename day"
             disabled={busy}
+            onKeyDown={tabIntoDay}
             onClick={beginNameEdit}
           >
             {dayLabel}

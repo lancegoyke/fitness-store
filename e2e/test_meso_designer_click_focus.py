@@ -79,7 +79,7 @@ def test_naming_a_new_exercise_then_clicking_its_week_cell(
     name = page.get_by_test_id(f"row-name-{new_slot_id}")
     expect(name).to_be_visible()
     name.click()
-    page.keyboard.press("ControlOrMeta+a")  # the row is born named "New exercise"
+    page.keyboard.press("ControlOrMeta+a")  # a new row starts empty (#636)
     page.keyboard.type("Overhead Press")
 
     wk1 = page.get_by_test_id(
