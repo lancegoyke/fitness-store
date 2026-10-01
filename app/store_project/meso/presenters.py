@@ -560,6 +560,20 @@ def pending_request(link):
     }
 
 
+def waiting_acceptance(link):
+    """An athlete who accepted but waits on the coach's plan (#649), as a roster row.
+
+    The coach removes it via ``invite_decline`` (token), or upgrades to seat it.
+    """
+    name = link_athlete_name(link)
+    return {
+        "name": name,
+        "initials": initials(name),
+        "token": link.token,
+        "when": link.responded_at or link.created_at,
+    }
+
+
 #: Human labels for the relationship-history surface, keyed by terminal/pending
 #: status. ``PENDING_COACH_INVITE`` here is a *re-invite* awaiting the athlete.
 _HISTORY_STATUS_LABELS = {
@@ -852,7 +866,16 @@ def athlete_pending(user):
             invites.append(row)
         else:
             requests.append(row)
-    return {"invites": invites, "requests": requests}
+    # Accepted, but the coach has no seat yet (#649): shown as a calm holding
+    # card — never any wording about the coach's plan.
+    waiting = [
+        {"coach": coach_name(link.coach), "token": link.token}
+        for link in CoachAthlete.objects.for_athlete(user)
+        .waiting()
+        .select_related("coach", "coach__coach_profile")
+        .order_by("responded_at", "pk")
+    ]
+    return {"invites": invites, "requests": requests, "waiting": waiting}
 
 
 def deliver_screen(plan, week=None):

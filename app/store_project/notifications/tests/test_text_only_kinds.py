@@ -26,6 +26,7 @@ from django.core import mail
 from django.urls import reverse
 
 from store_project.notifications.emails import kind_from_headers
+from store_project.notifications.emails import send_athlete_waiting_email
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_invite_reminder_email
@@ -109,6 +110,12 @@ class TestTextOnlyKindsMatchRealSenders:
         athlete = UserFactory()
         coach2 = UserFactory(email="coach2@example.com")
         send_coach_request_email(
+            athlete=athlete, coach=coach2, roster_url="https://x.test/meso/"
+        )
+        kinds_seen.add(self._check(mail.outbox[0]))
+        mail.outbox.clear()
+
+        send_athlete_waiting_email(
             athlete=athlete, coach=coach2, roster_url="https://x.test/meso/"
         )
         kinds_seen.add(self._check(mail.outbox[0]))

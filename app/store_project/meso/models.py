@@ -277,6 +277,10 @@ class CoachAthleteQuerySet(models.QuerySet):
     def pending(self):
         return self.filter(status__in=CoachAthlete.PENDING_STATUSES)
 
+    def waiting(self):
+        """Links the athlete accepted but the coach has no seat for yet (#649)."""
+        return self.filter(status=CoachAthlete.Status.ACCEPTED_WAITING)
+
     def closed(self):
         """Terminal-state links — declined or ended (the relationship history).
 
@@ -492,18 +496,29 @@ class CoachAthlete(models.Model):
             )
         return link
 
-    def accept(self):
-        """Recipient accepts a pending link → ``active``."""
+    def accept(self, waiting=False):
+        """Recipient accepts a pending link → ``active``.
+
+        ``waiting=True`` records the acceptance when the coach has no seat for
+        the athlete (#649): the link lands on ``accepted_waiting`` — not a seat,
+        no program access — and flips to active when the coach upgrades.
+        """
         if self.status not in self.PENDING_STATUSES:
             raise InvalidTransition(f"Cannot accept a link that is {self.status}.")
-        self.status = self.Status.ACTIVE
+        self.status = self.Status.ACCEPTED_WAITING if waiting else self.Status.ACTIVE
         self.responded_at = timezone.now()
         self.save(update_fields=["status", "responded_at"])
         return self
 
     def decline(self):
-        """Recipient declines a pending link → ``declined``."""
-        if self.status not in self.PENDING_STATUSES:
+        """Recipient declines a pending link → ``declined``.
+
+        Also how a coach dismisses a waiting acceptance (#649).
+        """
+        if (
+            self.status not in self.PENDING_STATUSES
+            and self.status != self.Status.ACCEPTED_WAITING
+        ):
             raise InvalidTransition(f"Cannot decline a link that is {self.status}.")
         self.status = self.Status.DECLINED
         self.responded_at = timezone.now()
@@ -536,6 +551,10 @@ class CoachAthlete(models.Model):
     @property
     def is_pending(self):
         return self.status in self.PENDING_STATUSES
+
+    @property
+    def is_waiting(self):
+        return self.status == self.Status.ACCEPTED_WAITING
 
     @property
     def is_closed(self):
@@ -860,8 +879,11 @@ class CoachInvite(models.Model):
         self.save(update_fields=["reminder_sent_at"])
         return self
 
-    def accept(self, user):
+    def accept(self, user, *, waiting=False):
         """A claiming user accepts → an **active** ``CoachAthlete`` link.
+
+        ``waiting=True`` (#649) materializes it as ``accepted_waiting`` instead —
+        the coach has no seat for the athlete yet.
 
         The claim *is* the athlete's acceptance, so the materialized link goes
         straight to active. Idempotent against an already-active link, and resolves
@@ -892,7 +914,7 @@ class CoachInvite(models.Model):
             opens_link = existing is None or existing in CoachAthlete.CLOSED_STATUSES
             link = CoachAthlete.invite(coach=self.coach, athlete=user)
             if link.is_pending:
-                link.accept()
+                link.accept(waiting=waiting)
             invite_label = clean_name(self.label)
             # A link may already be active through another path, with a label the
             # coach edited since this email was sent; a stale claim must not revert

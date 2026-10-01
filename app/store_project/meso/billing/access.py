@@ -32,6 +32,7 @@ from django.utils import timezone
 
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachSubscription
 
 #: Stripe Checkout's documented minimum for ``subscription_data.trial_end`` —
@@ -201,6 +202,21 @@ def effective_seat_limit(coach):
     if is_active(coach):
         return math.inf
     return CoachSubscription.FREE_SEAT_LIMIT
+
+
+def committed_seat_count(coach):
+    """Seats the coach has *spoken for*: active + claimable invites + waiting links.
+
+    Active athletes hold a seat now; a pending, unexpired email invite and an
+    athlete who has accepted but is waiting on the coach's plan (#649) each will
+    want one. When this exceeds ``effective_seat_limit`` somebody can't join until
+    the coach upgrades — the roster's cue to show the upgrade CTA.
+    """
+    return (
+        active_seat_count(coach)
+        + CoachInvite.objects.for_coach(coach).claimable().count()
+        + CoachAthlete.objects.for_coach(coach).waiting().count()
+    )
 
 
 def can_add_athlete(coach):
