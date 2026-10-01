@@ -11,14 +11,28 @@
         <p class="meso-sub">Reusable programs you own. Open one in the designer, start a live copy for a client, or deliver a copy to several at once.</p>
       </div>
       <div class="meso-spacer"></div>
+      <form method="post" action="{% url 'meso:template_create' %}" style="margin:0;">
+        {% csrf_token %}
+        <button type="submit" class="meso-btn meso-btn--primary">New blank template</button>
+      </form>
       <a class="meso-btn meso-btn--ghost" href="{% url 'meso:roster' %}">← Back to roster</a>
     </div>
 
     <div style="display:flex;flex-direction:column;gap:18px;max-width:640px;">
 
+      {% if selected_client %}
+        <div class="meso-card meso-card--pad">
+          <p class="meso-sub" style="margin:0;">Starting a program for {{ selected_client.name }}.</p>
+        </div>
+      {% endif %}
+
       {% if not templates %}
         <div class="meso-card meso-card--pad">
-          <p class="meso-sub" style="margin:0;">No templates yet. Import a program library with the <code>meso_import_template</code> management command.</p>
+          <p class="meso-sub" style="margin:0 0 12px;">No templates yet. Write one from scratch with New blank template, or open any program in the designer and choose Save as template.</p>
+          <form method="post" action="{% url 'meso:template_create' %}" style="margin:0;">
+            {% csrf_token %}
+            <button type="submit" class="meso-btn meso-btn--primary">New blank template</button>
+          </form>
         </div>
       {% else %}
         <div class="meso-card">
@@ -42,7 +56,7 @@
                     {% csrf_token %}
                     <select name="relationship" aria-label="Client">
                       {% for c in clients %}
-                        <option value="{{ c.id }}">{{ c.name }}</option>
+                        <option value="{{ c.id }}"{% if c.id == selected_client_id %} selected{% endif %}>{{ c.name }}</option>
                       {% endfor %}
                     </select>
                     <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Start for client</button>

@@ -154,6 +154,7 @@ def _recency_tone(days):
 def roster_athlete(
     user,
     *,
+    relationship_id=None,
     label="",
     suspended=False,
     demo=False,
@@ -183,6 +184,7 @@ def roster_athlete(
     meta_parts = [p for p in [_training_label(user)] if p]
     return {
         "id": user.pk,
+        "relationship_id": relationship_id,
         "name": name,
         "initials": initials(name),
         "tone": "neutral",

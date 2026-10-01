@@ -53,10 +53,16 @@ urlpatterns = [
     # Template library (parity plan §3.4): the coach's owned templates, each
     # opening in the designer + offering "Start for client" / "Batch deliver".
     path("templates/", TemplateLibraryView.as_view(), name="template_library"),
+    path("templates/new/", views.template_create, name="template_create"),
     path(
         "template/<int:plan_id>/use/",
         views.template_use,
         name="template_use",
+    ),
+    path(
+        "plan/<int:plan_id>/save-as-template/",
+        views.plan_save_as_template,
+        name="plan_save_as_template",
     ),
     path("results/", ResultsView.as_view(), name="results"),
     path(

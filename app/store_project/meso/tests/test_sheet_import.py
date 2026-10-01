@@ -24,6 +24,7 @@ import pytest
 from django.core.management import CommandError
 from django.core.management import call_command
 
+from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
@@ -31,6 +32,7 @@ from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionSlot
+from store_project.meso.models import Unit
 from store_project.meso.models import Week
 from store_project.meso.sheet_import import SheetImportError
 from store_project.meso.sheet_import import coerce_text
@@ -229,6 +231,30 @@ class TestImportCommand:
             exercise_slot=split_squat, week__index=1, line=0
         )
         assert cell.text == "3 x 10"
+
+    def test_new_import_uses_owner_default_unit(self):
+        profile = CoachProfileFactory(default_unit=Unit.POUNDS)
+        call_command(
+            "meso_import_template", str(FIXTURES / "402.xlsx"), owner=profile.user.email
+        )
+        plan = Plan.objects.get(is_template=True, owner=profile.user)
+        assert plan.unit == Unit.POUNDS
+
+    def test_rerun_does_not_change_existing_template_unit(self):
+        profile = CoachProfileFactory(default_unit=Unit.POUNDS)
+        call_command(
+            "meso_import_template", str(FIXTURES / "402.xlsx"), owner=profile.user.email
+        )
+        plan = Plan.objects.get(is_template=True, owner=profile.user)
+        plan.unit = Unit.KILOGRAMS
+        plan.save(update_fields=["unit"])
+
+        call_command(
+            "meso_import_template", str(FIXTURES / "402.xlsx"), owner=profile.user.email
+        )
+
+        plan.refresh_from_db()
+        assert plan.unit == Unit.KILOGRAMS
 
     def test_rpe_sub_lines_materialize_as_line_1(self):
         owner = UserFactory()

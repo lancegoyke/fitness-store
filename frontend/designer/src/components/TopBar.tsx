@@ -19,6 +19,7 @@ export interface TopBarProps {
   // docs/meso/remove-current-week-plan.md §4b) — renders the control inert
   // rather than a link that would silently target a different block.
   deliverHref: string | null;
+  saveAsTemplate?: { action: string; csrf: string } | null;
   sidebarOpen: boolean;
   onToggleSidebar(): void;
   // Undo/redo live here (global, Ctrl+Z-backed editor actions) rather than in
@@ -45,6 +46,7 @@ export function TopBar({
   onSelectView,
   cycleLabel,
   deliverHref,
+  saveAsTemplate = null,
   sidebarOpen,
   onToggleSidebar,
   canUndo,
@@ -183,6 +185,14 @@ export function TopBar({
       <a data-testid="review-link" href="/meso/review/" data-hover="rail" className="meso-btn-rail">
         Review changes
       </a>
+      {saveAsTemplate ? (
+        <form method="post" action={saveAsTemplate.action} style={{ margin: 0 }}>
+          <input type="hidden" name="csrfmiddlewaretoken" value={saveAsTemplate.csrf} />
+          <button type="submit" data-testid="save-as-template" data-hover="rail" className="meso-btn-rail">
+            Save as template
+          </button>
+        </form>
+      ) : null}
       {deliverHref ? (
         <a data-testid="deliver-link" href={deliverHref} data-hover="brighten" className="meso-btn-deliver">
           Deliver

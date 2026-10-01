@@ -18,6 +18,8 @@ function flags(overrides: Partial<DesignerFlags> = {}): DesignerFlags {
     agent_allowance: { metered: false, allowance: 0, remaining: null, can_use: true, tier: "unlimited" },
     signup_url: "/meso/sandbox/signup/",
     price_summary: "$19/mo — unlimited athletes",
+    is_template: false,
+    save_template_url: null,
     ...overrides,
   };
 }

@@ -27,13 +27,27 @@ from django.utils import timezone
 
 from store_project.meso.billing import access
 from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import CoachInviteFactory
+from store_project.meso.factories import CoachProfileFactory
+from store_project.meso.factories import LoggedSetFactory
+from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
+from store_project.meso.factories import SessionLogFactory
+from store_project.meso.factories import WeekDeliveryFactory
+from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
+from store_project.meso.models import Prescription
+from store_project.meso.models import SessionLog
+from store_project.meso.models import Unit
 from store_project.meso.models import WeekDelivery
 from store_project.users.factories import UserFactory
 
 # Reuse the established fixture builders rather than re-deriving them.
+from ._helpers import day
+from ._helpers import presc
+from ._helpers import sub_line
 from .test_batch_deliver import comp
 from .test_batch_deliver import seed_source
 from .test_template_plans import template_plan
@@ -92,6 +106,14 @@ def batch_deliver_url(plan):
     return reverse("meso:plan_batch_deliver", kwargs={"plan_id": plan.pk})
 
 
+def save_as_template_url(plan):
+    return reverse("meso:plan_save_as_template", kwargs={"plan_id": plan.pk})
+
+
+def template_create_url():
+    return reverse("meso:template_create")
+
+
 class TestTemplateLibraryPage:
     def test_lists_owned_templates_linking_to_the_designer(self, client):
         coach, _ = coach_with_client()
@@ -147,6 +169,9 @@ class TestTemplateLibraryPage:
         # Empty-state copy mentioning that templates can be imported. The
         # implementer must render this literal (or adjust the assertion to match).
         assert "No templates" in body
+        assert "meso_import_template" not in body
+        assert "Save as template" in body
+        assert template_create_url() in body
 
     def test_templates_listed_alphabetically_by_title(self, client):
         coach, _ = coach_with_client()
@@ -182,6 +207,179 @@ class TestTemplateLibraryPage:
         body = resp.content.decode()
         assert use_url(tpl) in body
         assert batch_deliver_url(tpl) in body
+
+    def test_athlete_query_preselects_that_client(self, client):
+        coach, rel = coach_with_client()
+        tpl, _ = template_plan(coach, title="Base Block")
+        client.force_login(coach)
+
+        resp = client.get(f"{library_url()}?athlete={rel.pk}")
+
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert f"Starting a program for {rel.athlete.display_name()}" in body
+        assert f'<option value="{rel.pk}" selected>' in body
+        assert use_url(tpl) in body
+
+
+class TestTemplateCreate:
+    def test_creates_scaffolded_template_with_owner_default_unit(self, client):
+        profile = CoachProfileFactory(default_unit=Unit.POUNDS)
+        client.force_login(profile.user)
+
+        resp = client.post(template_create_url())
+
+        plan = Plan.objects.get(owner=profile.user, is_template=True)
+        assert plan.relationship is None
+        assert plan.status == Plan.Status.ACTIVE
+        assert plan.unit == Unit.POUNDS
+        assert plan.mesocycles.count() == 1
+        assert plan.mesocycles.get().weeks.count() == 1
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:designer_plan", kwargs={"plan_id": plan.pk})
+
+
+class TestPlanSaveAsTemplate:
+    def _live_plan(self):
+        rel = CoachAthleteFactory()
+        plan = PlanFactory(
+            relationship=rel,
+            title="Live Strength",
+            goal="Peak",
+            status=Plan.Status.DRAFT,
+            unit=Unit.POUNDS,
+        )
+        meso = MesocycleFactory(plan=plan, name="Block A", order=2, week_count=4)
+        week = WeekFactory(
+            mesocycle=meso,
+            index=1,
+            phase="Accum",
+            volume=72,
+            intensity=81,
+            is_deload=True,
+        )
+        session = day(week, day_number=3, name="Lower", bias="Squat", order=4)
+        cell = presc(
+            session,
+            name="Back Squat",
+            order=7,
+            tags=["main", "barbell"],
+            text="4 x 6, 225",
+            tempo="301",
+            rest="3m",
+            note="Belt optional",
+        )
+        sub_line(cell, "RPE 8", line=1)
+        return plan, cell
+
+    def test_saves_full_program_tree_as_active_template(self, client):
+        plan, cell = self._live_plan()
+        client.force_login(plan.coach)
+
+        resp = client.post(save_as_template_url(plan))
+
+        copy = Plan.objects.get(is_template=True, owner=plan.coach)
+        assert resp.status_code == 302
+        assert resp.url == library_url()
+        assert copy.relationship is None
+        assert copy.title == plan.title
+        assert copy.goal == plan.goal
+        assert copy.status == Plan.Status.ACTIVE
+        assert copy.unit == Unit.POUNDS
+        meso = copy.mesocycles.get()
+        assert (meso.name, meso.order, meso.week_count) == ("Block A", 2, 4)
+        week = meso.weeks.get()
+        assert (
+            week.index,
+            week.phase,
+            week.volume,
+            week.intensity,
+            week.is_deload,
+        ) == (
+            1,
+            "Accum",
+            72,
+            81,
+            True,
+        )
+        slot = meso.session_slots.get()
+        assert (slot.day_number, slot.name, slot.bias, slot.order) == (
+            3,
+            "Lower",
+            "Squat",
+            4,
+        )
+        row = slot.exercise_slots.get()
+        assert row.name == cell.exercise_slot.name
+        assert row.tags == ["main", "barbell"]
+        assert (row.tempo, row.rest, row.note) == ("301", "3m", "Belt optional")
+        assert list(week.cells.order_by("line").values_list("line", "text")) == [
+            (0, "4 x 6, 225"),
+            (1, "RPE 8"),
+        ]
+
+    def test_excludes_athlete_authored_logs_and_delivery_state(self, client):
+        plan, cell = self._live_plan()
+        athlete_line = sub_line(cell, "Athlete note 315 x 4", athlete_authored=True)
+        week = cell.week
+        week.delivered_at = timezone.now()
+        week.save(update_fields=["delivered_at"])
+        session = week.sessions.get()
+        log = SessionLogFactory(session=session, athlete=plan.athlete)
+        LoggedSetFactory(session_log=log, prescription=cell, source_line=athlete_line)
+        WeekDeliveryFactory(week=week)
+        client.force_login(plan.coach)
+
+        client.post(save_as_template_url(plan))
+
+        copy = Plan.objects.get(is_template=True, owner=plan.coach)
+        assert not Prescription.objects.filter(
+            exercise_slot__session_slot__mesocycle__plan=copy,
+            text="Athlete note 315 x 4",
+        ).exists()
+        assert not LoggedSet.objects.filter(
+            exercise_slot__session_slot__mesocycle__plan=copy
+        ).exists()
+        assert not SessionLog.objects.filter(
+            session__week__mesocycle__plan=copy
+        ).exists()
+        assert not WeekDelivery.objects.filter(week__mesocycle__plan=copy).exists()
+        assert copy.mesocycles.get().weeks.get().delivered_at is None
+
+    def test_does_not_modify_source_plan(self, client):
+        plan, cell = self._live_plan()
+        client.force_login(plan.coach)
+
+        client.post(save_as_template_url(plan))
+
+        plan.refresh_from_db()
+        assert plan.is_template is False
+        assert plan.relationship_id is not None
+        assert plan.status == Plan.Status.DRAFT
+        assert Prescription.objects.filter(pk=cell.pk, text="4 x 6, 225").exists()
+
+    def test_foreign_plan_404s(self, client):
+        plan, _ = self._live_plan()
+        client.force_login(CoachAthleteFactory().coach)
+
+        resp = client.post(save_as_template_url(plan))
+
+        assert resp.status_code == 404
+        assert Plan.objects.filter(is_template=True).count() == 0
+
+    def test_template_source_404s(self, client):
+        tpl, _ = template_plan(title="Already template")
+        client.force_login(tpl.owner)
+
+        resp = client.post(save_as_template_url(tpl))
+
+        assert resp.status_code == 404
+
+    def test_get_is_not_allowed(self, client):
+        plan, _ = self._live_plan()
+        client.force_login(plan.coach)
+
+        assert client.get(save_as_template_url(plan)).status_code == 405
 
 
 class TestTemplateUseEndpoint:
@@ -298,6 +496,74 @@ class TestTemplateUseEndpoint:
         pks = set(rel.plans.values_list("pk", flat=True))
         assert len(pks) == 2  # two distinct plans
 
+    def test_does_not_copy_athlete_authored_lines(self, client):
+        coach, rel = coach_with_client()
+        tpl, cell = template_plan(coach, title="Base Block")
+        sub_line(cell, "Coach cue", line=1)
+        sub_line(cell, "Athlete typed this", line=2, athlete_authored=True)
+        client.force_login(coach)
+
+        client.post(use_url(tpl), {"relationship": rel.pk})
+
+        copy = rel.plans.get()
+        texts = set(
+            Prescription.objects.filter(
+                exercise_slot__session_slot__mesocycle__plan=copy
+            ).values_list("text", flat=True)
+        )
+        assert "Coach cue" in texts
+        assert "Athlete typed this" not in texts
+
+    def test_matching_unit_starts_without_warning(self, client):
+        coach, rel = coach_with_client()
+        CoachProfileFactory(user=coach, default_unit=Unit.KILOGRAMS)
+        tpl, _ = template_plan(coach, title="Base Block")
+        tpl.unit = Unit.KILOGRAMS
+        tpl.save(update_fields=["unit"])
+        client.force_login(coach)
+
+        resp = client.post(use_url(tpl), {"relationship": rel.pk})
+
+        assert resp.status_code == 302
+        assert rel.plans.count() == 1
+
+    def test_unit_mismatch_renders_confirmation_without_copying(self, client):
+        coach, rel = coach_with_client()
+        CoachProfileFactory(user=coach, default_unit=Unit.KILOGRAMS)
+        tpl, _ = template_plan(coach, title="Base Block")
+        tpl.unit = Unit.POUNDS
+        tpl.save(update_fields=["unit"])
+        client.force_login(coach)
+
+        resp = client.post(use_url(tpl), {"relationship": rel.pk})
+
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "lb" in body
+        assert "kg" in body
+        link_name = rel.athlete.display_name()
+        assert link_name in body
+        assert rel.plans.count() == 0
+
+    def test_unit_mismatch_confirmed_copies_template_unit_and_text_verbatim(
+        self, client
+    ):
+        coach, rel = coach_with_client()
+        CoachProfileFactory(user=coach, default_unit=Unit.KILOGRAMS)
+        tpl, cell = template_plan(coach, title="Base Block")
+        tpl.unit = Unit.POUNDS
+        tpl.save(update_fields=["unit"])
+        cell.text = "4 x 6, 225"
+        cell.save(update_fields=["text"])
+        client.force_login(coach)
+
+        resp = client.post(use_url(tpl), {"relationship": rel.pk, "confirm_unit": "1"})
+
+        copy = rel.plans.get()
+        assert resp.status_code == 302
+        assert copy.unit == Unit.POUNDS
+        assert copy.mesocycles.get().weeks.get().cells.get(line=0).text == "4 x 6, 225"
+
 
 class TestBatchDeliverFromTemplate:
     def test_from_template_redirects_to_the_library(
@@ -407,3 +673,46 @@ class TestBatchDeliverFromTemplateSuspension:
         tpl, _ = template_plan(coach, title="Base Block")
         assert access.can_edit(coach) is False
         assert access.can_edit_plan(tpl) is True
+
+
+class TestTemplateRosterDiscoverability:
+    def test_roster_shows_start_from_template_only_with_templates_and_no_plan(
+        self, client
+    ):
+        coach, rel = coach_with_client()
+        template_plan(coach, title="Base Block")
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Start from a template" in body
+        assert f"{library_url()}?athlete={rel.pk}" in body
+
+    def test_roster_hides_start_from_template_without_templates(self, client):
+        coach, _ = coach_with_client()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Start from a template" not in body
+
+    def test_roster_hides_start_from_template_when_athlete_has_plan(self, client):
+        coach, rel = coach_with_client()
+        template_plan(coach, title="Base Block")
+        PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Start from a template" not in body
+
+    def test_pending_invite_copy_mentions_template(self, client):
+        invite = CoachInviteFactory()
+        client.force_login(invite.coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "hasn't accepted your invite yet" in body
+        assert "template" in body
+        assert "Write it as a template" in body
+        assert library_url() in body

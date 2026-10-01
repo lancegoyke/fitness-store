@@ -1518,6 +1518,30 @@ class Plan(models.Model):
             status=status or Plan.Status.DRAFT,
             unit=self.unit,
         )
+        self._copy_tree_into(copy)
+        return copy
+
+    def save_as_template(self, owner, *, title=None):
+        """Copy this plan into ``owner``'s template library.
+
+        Templates are coach-authored programs only: the shared tree copy skips
+        athlete-authored cells and never copies logs, delivery rows, or delivery
+        stamps.
+        """
+        copy = Plan.objects.create(
+            owner=owner,
+            relationship=None,
+            is_template=True,
+            title=title or self.title,
+            goal=self.goal,
+            status=Plan.Status.ACTIVE,
+            unit=self.unit,
+        )
+        self._copy_tree_into(copy)
+        return copy
+
+    def _copy_tree_into(self, copy):
+        """Copy this plan's live programming tree into an already-created plan."""
         for mesocycle in self.mesocycles.order_by("order"):
             meso_copy = Mesocycle.objects.create(
                 plan=copy,
@@ -1594,6 +1618,7 @@ class Plan(models.Model):
                     for cell in Prescription.objects.filter(
                         week__in=live_weeks,
                         exercise_slot__in=live_exercise_slots,
+                        athlete_authored=False,
                     )
                 ]
             )

@@ -64,6 +64,8 @@ const DEFAULT_FLAGS: DesignerFlags = {
   agent_allowance: { metered: false, allowance: 0, remaining: null, can_use: false, tier: "unlimited" },
   signup_url: "/meso/sandbox/signup/",
   price_summary: "",
+  is_template: false,
+  save_template_url: null,
 };
 
 /** Reads the hydration json_script elements once. #meso-grid-data is now the
@@ -196,6 +198,10 @@ export function DesignerRoot() {
   // link that would silently open a different block.
   const deliverHref = gridCurrentWeekId != null ? buildDeliverHref(planId, gridCurrentWeekId) : null;
   const cycleLabel = cycleLabelFromGrid(grid?.phases ?? [], grid?.weeks ?? []);
+  const saveAsTemplate =
+    !flags.is_template && flags.save_template_url
+      ? { action: flags.save_template_url, csrf }
+      : null;
 
   return (
     <div className="meso-designer-root">
@@ -206,6 +212,7 @@ export function DesignerRoot() {
         onSelectView={selectView}
         cycleLabel={cycleLabel}
         deliverHref={deliverHref}
+        saveAsTemplate={saveAsTemplate}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
         canUndo={!gridState.busy && gridState.history.can_undo}

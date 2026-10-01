@@ -18,6 +18,8 @@ export interface DesignerFlags {
   };
   signup_url: string;
   price_summary: string;
+  is_template: boolean;
+  save_template_url: string | null;
 }
 
 export interface ChatPanelProps {

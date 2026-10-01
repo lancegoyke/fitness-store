@@ -237,6 +237,9 @@
                       {% elif billing.can_use_agent %}
                         <button type="submit" name="draft" value="agent" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Draft with AI</button>
                       {% endif %}
+                      {% if templates_exist and a.relationship_id %}
+                        <a class="meso-btn meso-btn--ghost" href="{% url 'meso:template_library' %}?athlete={{ a.relationship_id }}" style="padding:5px 10px;font-size:12px;">Start from a template</a>
+                      {% endif %}
                     {% endif %}
                     <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">New program</button>
                   </form>
@@ -244,6 +247,7 @@
               {% else %}
                 {% if active_pending_invites %}
                   <p class="meso-sub" style="margin:0;">{% if active_pending_invites|length == 1 %}{{ active_pending_invite.display_name }} hasn't accepted your invite yet.{% else %}None of your {{ active_pending_invites|length }} invites has been accepted yet.{% endif %}</p>
+                  <p class="meso-sub" style="margin:0;">You can write the program now as a template &#8212; start it for them once they accept. <a href="{% url 'meso:template_library' %}" style="color:var(--accent);">Write it as a template</a>.</p>
                   {% if not has_self_link and not is_sandbox %}
                     <form method="post" action="{% url 'meso:roster_add_self' %}" style="margin:0;">
                       {% csrf_token %}

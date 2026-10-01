@@ -155,6 +155,11 @@ def _client_choices(relationships):
     return sorted(rows, key=lambda row: row["name"].casefold())
 
 
+def _coach_default_unit(user):
+    profile = getattr(user, "coach_profile", None)
+    return getattr(profile, "default_unit", Unit.KILOGRAMS)
+
+
 # -- billing gates (S6 Phase 3) -------------------------------------------
 #
 # The paywall gets teeth here. ``billing/access.py`` owns the predicates; these
@@ -322,6 +327,12 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
             "agent_allowance": agent_meter,
             "signup_url": reverse("meso:sandbox_signup"),
             "price_summary": presenters.PRICE_SUMMARY,
+            "is_template": plan.is_template,
+            "save_template_url": (
+                None
+                if plan.is_template
+                else reverse("meso:plan_save_as_template", kwargs={"plan_id": plan.pk})
+            ),
         }
         ctx["phone_fallback"] = self._phone_fallback(plan, ctx.get("grid_data"))
         return ctx
@@ -429,6 +440,7 @@ class RosterView(TemplateView):
         athletes = [
             presenters.roster_athlete(
                 link.athlete,
+                relationship_id=link.pk,
                 label=link.label,
                 suspended=link.pk in suspended,
                 demo=link.is_demo,
@@ -443,6 +455,9 @@ class RosterView(TemplateView):
         ]
         ctx["active"] = "roster"
         ctx["athletes"] = athletes
+        ctx["templates_exist"] = Plan.objects.filter(
+            is_template=True, owner=self.request.user
+        ).exists()
         # Outstanding email invites the coach has sent — pending *or* expired (N4);
         # an expired one still shows so the coach can Resend it (Phase 3).
         outstanding_invites = CoachInvite.objects.for_coach(
@@ -625,6 +640,20 @@ class TemplateLibraryView(LoginRequiredMixin, TemplateView):
             .exclude(pk__in=billing_access.suspended_athlete_ids(self.request.user))
             .select_related("athlete")
         )
+        try:
+            selected_client_id = int(self.request.GET.get("athlete", ""))
+        except (TypeError, ValueError):
+            selected_client_id = None
+        selected_client = next(
+            (
+                client
+                for client in ctx["clients"]
+                if selected_client_id is not None and client["id"] == selected_client_id
+            ),
+            None,
+        )
+        ctx["selected_client"] = selected_client
+        ctx["selected_client_id"] = selected_client["id"] if selected_client else None
         return ctx
 
 
@@ -6290,6 +6319,37 @@ def plan_batch_deliver(request, plan_id):
 
 @login_required
 @require_POST
+def template_create(request):
+    """Create a blank, scaffolded template in the coach's library."""
+    with transaction.atomic():
+        plan = Plan.objects.create(
+            owner=request.user,
+            relationship=None,
+            is_template=True,
+            status=Plan.Status.ACTIVE,
+            title="New template",
+            unit=_coach_default_unit(request.user),
+        )
+        plan.scaffold()
+    return redirect("meso:designer_plan", plan_id=plan.pk)
+
+
+@login_required
+@require_POST
+def plan_save_as_template(request, plan_id):
+    """Save an editable live plan into the coach's template library."""
+    plan = get_object_or_404(
+        Plan.objects.editable_by(request.user).filter(is_template=False),
+        pk=plan_id,
+    )
+    with transaction.atomic():
+        copy = plan.save_as_template(request.user)
+    messages.success(request, f'Saved "{copy.title}" as a template.')
+    return redirect("meso:template_library")
+
+
+@login_required
+@require_POST
 def template_use(request, plan_id):
     """Start-for-client — deep-copy a template into a fresh client plan (§3.4).
 
@@ -6332,6 +6392,23 @@ def template_use(request, plan_id):
             request, "Pick one of your active clients to start this template."
         )
         return redirect("meso:template_library")
+    if (
+        relationship.effective_unit() != plan.unit
+        and request.POST.get("confirm_unit") != "1"
+    ):
+        return render(
+            request,
+            "meso/template_use_confirm.html",
+            {
+                "active": "roster",
+                "template": plan,
+                "relationship": relationship,
+                "athlete_name": link_athlete_name(relationship),
+                "template_unit": plan.unit,
+                "athlete_unit": relationship.effective_unit(),
+            },
+            status=200,
+        )
     with transaction.atomic():
         # LOCK ORDER (#596) — the link is the parent of the Plan about to be
         # inserted. Re-read every eligibility predicate while holding its
