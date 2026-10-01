@@ -126,3 +126,39 @@
   cursor: default;
   pointer-events: none;
 }
+
+/* "Start for a client…" popover on a template's top rail (#637). */
+.meso-start-wrap {
+  position: relative;
+}
+.meso-start-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  width: 260px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(16, 18, 22, 0.14);
+  padding: 12px;
+}
+.meso-start-pop form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.meso-start-label {
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--dim);
+}
+.meso-start-select {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+}

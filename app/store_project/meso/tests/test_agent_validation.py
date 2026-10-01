@@ -375,7 +375,9 @@ class TestCleanChange:
         )
         assert errors == []
         assert len(cleaned["honors"]) == 255
-        assert cleaned["before"] == ""
+        # A non-string ``before`` is coerced to blank, then derived from the
+        # target row (#647) — never left as None.
+        assert cleaned["before"] == "Back Squat"
 
     def test_non_dict_rejected(self):
         plan, _, _ = make_plan()

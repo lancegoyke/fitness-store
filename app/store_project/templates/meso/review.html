@@ -45,11 +45,15 @@
 
           <div style="font-size:15px;font-weight:700;letter-spacing:-0.01em;margin-bottom:8px;">{{ c.title }}</div>
 
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-            <span class="meso-mono" style="font-size:12px;color:var(--dim);text-decoration:line-through;">{{ c.before }}</span>
-            <span style="color:var(--accent);">→</span>
-            <span class="meso-mono" style="font-size:12px;color:var(--accent-deep);font-weight:600;">{{ c.after }}</span>
-          </div>
+          {% if c.before or c.after %}
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+              <span class="meso-mono" style="font-size:12px;color:var(--dim);text-decoration:line-through;">{{ c.before }}</span>
+              <span style="color:var(--accent);">→</span>
+              <span class="meso-mono" style="font-size:12px;color:var(--accent-deep);font-weight:600;">{{ c.after }}</span>
+            </div>
+          {% else %}
+            <p class="meso-row-meta" style="margin:0 0 10px;" data-testid="review-no-diff">I can't show the before and after for this edit, so it starts Rejected. Approve it only if the description below is enough.</p>
+          {% endif %}
 
           <p style="margin:0 0 10px;font-size:12.5px;color:var(--ink);line-height:1.45;">{{ c.rationale }}</p>
 

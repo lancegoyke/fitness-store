@@ -20,6 +20,9 @@ export interface DesignerFlags {
   price_summary: string;
   is_template: boolean;
   save_template_url: string | null;
+  // A template's "Start for a client…" picker (#637): the template_use URL and
+  // the coach's deliverable clients. null on a client's plan.
+  template_start: { action: string; clients: { id: number; name: string }[] } | null;
 }
 
 export interface ChatPanelProps {
@@ -105,7 +108,13 @@ export function ChatPanel(props: ChatPanelProps) {
         )}
       </div>
 
-      {flags.is_sandbox ? (
+      {flags.is_template ? (
+        // The agent grounds on an athlete's profile and logs, and refuses a
+        // template (#637) — so no suggestion chips or composer that presuppose one.
+        <div className="meso-chat-footer" data-testid="agent-template-note">
+          <p className="meso-footer-copy">The assistant works on a client&rsquo;s plan. Start this template for a client to use it.</p>
+        </div>
+      ) : flags.is_sandbox ? (
         <div className="meso-chat-footer">
           <p className="meso-footer-copy">Let AI draft the whole program for you — free to start.</p>
           <a data-testid="agent-sandbox-cta" href={flags.signup_url} data-hover="brighten" className="meso-btn-deliver meso-btn-deliver--inline">

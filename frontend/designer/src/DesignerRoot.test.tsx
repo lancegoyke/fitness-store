@@ -48,6 +48,7 @@ function flagsPayload(overrides: Record<string, unknown> = {}) {
     price_summary: "$19/mo — unlimited athletes",
     is_template: false,
     save_template_url: "/meso/plan/7/save-as-template/",
+    template_start: null,
     ...overrides,
   };
 }
@@ -136,6 +137,39 @@ describe("hydration: full payload", () => {
     render(<DesignerRoot />);
 
     expect(screen.queryByTestId("save-as-template")).not.toBeInTheDocument();
+  });
+
+  it("on a template: Start for a client replaces Deliver, athlete-only chrome is hidden (#637)", async () => {
+    const user = userEvent.setup();
+    jsonScript("meso-grid-data", gridPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan("tok123");
+    jsonScript(
+      "meso-designer-flags",
+      flagsPayload({
+        is_template: true,
+        save_template_url: null,
+        template_start: { action: "/meso/template/7/use/", clients: [{ id: 4, name: "Maya Okonkwo" }] },
+      }),
+    );
+
+    render(<DesignerRoot />);
+
+    expect(screen.queryByTestId("deliver-link")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("athlete-meta")).not.toBeInTheDocument();
+    expect(screen.queryByText("Contraindications")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-chip-0")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-composer-input")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("start-for-client"));
+    const form = screen.getByTestId("start-for-client-form");
+    expect(form).toHaveAttribute("action", "/meso/template/7/use/");
+    expect(form).toHaveAttribute("method", "post");
+    expect(form.querySelector('input[name="csrfmiddlewaretoken"]')).toHaveValue("tok123");
+    expect(screen.getByRole("combobox")).toHaveValue("4");
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("start-for-client-form")).not.toBeInTheDocument();
   });
 
   it("renames the program from the header and refreshes that title after undo", async () => {
