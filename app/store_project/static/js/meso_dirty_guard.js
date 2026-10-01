@@ -36,10 +36,16 @@
   }
 
   function guard(form, win) {
-    const initial = snapshot(form);
+    let initial = snapshot(form);
     let submitting = false;
     form.addEventListener("submit", () => {
       submitting = true;
+    });
+    // An aborted submit or a bfcache restore must not leave the guard off; a
+    // restored page also re-baselines on whatever the browser put back.
+    win.addEventListener("pageshow", (event) => {
+      submitting = false;
+      if (event.persisted) initial = snapshot(form);
     });
     win.addEventListener("beforeunload", (event) => {
       if (submitting || !isDirty(form, initial)) return;

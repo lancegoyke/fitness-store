@@ -50,4 +50,18 @@ describe("dirty guard", () => {
     form.dispatchEvent(new Event("submit", { cancelable: true }));
     expect(fireUnload().defaultPrevented).toBe(false);
   });
+
+  it("re-arms on pageshow after an aborted submit, and re-baselines on bfcache", () => {
+    const form = build();
+    guard(form, window);
+    document.querySelector("textarea").value = "edited";
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(fireUnload().defaultPrevented).toBe(false);
+    window.dispatchEvent(new Event("pageshow"));
+    expect(fireUnload().defaultPrevented).toBe(true);
+    const restored = new Event("pageshow");
+    restored.persisted = true;
+    window.dispatchEvent(restored);
+    expect(fireUnload().defaultPrevented).toBe(false);
+  });
 });

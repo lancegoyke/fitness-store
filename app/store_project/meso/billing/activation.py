@@ -63,8 +63,7 @@ def activate_waiting(coach_id):
 def _activate_after_commit(coach_id):
     # A billing webhook (or the trial POST) must never fail because of this.
     try:
-        with transaction.atomic():
-            activate_waiting(coach_id)
+        activate_waiting(coach_id)
     except Exception:
         logger.exception("Failed to activate waiting athletes for coach %s", coach_id)
 
@@ -75,10 +74,8 @@ def activate_waiting_on_upgrade(sender, instance, **kwargs):
     if not instance.is_active:
         return
     coach_id = instance.coach_id
-    if not (
-        CoachAthlete.objects.filter(
-            coach_id=coach_id, status=CoachAthlete.Status.ACCEPTED_WAITING
-        ).exists()
-    ):
-        return
+    # No ``exists()`` pre-check here: an unlocked read could miss a claim still
+    # in flight (its row not yet committed). ``activate_waiting`` locks the coach
+    # ``User`` row first and only then reads the waiting links, which is what
+    # serialises it against that claim, so the receiver always schedules it.
     transaction.on_commit(lambda: _activate_after_commit(coach_id))

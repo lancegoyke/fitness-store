@@ -67,7 +67,11 @@ class AccountAdapter(DefaultAccountAdapter):
         if CoachProfile.objects.filter(user=request.user).exists():
             return reverse("meso:roster")
         if CoachAthlete.objects.filter(
-            athlete=request.user, status=CoachAthlete.Status.ACTIVE
+            athlete=request.user,
+            status__in=[
+                CoachAthlete.Status.ACTIVE,
+                CoachAthlete.Status.ACCEPTED_WAITING,
+            ],
         ).exists():
             return reverse("meso:athlete_home")
         return super().get_login_redirect_url(request)
