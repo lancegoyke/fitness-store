@@ -303,6 +303,43 @@ class TestAthleteSummaryPctAndParsedSets:
         # The frontend renders ``load`` + optional `` unit``: "90%", no unit.
         assert (summary["load"], summary["unit"]) == ("90%", "")
 
+    def _moved_block(self, source_text, source_load):
+        """A cell whose SOURCE-day log holds a parsed set, then moved to day 2.
+
+        Mirrors ``views.prescription_move``: only ``ExerciseSlot.session_slot``
+        changes; the LoggedSet keeps pointing at the same cell and at the
+        SOURCE session's log. Returns the cell and a fresh DESTINATION log.
+        """
+        meso, weeks, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
+        cell = cells["Back Squat"][0]
+        source_log = _log(cell)
+        LoggedSetFactory(
+            session_log=source_log,
+            prescription=cell,
+            source_line=sub_line(cell, source_text, athlete_authored=True),
+            set_number=1,
+            load=source_load,
+            reps="5",
+            unit=Unit.POUNDS,
+        )
+        first = day(weeks[0], day_number=2, name="Lower B", order=1)
+        for w in weeks[1:]:
+            day(w, session_slot=first.session_slot)
+        slot = cell.exercise_slot
+        slot.session_slot = first.session_slot
+        slot.save(update_fields=["session_slot"])
+        return meso, cell, _log(cell)
+
+    def test_a_moved_exercises_source_log_set_neither_wins_nor_falls_back(self):
+        meso, cell, dest_log = self._moved_block("300 x 5", "300")
+        _logged_set(cell, dest_log, "100", unit=Unit.POUNDS, n=1)
+        assert _summary(meso, cell)["load"] == "100"
+
+    def test_a_moved_exercises_blank_load_source_set_still_blocks_the_fallback(self):
+        meso, cell, dest_log = self._moved_block("315 x 5", "")
+        _logged_set(cell, dest_log, "225", unit=Unit.POUNDS, n=1)
+        assert _summary(meso, cell)["load"] == "225"
+
     def test_a_parsed_set_of_the_newest_log_is_used(self):
         meso, _, cells = _block({"Back Squat": ["3x5 @ 225"] * 4})
         cell = cells["Back Squat"][0]
