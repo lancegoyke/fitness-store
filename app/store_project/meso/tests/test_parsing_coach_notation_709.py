@@ -934,7 +934,6 @@ def test_three_by_five_is_a_set_but_not_one_set():
     [
         "3 x 8-10",
         "10x10",
-        "1x5, 225",
         "not a set",
         "",
         # Review round 1: a percentage is how a coach prescribes a load, and a
@@ -960,7 +959,17 @@ def test_strict_default_false(text):
 
 @pytest.mark.parametrize(
     "text",
-    ["25x5", "12kg x 2", "5 @ 20", "5 @ 8kg", "225x5 @8", "1x5 @ 225", "225 for 5"],
+    [
+        "25x5",
+        "12kg x 2",
+        "5 @ 20",
+        "5 @ 8kg",
+        "225x5 @8",
+        "1x5 @ 225",
+        "225 for 5",
+        # #720: one set of 5 at 225, no longer 1 lb × 5.
+        "1x5, 225",
+    ],
 )
 def test_strict_default_true(text):
     assert reads_as_one_set(text) is True

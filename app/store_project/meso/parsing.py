@@ -441,6 +441,7 @@ def _classify_performed_head(head, explicit_load=False):
 _FOR_WORD = re.compile(r"\s+for\s+", re.IGNORECASE)
 _AT_WORD = re.compile(r"\s+at\s+", re.IGNORECASE)
 _ONE_SET_PREFIX = re.compile(r"^1\s*[x\u00d7]\s*(.+?)\s*@\s*(.+)$", re.IGNORECASE)
+_ONE_SET_HEAD = re.compile(r"^1\s*[x\u00d7]\s*(\d+)$", re.IGNORECASE)
 _TRAILING_RPE = re.compile(
     r"^(?P<base>.*?\S)\s*(?:@\s*(?:rpe\s*)?|\brpe\s*)"
     r"(?P<rpe>\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?)$",
@@ -467,6 +468,34 @@ def _classify_word_or_prefix_head(head, explicit_load):
     prefix = _ONE_SET_PREFIX.match(head)
     if prefix:
         return _try_at_form(f"{prefix.group(1)} @ {prefix.group(2)}", explicit_load)
+    return None
+
+
+def _classify_one_set_comma(head, segments):
+    """``1 x 5, 225`` — one set of 5 reps at 225 (#720), not 1 lb x 5.
+
+    ``1 x 5, RPE 8, 225`` is also the canonical order ``compose_prescription_text``
+    writes, so the first non-RPE segment after the head is the load. Only a head
+    of exactly ``1`` moves: ``3x5, 225`` / ``4 x 6, 85%`` are pinned load-first
+    parses that #709 promised never to change. A load-shaped segment that is
+    implausible (``1x5, 2255``) is a fat-finger, so it is refused rather than
+    falling back to 1 lb. ``None`` leaves today's parse alone.
+    """
+    match = _ONE_SET_HEAD.match(head)
+    if not match:
+        return None
+    reps = {"reps": int(match.group(1))}
+    if not _reps_are_plausible(reps):
+        return None
+    for segment in segments[1:]:
+        segment = segment.strip().rstrip(".")
+        if not segment or _RPE.match(segment):
+            continue
+        if not _LOAD.match(segment):
+            return None
+        if not _load_is_plausible(segment):
+            return {"kind": "unresolved-set", "warn": True}
+        return {"load": segment.replace(" ", ""), **reps}
     return None
 
 
@@ -533,7 +562,9 @@ def parse_performed(text):
     **One set per line.** Only the line's first recognized set is returned;
     a later comma segment is only ever read for a trailing RPE (``225 x 5,
     RPE 8``). Multi-set-per-line text (``225x5, 230x3``) is explicitly OUT
-    OF SCOPE — the second set is silently dropped, not an error.
+    OF SCOPE — the second set is silently dropped, not an error. The one
+    exception is a head of exactly ``1 x N`` (``1x5, 225``): the comma segment
+    is its load, not a second set (``_classify_one_set_comma``, #720).
     """
     if text is None:
         return None
@@ -581,7 +612,11 @@ def parse_performed(text):
 
     segments = line.split(",")
     head = segments[0].strip()
-    out = _classify_performed_head(head, explicit_load)
+    out = _classify_one_set_comma(head, segments)
+    if out is not None and out.get("kind") == "unresolved-set":
+        return {"kind": "unresolved-set", "raw": raw, "warn": True}
+    if out is None:
+        out = _classify_performed_head(head, explicit_load)
     if out is None:
         out = _classify_extended_head(head, explicit_load)
 
