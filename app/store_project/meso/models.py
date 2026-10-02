@@ -17,6 +17,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError
 from django.db import models
 from django.db import router
 from django.db import transaction
@@ -2278,8 +2279,10 @@ class Prescription(models.Model):
 
 
 # The one ordering that answers "which log is THE current one for a
-# (session, athlete) pair" (#567/#568/#579). Shared by ``newest_session_logs``,
-# ``newest_session_log_ids`` and the correlated subquery below so it can't drift.
+# (session, athlete) pair" (#567/#568/#579). Since #699 the database allows
+# only one log per pair, so this ordering is a guard for legacy data, not a
+# live need. Shared by ``newest_session_logs``, ``newest_session_log_ids`` and
+# the correlated subquery below so it can't drift.
 NEWEST_LOG_ORDER = ("-created_at", "-pk")
 
 
@@ -2291,6 +2294,9 @@ def _newest_log_pk_subquery(session_ref, athlete_ref):
     of status; a caller's status filter is applied on top of that choice, never
     inside it. The rule lives here once, for both ``SessionLogQuerySet.
     newest_per_pair`` and ``LoggedSetQuerySet.on_newest_log``.
+
+    Since #699 the database guarantees one log per pair, so this normally
+    picks the only one; the newest-log ordering is a guard for legacy data.
     """
     return models.Subquery(
         SessionLog.objects.filter(session_id=session_ref, athlete_id=athlete_ref)
@@ -2300,8 +2306,33 @@ def _newest_log_pk_subquery(session_ref, athlete_ref):
 
 
 class SessionLogQuerySet(models.QuerySet):
+    def create_for_pair(self, session, athlete, **fields):
+        """Insert the pair's log, or return the one that already exists (#699).
+
+        ``meso_sessionlog_one_per_athlete_session`` makes a second log for a
+        ``(session, athlete)`` pair impossible. Both athlete write paths hold
+        the ``Session`` row lock and read ``newest_session_logs`` first, so the
+        second of two racing athlete writes waits and then finds the first's
+        log; this fallback covers writers that do NOT take that lock (admin,
+        seed/demo). The insert runs in its
+        own savepoint so a lost race does not poison the caller's transaction,
+        and the loser adopts the winner's row rather than raising or doubling.
+        """
+        try:
+            with transaction.atomic():
+                return self.create(session=session, athlete=athlete, **fields)
+        except IntegrityError:
+            existing = newest_session_logs(session, athlete).first()
+            if existing is None:
+                raise
+            return existing
+
     def newest_per_pair(self):
-        """Only the logs that are the newest for their ``(session, athlete)`` pair."""
+        """Only the logs that are the newest for their ``(session, athlete)`` pair.
+
+        One log per pair is a database guarantee since #699; the newest-log
+        choice stays as a guard for legacy data.
+        """
         return self.filter(
             pk=_newest_log_pk_subquery(
                 models.OuterRef("session_id"), models.OuterRef("athlete_id")
@@ -2354,6 +2385,12 @@ class SessionLog(models.Model):
         ordering = ["-date", "-created_at"]
         verbose_name = "Session log"
         verbose_name_plural = "Session logs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "athlete"],
+                name="meso_sessionlog_one_per_athlete_session",
+            )
+        ]
 
     def __str__(self):
         return f"{self.athlete.display_name()} · {self.session}"
@@ -2719,10 +2756,9 @@ def sub_line_warn_reason(
     from the one log they each already read; this branch exists only so a
     future caller that forgets to isn't unboundedly wrong. #568: it used to
     have NO scope at all (just ``LoggedSet.objects.filter(source_line=cell)``),
-    so it could match a row on *any* ``SessionLog`` in the database — another athlete's, a stray
-    older log for the same (session, athlete) the real callers never see
-    (they always read the newest), or, after a coach moves the exercise to
-    another day (``prescription_move``), the day it moved FROM. Scoped now to
+    so it could match a row on *any* ``SessionLog`` in the database — another athlete's, a
+    legacy older log for the same (session, athlete) (impossible since #699),
+    or, after a coach moves the exercise to another day (``prescription_move``), the day it moved FROM. Scoped now to
     the cell's own day — the ``Session`` where ``week=cell.week`` and
     ``session_slot=cell.exercise_slot.session_slot`` — via
     ``session_log__session__week``/``session_log__session__session_slot_id``,
@@ -2774,6 +2810,9 @@ def newest_session_logs(session, athlete, *, status=None):
     logs for one session (#579). One selector, so the ORDERING cannot drift
     again.
 
+    Since #699 the database guarantees one log per ``(session, athlete)``;
+    the newest-log ordering remains as a guard for legacy data.
+
     That is all this promises, and the limit is deliberate: sharing the
     ordering is not the same as always landing on the same row.
     ``session_results`` passes ``status=DONE`` and ``athlete_session`` passes
@@ -2790,9 +2829,10 @@ def newest_session_logs(session, athlete, *, status=None):
     newer log lose to a truly older one; ``-created_at`` always answers "which
     write actually happened last", which is the question every one of these
     reads is asking. ``-pk`` breaks a tie on a shared ``created_at`` (#568) —
-    exactly what a split-log race produces, two rows created in the same
-    transaction-committed instant — so a caller can't have the database hand
-    back either row nondeterministically from one call to the next.
+    exactly what the (now closed, #699) split-log race produced, two rows
+    created in the same transaction-committed instant — so a caller can't have
+    the database hand back either row nondeterministically from one call to
+    the next.
 
     Returns the ordered queryset, not a single row, so a caller can still
     layer its own ``select_related``/``prefetch_related``/``values`` before

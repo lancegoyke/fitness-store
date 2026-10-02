@@ -173,35 +173,6 @@ class TestSettleableLogs:
         log.refresh_from_db()
         assert log.status == SessionLog.Status.DONE
 
-    def test_never_settles_a_non_newest_duplicate(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "100 x 5")
-        newest = the_log(s.session, s.athlete)
-        set_activity(newest, quiet_since())
-
-        # An older duplicate for the same (session, athlete) pair, built
-        # directly with the ORM (backdated `created_at`) — the write paths'
-        # own session lock prevents this from happening in practice; this
-        # pins the sweep's OWN newest-only rule regardless of how a duplicate
-        # got there.
-        older = SessionLog.objects.create(
-            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
-        )
-        LoggedSetFactory(
-            session_log=older, prescription=s.squat, set_number=1, reps="5", load="90"
-        )
-        SessionLog.objects.filter(pk=older.pk).update(
-            created_at=timezone.now() - timedelta(days=1),
-            last_activity_at=quiet_since(),
-        )
-
-        assert settle.settle_quiet_logs() == 1
-        newest.refresh_from_db()
-        older.refresh_from_db()
-        assert newest.status == SessionLog.Status.DONE
-        assert older.status == SessionLog.Status.PENDING
-
 
 # -- what a settle leaves untouched ------------------------------------------
 
@@ -402,22 +373,6 @@ class TestUnderLockRecheck:
         assert settle.settle_log(log.pk, cutoff=cutoff) is False
         log.refresh_from_db()
         assert log.status == SessionLog.Status.DONE
-
-    def test_a_newer_log_appearing_after_selection_stops_the_settle(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "100 x 5")
-        log = the_log(s.session, s.athlete)
-        cutoff = timezone.now() - QUIET
-        set_activity(log, cutoff - timedelta(minutes=1))
-
-        SessionLog.objects.create(
-            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
-        )
-
-        assert settle.settle_log(log.pk, cutoff=cutoff) is False
-        log.refresh_from_db()
-        assert log.status == SessionLog.Status.PENDING
 
     def test_a_log_moved_to_another_session_before_the_lock_stays_pending(
         self, client, monkeypatch

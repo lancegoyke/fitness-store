@@ -2220,12 +2220,14 @@ def athlete_log_session(request, pk):
         if locked_plan is None:
             return HttpResponseNotFound("Unknown session")
         # Same lock `_upsert_parsed_set` takes, and it has to be BOTH sides to
-        # work: `(session, athlete)` has no uniqueness, so an athlete who types
-        # into a cell and immediately taps Finish can have the blur POST and
-        # this one both find no log and each create one. Locking only the blur
-        # path leaves that race wide open. One workout split across two logs
-        # loses the older one's sets from every later read, which takes the
-        # newest.
+        # work: an athlete who types into a cell and immediately taps Finish
+        # can have the blur POST and this one both find no log and each try to
+        # create one. Locking only the blur path would leave that race open, so
+        # the second writer waits here and then finds the first's log. Since
+        # #699 the database also guarantees one log per `(session, athlete)`
+        # (`meso_sessionlog_one_per_athlete_session`); `create_for_pair`'s
+        # IntegrityError fallback covers writers that don't take this lock
+        # (admin, seed/demo).
         locked_session = (
             Session.objects.select_for_update(of=("self",))
             .filter(pk=session.pk)
@@ -2257,7 +2259,7 @@ def athlete_log_session(request, pk):
                         ),
                     }
                 )
-            log = SessionLog(session=session, athlete=request.user)
+            log = SessionLog.objects.create_for_pair(session, request.user)
         # session_completed analytics (#509): captured before this save changes
         # anything, so it describes the log's state walking in.
         was_done = log.status == SessionLog.Status.DONE
@@ -2500,10 +2502,11 @@ def athlete_cell_write(request, pk):
         )
         # Serialize the WHOLE write on the session row, before anything is read.
         #
-        # `(session, athlete)` has no uniqueness, so two overlapping blurs can
-        # each see no SessionLog and create one, splitting a workout across two
-        # logs — every later read takes only the newest, so the sets stranded on
-        # the older one vanish from DONE coach results and the 1RM refresh.
+        # Two overlapping blurs could each see no SessionLog and both try to
+        # create one. This lock makes the second wait and find the first's log;
+        # since #699 `meso_sessionlog_one_per_athlete_session` also guarantees
+        # one log per `(session, athlete)` and `create_for_pair` adopts the
+        # winner's row if a writer without this lock gets there first.
         #
         # The lock has to sit ABOVE the `previous_text` read, not inside the
         # upsert: two writes for the same sub-line (two tabs, an offline retry)
@@ -2885,8 +2888,8 @@ def _upsert_parsed_set(
                 # under Postgres's `-date` (NULLs first in DESC), so an old
                 # parsed draft would pose as the newest log in recent-log
                 # grounding, and record provenance would lose its workout date.
-                log = SessionLog.objects.create(
-                    session=session, athlete=athlete, date=timezone.localdate()
+                log = SessionLog.objects.create_for_pair(
+                    session, athlete, date=timezone.localdate()
                 )
 
             # Replace only the rows THIS LINE WAS SHOWING. A set the line no

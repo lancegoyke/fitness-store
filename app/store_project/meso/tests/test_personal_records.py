@@ -109,10 +109,13 @@ class TestPersonalRecords:
             [(squat, 1, "5", "100", "8")],
             date=datetime.date(2026, 1, 1),
         )
+        # A second session: one log per (session, athlete) since #699.
+        day2 = day(session.week, day_number=2, name="Lower 2")
+        squat2 = build_presc(day2, order=0, name="Back Squat")
         best_log = log_session(
             athlete,
-            session,
-            [(squat, 1, "3", "110", "9")],
+            day2,
+            [(squat2, 1, "3", "110", "9")],
             date=datetime.date(2026, 1, 2),
         )
         winning_set = best_log.sets.get()
@@ -230,7 +233,10 @@ class TestPersonalRecords:
             athlete, prescriptions=[{"name": "Back Squat"}]
         )
         log_session(athlete, session, [(squat, 1, "AMRAP", "BW", "9")])
-        log_session(athlete, session, [(squat, 2, "", "", "")])
+        # A second session (one log per (session, athlete) since #699).
+        day2 = day(session.week, day_number=2, name="Lower 2")
+        squat2 = build_presc(day2, order=0, name="Back Squat")
+        log_session(athlete, day2, [(squat2, 2, "", "", "")])
         assert pr.personal_records(athlete, unit=Unit.KILOGRAMS) == {}
 
 

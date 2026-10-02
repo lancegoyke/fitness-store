@@ -99,8 +99,9 @@ def settleable_logs(cutoff):
     The pair-newest ordering is the shared rule — see
     ``models.newest_session_logs`` for the ordering rationale and the full
     list of reads (including ``settle_log`` below) that share it. Without it,
-    two logs sharing a ``created_at`` (precisely the split-log rows #568
-    exists for) would sort ambiguously here, and this query could pick a
+    two logs sharing a ``created_at`` (the split-log rows #568 exists for;
+    #699 now makes a second log impossible, so the tie-break guards legacy
+    data) would sort ambiguously here, and this query could pick a
     different one of the pair than those other reads do, settling a log the
     athlete-facing surfaces never treat as current.
     """

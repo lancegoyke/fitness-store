@@ -8,7 +8,6 @@ about surviving code -- ``sub_line_warn_reason`` and the cell-write response
 against the presenter -- and never touched the log endpoint.
 """
 
-import datetime
 import json
 
 import pytest
@@ -41,59 +40,6 @@ class TestSubLineWarnAgreesAcrossSurfaces:
     second log for the same (session, athlete), and a coach move that takes
     the cell to another day while the ``LoggedSet`` stays behind.
     """
-
-    def test_a_second_log_for_the_same_session_athlete_does_not_back_the_line(
-        self, client
-    ):
-        s = seed()
-        # A coach-authored sub-line the athlete never touched, so a blur that
-        # re-posts its own unchanged text is a no-op (`untouched_coach_line`)
-        # and never re-derives a fresh backing row -- the only way to observe
-        # `_cell_warn_reason_or_blank`'s read without it healing the very gap this
-        # test means to catch.
-        cell = sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
-        old_log = SessionLog.objects.create(
-            session=s.session, athlete=s.athlete, date=timezone.localdate()
-        )
-        LoggedSet.objects.create(
-            session_log=old_log,
-            prescription=s.squat,
-            source_line=cell,
-            set_number=1,
-            reps="5",
-            load="225",
-            rpe="",
-        )
-        SessionLog.objects.filter(pk=old_log.pk).update(
-            created_at=timezone.now() - datetime.timedelta(days=1)
-        )
-        # The newest log for this (session, athlete) -- the one the presenter
-        # and (once fixed) the blur response both read -- has NO sets at all.
-        SessionLog.objects.create(
-            session=s.session, athlete=s.athlete, date=timezone.localdate()
-        )
-
-        def render_warn_for(session):
-            ctx = presenters.athlete_session(session, s.athlete)
-            squat_ctx = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-            return next(
-                line["warn"] for line in squat_ctx["sub_lines"] if line["line"] == 1
-            )
-
-        # The newest log has no set backing this athlete-authored line: the
-        # page tints it. (#524: a coach cue can no longer be the line under
-        # test -- it is read-only and never warns -- so the line is the
-        # athlete's own, and a blur re-derives its set.)
-        client.force_login(s.athlete)
-        assert render_warn_for(s.session) is True, (
-            "the newest log has no set backing this line -- the page must "
-            "call it unlogged/tinted"
-        )
-        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
-        assert resp.status_code == 200
-        blur_warn = resp.json()["cell"]["warn"]
-        # ...and once the blur has backed it, both surfaces agree it is logged.
-        assert blur_warn == render_warn_for(s.session) is False
 
     def test_a_moved_exercise_reads_unlogged_on_its_new_day(self, client):
         """After a move, the cell travels but the ``LoggedSet`` doesn't.

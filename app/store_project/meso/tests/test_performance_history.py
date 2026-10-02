@@ -19,6 +19,8 @@ import datetime
 import json
 
 import pytest
+from django.db import IntegrityError
+from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
@@ -84,75 +86,17 @@ def sub_line_ctx(ctx, s):
     return next(line for line in squat_ctx["sub_lines"] if line["line"] == 1)
 
 
-# -- 1-5: a stranded older log counts nowhere --------------------------------
+# -- 1-5: a stranded older log is now impossible (#699) ----------------------
 
 
-class TestStrandedOlderLogCountsNowhere:
-    def test_one_rm_reads_only_the_newest_log(self):
+class TestOneLogPerPairIsEnforced:
+    def test_the_database_refuses_a_second_log_for_a_pair(self):
+        # Replaces the old "stranded older log counts nowhere" cases: that
+        # state can no longer be built, so the guarantee is the DB's.
         s = seed()
-        old = make_log(s.session, s.athlete, age_days=2)
-        add_set(old, s.squat, load="200")
-        new = make_log(s.session, s.athlete, age_days=0)
-        add_set(new, s.squat, load="100")
-
-        best = one_rm.derive_one_rm_values(s.athlete)
-        assert best == {squat_key(s): one_rm.epley_one_rm("100", "5")}
-
-    def test_live_personal_records_ignore_the_stranded_row(self):
-        s = seed()
-        old = make_log(s.session, s.athlete, age_days=2)
-        add_set(old, s.squat, load="200")
-        new = make_log(s.session, s.athlete, age_days=0)
-        add_set(new, s.squat, load="100")
-
-        prs = personal_records.personal_records(s.athlete, unit=s.plan.unit)
-        assert prs[squat_key(s)].load == "100"
-
-    def test_last_logged_label_ignores_the_stranded_row(self):
-        s = seed()
-        today = timezone.localdate()
-        # The stranded (older) log carries the LATER workout date, so the
-        # date-first ordering would pick it as "last time" on main.
-        old = make_log(s.session, s.athlete, age_days=2, date=today)
-        add_set(old, s.squat, load="200")
-        new = make_log(
-            s.session, s.athlete, age_days=0, date=today - datetime.timedelta(days=3)
-        )
-        add_set(new, s.squat, load="100")
-
-        labels = serializers.last_logged_labels(s.plan, [s.squat], s.plan.unit)
-        label = labels[s.squat.pk]
-        assert "100" in label
-        assert "200" not in label
-
-    def test_recent_logs_do_not_list_the_older_log_of_a_pair(self):
-        s = seed()
-        old = make_log(s.session, s.athlete, age_days=2)
-        add_set(old, s.squat, load="200")
-        new = make_log(s.session, s.athlete, age_days=0)
-        add_set(new, s.squat, load="100")
-
-        summary = serializers.serialize_recent_logs(s.plan)
-        assert len(summary) == 1
-        assert [row["load"] for row in summary[0]["sets"]] == ["100"]
-
-    def test_adherence_ignores_a_done_log_whose_pair_is_newest_pending(self):
-        s = seed()
-        make_log(s.session, s.athlete, status=DONE, age_days=2)
-        make_log(s.session, s.athlete, status=PENDING, age_days=0)
-
-        assert adherence.link_last_trained(s.rel) is None
-        assert adherence.link_session_count(s.rel) == 0
-        assert adherence.recent_logs(s.coach) == []
-
-    def test_adherence_still_counts_the_newest_done_log(self):
-        s = seed()
-        make_log(s.session, s.athlete, status=PENDING, age_days=2)
-        newest = make_log(s.session, s.athlete, status=DONE, age_days=0)
-
-        assert adherence.link_last_trained(s.rel) == newest
-        assert adherence.link_session_count(s.rel) == 1
-        assert adherence.recent_logs(s.coach) == [newest]
+        make_log(s.session, s.athlete)
+        with pytest.raises(IntegrityError), transaction.atomic():
+            make_log(s.session, s.athlete, age_days=2)
 
 
 # -- 6: GUARD, case A --------------------------------------------------------
@@ -231,16 +175,6 @@ def _reasons(s, day2, cell):
 
 
 class TestElsewhereReadsTheSelector:
-    def test_a_stranded_older_log_row_does_not_read_as_elsewhere(self, client):
-        s, day2, cell = _moved_exercise(client)
-        old = make_log(s.session, s.athlete, age_days=2)
-        add_set(old, s.squat, load="225", source_line=cell)
-        # The pair's newest log has nothing, so the old row counts nowhere and
-        # a re-post would duplicate nothing.
-        make_log(s.session, s.athlete, age_days=0)
-
-        assert _reasons(s, day2, cell) == ("unlogged", "unlogged")
-
     def test_guard_a_row_on_a_soft_deleted_day_still_reads_as_elsewhere(self, client):
         """GUARD (#572 case A): the row still counts, so a re-post would double it."""
         s, day2, cell = _moved_exercise(client)
@@ -252,7 +186,6 @@ class TestElsewhereReadsTheSelector:
 
     def test_a_row_on_the_newest_log_reads_as_elsewhere(self, client):
         s, day2, cell = _moved_exercise(client)
-        make_log(s.session, s.athlete, age_days=2)
         newest = make_log(s.session, s.athlete, age_days=0)
         add_set(newest, s.squat, load="225", source_line=cell)
 
@@ -306,8 +239,6 @@ class TestPlanShapedReadsIgnoreDeletedSessions:
 class TestSelectorShape:
     def test_performance_history_is_one_query(self, django_assert_num_queries):
         s = seed()
-        old = make_log(s.session, s.athlete, age_days=2)
-        add_set(old, s.squat, load="200")
         new = make_log(s.session, s.athlete, age_days=0)
         kept = add_set(new, s.squat, load="100")
 
