@@ -3177,7 +3177,10 @@ class LoggedSet(models.Model):
                 and original_slot_id is not None
                 and self.exercise_slot_id != original_slot_id
             )
-            if (self._state.adding and self.exercise_name is None) or repointed:
+            wants_stamp = (
+                self._state.adding and self.exercise_name is None
+            ) or repointed
+            if wants_stamp and self.exercise_slot_id is not None:
                 stamp = (
                     ExerciseSlot.objects.using(db_alias)
                     .filter(pk=self.exercise_slot_id)

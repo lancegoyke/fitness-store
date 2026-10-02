@@ -11,9 +11,10 @@ Both ride on the same structured performed record, ``LoggedSet`` — never parse
 free text — and reuse the pinned Epley math verbatim (``one_rm.epley_one_rm``) and
 the lift identity in ``lift_identity.py`` (#708): a set counts toward the lift
 it was STAMPED with at write time (``LoggedSet.lift``), not whatever its slot
-is called now, so a swap or rename of the slot doesn't relabel past records. The scan is unit-scoped exactly as ``derive_one_rm_values``
-(a bare logged load is denominated in its plan's unit, so kg and lb sets for one
-lift must never pool).
+is called now, so a swap or rename of the slot doesn't relabel past records.
+The scan is unit-scoped exactly as ``derive_one_rm_values`` (a bare logged
+load is denominated in its plan's unit, so kg and lb sets for one lift must
+never pool).
 
 **LIVE, not DONE-only (5a, plan §7).** There is no "I'm done" button anymore —
 completion dissolved into a 24 h quiet-period settle (5b). So unlike

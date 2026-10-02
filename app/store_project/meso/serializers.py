@@ -577,7 +577,8 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
         .filter(session__week__mesocycle__plan=plan, athlete=plan.athlete)
         .select_related("session")
         # #578 C1: one `Prefetch` joining both hops the anchor can resolve
-        # through, so `s.lift` (stamp, else the anchor slot fallback #708) never fires an N+1 query either
+        # through, so `s.lift` (#708: the stamp, else the anchor slot's live
+        # identity for an unstamped row) never fires an N+1 query either
         # way — a plain `"sets__exercise_slot", "sets__prescription__exercise_slot"`
         # lookup would cost four prefetch queries instead of one: `sets`,
         # `sets__exercise_slot`, `sets__prescription`, and
