@@ -53,6 +53,7 @@
 // sub-line text, written like any other line). skip/unskip, fill-across-
 // weeks, add-this-week and move-to-day all stay. (The per-cell group
 // adjust badge went with the group subsystem itself.)
+import type { RefObject } from "react";
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ClipboardEvent, FocusEvent, KeyboardEvent } from "react";
@@ -1318,6 +1319,88 @@ function keepFocusClearOfStickyColumn(event: FocusEvent<HTMLElement>) {
   else if (hiddenRight > 0) scroller.scrollLeft += hiddenRight;
 }
 
+/** A horizontal scrollbar pinned to the bottom of the canvas while the table is
+ * on screen (#701). The one shared scroller's own scrollbar sits under the LAST
+ * day, so a coach with a plain mouse looking at Day 1 couldn't reach weeks 5-6.
+ * This is a mirror strip, a sibling right after the scroller: `position: sticky;
+ * bottom: 0` keeps it at the canvas's bottom edge until the table's end is
+ * reached, where it sits in its natural slot and hides (the real bar is then in
+ * view). `aria-hidden`: the real scroller keeps keyboard and focus behaviour.
+ *
+ * Two-way scrollLeft sync with no echo loop: each side only writes when the
+ * other differs, and assigning an equal scrollLeft fires no scroll event.
+ * Hidden when the table doesn't overflow. The strip keeps its height while
+ * hidden-because-the-real-bar-is-visible so showing/hiding never shifts layout. */
+function ScrollMirror({ scrollerRef }: { scrollerRef: RefObject<HTMLDivElement | null> }) {
+  const mirrorRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const [scrollWidth, setScrollWidth] = useState<number | null>(null);
+  const [realBarInView, setRealBarInView] = useState(true);
+
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    const mirror = mirrorRef.current;
+    const end = endRef.current;
+    if (!scroller || !mirror || !end) return;
+
+    const measure = () => {
+      setScrollWidth(scroller.scrollWidth > scroller.clientWidth + 1 ? scroller.scrollWidth : null);
+    };
+    const follow = (from: HTMLElement, to: HTMLElement) => () => {
+      if (Math.abs(from.scrollLeft - to.scrollLeft) > 0.5) to.scrollLeft = from.scrollLeft;
+    };
+    const onScroller = follow(scroller, mirror);
+    const onMirror = follow(mirror, scroller);
+    scroller.addEventListener("scroll", onScroller, { passive: true });
+    mirror.addEventListener("scroll", onMirror, { passive: true });
+
+    measure();
+    // (jsdom has neither observer; the strip just stays hidden there.)
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    resize?.observe(scroller);
+    if (scroller.firstElementChild) resize?.observe(scroller.firstElementChild);
+    // The zero-height marker right under the scroller: in view means the
+    // scroller's own scrollbar is in view.
+    const seen =
+      typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver((entries) => {
+            const last = entries[entries.length - 1];
+            if (last) setRealBarInView(last.isIntersecting);
+          });
+    seen?.observe(end);
+    return () => {
+      scroller.removeEventListener("scroll", onScroller);
+      mirror.removeEventListener("scroll", onMirror);
+      resize?.disconnect();
+      seen?.disconnect();
+    };
+  }, [scrollerRef]);
+
+  // The strip is rendered at the scroller's scrollLeft once it gains a width.
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    const mirror = mirrorRef.current;
+    if (scroller && mirror && scrollWidth !== null) mirror.scrollLeft = scroller.scrollLeft;
+  }, [scrollerRef, scrollWidth]);
+
+  return (
+    <>
+      <div ref={endRef} className="meso-table-scroll-end" />
+      <div
+        ref={mirrorRef}
+        className="meso-table-scrollbar"
+        data-testid="meso-table-scrollbar"
+        aria-hidden="true"
+        hidden={scrollWidth === null}
+        style={{ visibility: realBarInView ? "hidden" : "visible" }}
+      >
+        <div style={{ width: scrollWidth ?? 0, height: 1 }} />
+      </div>
+    </>
+  );
+}
+
 export function MesoTable(props: MesoTableProps) {
   const {
     grid,
@@ -1340,6 +1423,7 @@ export function MesoTable(props: MesoTableProps) {
     exerciseSuggestions,
   } = props;
 
+  const scrollerRef = useRef<HTMLDivElement>(null);
   const [armed, setArmed] = useState<Armed>(null);
   const isArmed = (type: ArmedKind, id: Id) => !!armed && armed.type === type && armed.id === id;
   const arm = (type: ArmedKind, id: Id) => setArmed({ type, id });
@@ -1462,7 +1546,7 @@ export function MesoTable(props: MesoTableProps) {
             keep in sync (no scroll-event feedback loops, one scrollbar, native
             focus/keyboard scroll-into-view), and the sticky Exercise column and
             the dnd-kit overlay (no live transform) need no change. */}
-        <div className="meso-table-scroll" style={{ scrollPaddingLeft: COL_WIDTHS.exercise }} onFocus={keepFocusClearOfStickyColumn}>
+        <div ref={scrollerRef} className="meso-table-scroll" style={{ scrollPaddingLeft: COL_WIDTHS.exercise }} onFocus={keepFocusClearOfStickyColumn}>
           <div className="meso-table-days" style={{ width: tableWidthFor(grid.weeks.length) }}>
         <SortableContext items={grid.days.map((d) => tableDayDragId(d.session_slot_id))} strategy={verticalListSortingStrategy}>
           {grid.days.map((day) => (
@@ -1491,6 +1575,7 @@ export function MesoTable(props: MesoTableProps) {
         </SortableContext>
           </div>
         </div>
+        <ScrollMirror scrollerRef={scrollerRef} />
         <DragOverlay>
           {activeDragLabel ? <div className="meso-table-drag-ghost">{activeDragLabel}</div> : null}
         </DragOverlay>

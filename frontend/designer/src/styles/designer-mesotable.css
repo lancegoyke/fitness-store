@@ -108,6 +108,26 @@
   overflow-x: auto;
   container-type: inline-size;
 }
+/* A horizontal scrollbar pinned to the canvas's bottom edge while the table is
+   on screen (#701), mirroring .meso-table-scroll's scrollLeft. In flow right
+   under the scroller, so it never covers the last row or the add bar: at the
+   table's end it sits in its natural slot (and hides: the real bar is in view). */
+.meso-table-scroll-end {
+  height: 0;
+}
+.meso-table-scrollbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  height: 16px;
+  background: var(--bg);
+  border-top: 1px solid var(--line-2);
+}
+.meso-table-scrollbar[hidden] {
+  display: none;
+}
 /* The shared canvas: as wide as the table (explicit inline width), never
    narrower than the viewport so a short table still fills its card. */
 .meso-table-days {

@@ -2171,4 +2171,17 @@ describe("shared horizontal scroll", () => {
     expect(scrollers[0]!.querySelectorAll("table.meso-table")).toHaveLength(2);
     expect(scrollers[0]!.querySelectorAll(".meso-table-day")).toHaveLength(2);
   });
+
+  // #701: a mirror scrollbar pinned under the scroller; hidden from assistive tech
+  // (the real scroller keeps keyboard/focus behaviour) and hidden until the table
+  // overflows (jsdom has no layout, so it never does here).
+  it("renders one aria-hidden mirror strip right after the shared scroller", () => {
+    const { container } = render(<MesoTable {...baseProps({ grid: grid({ days: [day({ session_slot_id: 1 })] }) })} />);
+    const strips = container.querySelectorAll('[data-testid="meso-table-scrollbar"]');
+    expect(strips).toHaveLength(1);
+    const strip = strips[0] as HTMLElement;
+    expect(strip.getAttribute("aria-hidden")).toBe("true");
+    expect(strip.hidden).toBe(true);
+    expect(strip.previousElementSibling?.previousElementSibling).toBe(container.querySelector(".meso-table-scroll"));
+  });
 });

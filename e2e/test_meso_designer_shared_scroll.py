@@ -32,6 +32,8 @@ SCROLLERS_JS = """() => {
   const out = [];
   for (const el of document.querySelectorAll('[data-testid="meso-table-view"] *')) {
     const ox = getComputedStyle(el).overflowX;
+    // The pinned mirror strip (#701) scrolls by design; it is aria-hidden.
+    if (el.closest('[aria-hidden="true"]')) continue;
     if ((ox === 'auto' || ox === 'scroll') && el.scrollWidth > el.clientWidth + 1) {
       out.push(el.className || el.tagName);
     }
@@ -394,3 +396,128 @@ def test_screenshot_scrolled_to_the_end(page, live_server, login, block_plan, sh
     _set_scroll(page, g["max"])
     _assert_aligned(page, "1440x4 max")
     shot("01-scrolled-to-max", viewport_id="desktop")
+
+
+# --- #701: a scrollbar the coach can reach from Day 1 ------------------------
+
+MIRROR = '[data-testid="meso-table-scrollbar"]'
+
+CANVAS_JS = """() => {
+  const body = document.querySelector('.meso-canvas-body').getBoundingClientRect();
+  const sc = document.querySelector('.meso-table-scroll');
+  const scr = sc.getBoundingClientRect();
+  const m = document.querySelector('[data-testid="meso-table-scrollbar"]');
+  const mr = m.getBoundingClientRect();
+  const lastBar = [...document.querySelectorAll('.meso-table-add-row-group')].pop()
+    .getBoundingClientRect();
+  return {
+    bodyBottom: body.bottom,
+    scrollerBottom: scr.bottom,
+    mirrorTop: mr.top, mirrorBottom: mr.bottom,
+    mirrorVisibility: getComputedStyle(m).visibility,
+    mirrorDisplay: getComputedStyle(m).display,
+    mirrorScrollLeft: m.scrollLeft,
+    mirrorMax: m.scrollWidth - m.clientWidth,
+    scrollLeft: sc.scrollLeft,
+    max: sc.scrollWidth - sc.clientWidth,
+    lastAddBarBottom: lastBar.bottom,
+  };
+}"""
+
+
+def _tall_setup(page, live_server, login, plan, width, weeks, days=4):
+    """A block taller than the viewport, parked at Day 1 (scrollbar below the fold)."""
+    _setup(page, live_server, login, plan, width, weeks)
+    while page.locator('[data-testid^="meso-day-table-"]').count() < days:
+        before = page.locator('[data-testid^="meso-day-table-"]').count()
+        page.get_by_test_id("add-day").click()
+        expect(page.locator('[data-testid^="meso-day-table-"]')).to_have_count(
+            before + 1
+        )
+    page.evaluate("document.querySelector('.meso-canvas-body').scrollTop = 0")
+    page.wait_for_timeout(150)
+    c = page.evaluate(CANVAS_JS)
+    assert c["scrollerBottom"] > c["bodyBottom"] + 20, (
+        f"precondition: the table's own scrollbar must be below the fold: {c}"
+    )
+    return c
+
+
+@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
+@pytest.mark.parametrize("width", [1280, 1440])
+def test_a_pinned_scrollbar_is_reachable_from_day_one(
+    page, live_server, login, block_plan, width
+):
+    _tall_setup(page, live_server, login, block_plan.plan, width, 6)
+    mirror = page.locator(MIRROR)
+    expect(mirror).to_be_visible()
+    c = page.evaluate(CANVAS_JS)
+    # Pinned to the bottom edge of the viewport/canvas, over the content.
+    assert abs(c["mirrorBottom"] - c["bodyBottom"]) <= 2, c
+    assert c["mirrorMax"] == pytest.approx(c["max"], abs=1)
+
+    # Dragging the pinned strip (its scrollLeft) moves every day's `Wk N` together.
+    page.evaluate(
+        "(l) => { document.querySelector('[data-testid=\"meso-table-scrollbar\"]').scrollLeft = l; }",
+        c["max"] / 2,
+    )
+    page.wait_for_timeout(100)
+    g = _assert_aligned(page, f"{width} via the pinned strip")
+    assert g["scrollLeft"] == pytest.approx(c["max"] / 2, abs=1)
+    page.evaluate(
+        "(l) => { document.querySelector('[data-testid=\"meso-table-scrollbar\"]').scrollLeft = l; }",
+        c["max"],
+    )
+    page.wait_for_timeout(100)
+    g = _assert_aligned(page, f"{width} via the pinned strip, max")
+    assert g["scrollLeft"] == pytest.approx(c["max"], abs=1)
+
+
+@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
+@pytest.mark.parametrize("width", [1280, 1440])
+def test_scrolling_the_table_moves_the_pinned_scrollbar(
+    page, live_server, login, block_plan, width
+):
+    c = _tall_setup(page, live_server, login, block_plan.plan, width, 6)
+    _set_scroll(page, c["max"] / 3)
+    m = page.evaluate(CANVAS_JS)
+    assert m["mirrorScrollLeft"] == pytest.approx(c["max"] / 3, abs=1)
+    # Shift+wheel over Day 1 (what a coach with a plain mouse can also do).
+    box = page.locator('[data-testid^="meso-day-table-"]').first.bounding_box()
+    page.mouse.move(box["x"] + 600, box["y"] + 60)
+    page.mouse.wheel(150, 0)
+    page.wait_for_timeout(300)
+    m = page.evaluate(CANVAS_JS)
+    assert m["scrollLeft"] > c["max"] / 3 + 20, m
+    assert m["mirrorScrollLeft"] == pytest.approx(m["scrollLeft"], abs=1)
+    # And back to 0 through the table: the strip follows (no stuck echo).
+    _set_scroll(page, 0)
+    assert page.evaluate(CANVAS_JS)["mirrorScrollLeft"] == 0
+
+
+@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
+def test_the_pinned_scrollbar_hides_when_the_tables_own_is_in_view(
+    page, live_server, login, block_plan
+):
+    _tall_setup(page, live_server, login, block_plan.plan, 1280, 6)
+    expect(page.locator(MIRROR)).to_be_visible()
+    page.evaluate("document.querySelector('.meso-canvas-body').scrollTop = 1e6")
+    page.wait_for_timeout(200)
+    c = page.evaluate(CANVAS_JS)
+    assert c["scrollerBottom"] <= c["bodyBottom"] + 1, c  # the real bar is on screen
+    expect(page.locator(MIRROR)).to_be_hidden()
+    # It never covers the last day's "+ Add exercise" bar: its slot is under it.
+    assert c["lastAddBarBottom"] <= c["scrollerBottom"] <= c["mirrorTop"] + 1, c
+
+
+@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)
+def test_no_pinned_scrollbar_when_the_table_does_not_overflow(
+    page, live_server, login, block_plan
+):
+    # The fixture's 3 weeks fit at 1512 wide: nothing to scroll, nothing to pin.
+    login(block_plan.plan.coach)
+    page.set_viewport_size({"width": 1512, "height": 800})
+    _open_designer(page, live_server, block_plan.plan)
+    assert page.evaluate(SCROLLERS_JS)["scrollable"] == []
+    expect(page.locator(MIRROR)).to_be_hidden()
+    assert page.evaluate(CANVAS_JS)["mirrorDisplay"] == "none"
