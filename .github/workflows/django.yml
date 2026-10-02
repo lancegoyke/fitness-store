@@ -243,4 +243,5 @@ jobs:
             app/store_project/meso/tests/test_hard_delete_lock_order_postgres.py \
             app/store_project/meso/tests/test_sandbox_cap_postgres.py \
             app/store_project/meso/tests/test_sandbox_reap_race_postgres.py \
-            app/store_project/meso/tests/test_decline_race_postgres.py
+            app/store_project/meso/tests/test_decline_race_postgres.py \
+            app/store_project/meso/tests/test_migration_0060_drop_reclaimed_column.py
