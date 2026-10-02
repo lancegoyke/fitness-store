@@ -540,7 +540,7 @@ def serialize_new_record(record):
     }
 
 
-def set_ordinals(logged_sets):
+def set_ordinals(logged_sets, *, by_lift=False):
     """``{pk: n}`` — each set's place (1..n) among its exercise's sets in this list.
 
     A typed set's stored ``set_number`` is its cell LINE number, and a coach
@@ -550,12 +550,25 @@ def set_ordinals(logged_sets):
     and ordered by ``(set_number, pk)``. Display only — the stored
     ``set_number`` is unchanged, and so is every write path. Lives here, not
     in ``presenters``, because ``presenters`` imports this module.
+
+    ``by_lift`` (#716) also splits a row's sets by their stamped lift, for the
+    one surface that LABELS sets by lift rather than by row (the agent's recent
+    logs): after a mid-session swap the first Front Squat set is "set 1", not
+    "set 3". Plan-shaped surfaces keep the per-row numbering.
     """
     by_slot = defaultdict(list)
     for s in logged_sets:
         slot_id = s.anchor_slot_id
-        if slot_id is not None:
-            by_slot[slot_id].append(s)
+        if slot_id is None:
+            continue
+        key = slot_id
+        if by_lift:
+            lift = s.lift
+            key = (
+                slot_id,
+                _exercise_key(lift.exercise_id, lift.name) if lift else None,
+            )
+        by_slot[key].append(s)
     ordinals = {}
     for group in by_slot.values():
         ranked = sorted(group, key=lambda s: (s.set_number, s.pk or 0))
@@ -598,7 +611,7 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
         # "set" is the ordinal among the log's sets for that exercise, not the
         # stored line-numbered ``set_number`` (#691) — computed before the cap.
         all_sets = list(log.sets.all())
-        ordinals = set_ordinals(all_sets)
+        ordinals = set_ordinals(all_sets, by_lift=True)
         summary.append(
             {
                 "date": log.date.isoformat() if log.date else None,
