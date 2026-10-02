@@ -11,22 +11,30 @@ Front Squat. Sets are logged the production way (``athlete_cell_write``).
 """
 
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
 from django.urls import reverse
 from django.utils import timezone
 
+from store_project.exercises.factories import ExerciseFactory
 from store_project.meso import one_rm as meso_one_rm
 from store_project.meso import personal_records as meso_prs
+from store_project.meso import presenters
 from store_project.meso import serializers
+from store_project.meso import settle
 from store_project.meso.agent.apply import _apply_swap
 from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
+from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
+from store_project.meso.lift_identity import Lift
 from store_project.meso.models import AthleteOneRm
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
@@ -65,6 +73,7 @@ def seed_708():
         plan=plan,
         d1w1=d1w1,
         d1w2=d1w2,
+        d2w1=d2w1,
         row1_w1=row1_w1,
         row1_w2=row1_w2,
         row2_w1=row2_w1,
@@ -238,3 +247,316 @@ class TestCoachRename:
         logged_week1(client, s)
         rename(client, s)
         assert_recent(s)
+
+
+def settle_now(log):
+    """Backdate ``log`` past the quiet window and run the sweep's per-log step."""
+    SessionLog.objects.filter(pk=log.pk).update(
+        last_activity_at=timezone.now() - timedelta(hours=48)
+    )
+    assert settle.settle_log(log.pk, cutoff=timezone.now() - timedelta(hours=24))
+
+
+def the_log(session, athlete):
+    return SessionLog.objects.get(session=session, athlete=athlete)
+
+
+class TestSettleAndResults:
+    """Red on main: settle and the results PR flag read the slot's NEW name."""
+
+    def test_settle_after_swap_refreshes_the_performed_lift(self, client):
+        """A never-finished log that settles after a swap credited Front Squat."""
+        s = seed_708()
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "140 x 5").status_code == 200
+        assert the_log(s.d1w1, s.athlete).status == SessionLog.Status.PENDING
+        swap(s)
+        settle_now(the_log(s.d1w1, s.athlete))
+        got = one_rms(s)
+        assert "name:front squat" not in got, (
+            f"settle refreshed the swapped slot's key with back-squat numbers: {got}"
+        )
+        assert got.get("name:back squat") == pytest.approx(BACK, abs=0.05), got
+
+    def test_results_pr_flag_not_on_swapped_row(self, client):
+        """The Back Squat PR was flagged on the row that now reads Front Squat."""
+        s = seed_708()
+        logged_week1(client, s)  # the first-ever log: a PR
+        swap(s)
+        results = presenters.session_results(s.d1w1)
+        rows = {r["name"]: r for r in results["rows"]}
+        assert rows["Front Squat"]["pr"] is False, rows["Front Squat"]
+        assert [r["name"] for r in results["summary"]["new_records"]] == [
+            "Back Squat"
+        ], results["summary"]["new_records"]
+
+
+# --- guards and write paths (#708 stamping) --------------------------------
+
+
+def link_slot(cell, exercise):
+    slot = cell.exercise_slot
+    slot.exercise = exercise
+    slot.save(update_fields=["exercise"])
+
+
+def coach_patch(client, s, cell, payload):
+    client.force_login(s.coach)
+    resp = client.post(
+        reverse(
+            "meso:api_prescription_patch",
+            kwargs={"plan_id": s.plan.pk, "pk": cell.pk},
+        ),
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200, resp.content
+    client.force_login(s.athlete)
+
+
+def link_via_coach(client, s, ex):
+    coach_patch(client, s, s.row1_w1, {"name": "Back Squat", "exercise_id": str(ex.pk)})
+
+
+def back_squat_records(s):
+    return {k: r for k, r in prs(s).items() if r.name.lower() == "back squat"}
+
+
+class TestCatalogLinkIsNotASwap:
+    """Linking free-text "Back Squat" to the catalog keeps the athlete's history."""
+
+    def test_history_follows_the_link(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        logged_week1(client, s)
+        link_via_coach(client, s, ex)
+        linked_w2 = fresh(s.row1_w2)
+        assert linked_w2.exercise_id == ex.pk
+
+        # Before anything is logged on the linked row: one record, the history.
+        records = back_squat_records(s)
+        assert len(records) == 1, records
+        assert next(iter(records.values())).e1rm == pytest.approx(BACK, abs=0.05)
+
+        labels = serializers.last_logged_labels(s.plan, [linked_w2], Unit.KILOGRAMS)
+        assert "140" in labels.get(linked_w2.pk, ""), labels
+
+        refresh(s, [linked_w2])
+        assert one_rms(s).get(f"id:{ex.pk}") == pytest.approx(BACK, abs=0.05), one_rms(
+            s
+        )
+
+        # The first log performed AS the linked lift folds into the same record.
+        assert type_line(client, s.d1w2, s.row1_w2, "100 x 5").status_code == 200
+        records = back_squat_records(s)
+        assert list(records) == [f"id:{ex.pk}"], list(records)
+        assert records[f"id:{ex.pk}"].e1rm == pytest.approx(BACK, abs=0.05)
+        assert meso_prs.new_records_in(the_log(s.d1w2, s.athlete)) == []
+
+    def test_results_flag_survives_the_link(self, client):
+        """Week 1 was the athlete's first Back Squat — still a PR once linked."""
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        logged_week1(client, s)
+        link_via_coach(client, s, ex)
+        rows = presenters.session_results(s.d1w1)["rows"]
+        assert next(r for r in rows if r["name"] == "Back Squat")["pr"] is True
+
+    def test_pending_log_that_settles_after_the_link_folds(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "140 x 5").status_code == 200
+        link_via_coach(client, s, ex)
+        settle_now(the_log(s.d1w1, s.athlete))
+        assert one_rms(s).get(f"id:{ex.pk}") == pytest.approx(BACK, abs=0.05), one_rms(
+            s
+        )
+
+    def test_unlinking_keeps_history(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        link_slot(s.row1_w1, ex)
+        logged_week1(client, s)
+        assert LoggedSet.objects.get().exercise_id == ex.pk
+        coach_patch(client, s, s.row1_w1, {"name": "Back Squat", "exercise_id": None})
+        free_w2 = fresh(s.row1_w2)
+        assert free_w2.exercise_id is None
+
+        labels = serializers.last_logged_labels(s.plan, [free_w2], Unit.KILOGRAMS)
+        assert "140" in labels.get(free_w2.pk, ""), labels
+        records = back_squat_records(s)
+        assert len(records) == 1, records
+        assert next(iter(records.values())).e1rm == pytest.approx(BACK, abs=0.05)
+        refresh(s, [free_w2])
+        assert one_rms(s).get("name:back squat") == pytest.approx(BACK, abs=0.05)
+
+
+class TestSameNameDifferentCatalogRows:
+    def test_never_merge(self, client):
+        s = seed_708()
+        x = ExerciseFactory(name="Back Squat", slug="back-squat-x")
+        y = ExerciseFactory(name="Back Squat", slug="back-squat-y")
+        link_slot(s.row1_w1, x)
+        link_slot(s.row2_w1, y)
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "140 x 5").status_code == 200
+        assert type_line(client, s.d2w1, s.row2_w1, "100 x 5").status_code == 200
+        finish(s.d1w1, s.athlete)
+        finish(s.d2w1, s.athlete)
+
+        records = prs(s)
+        assert set(records) == {f"id:{x.pk}", f"id:{y.pk}"}, list(records)
+        assert records[f"id:{x.pk}"].e1rm == pytest.approx(BACK, abs=0.05)
+        assert records[f"id:{y.pk}"].e1rm == pytest.approx(100 * (1 + 5 / 30), abs=0.05)
+
+        only_x = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(x.pk, "Back Squat")], unit=Unit.KILOGRAMS
+        )
+        assert only_x == {f"id:{x.pk}": pytest.approx(BACK, abs=0.05)}
+        only_y = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(y.pk, "Back Squat")], unit=Unit.KILOGRAMS
+        )
+        assert only_y == {f"id:{y.pk}": pytest.approx(100 * (1 + 5 / 30), abs=0.05)}
+
+        # Documented rule: a free-text target matches every same-named lift.
+        free = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(None, "Back Squat")], unit=Unit.KILOGRAMS
+        )
+        assert free == {"name:back squat": pytest.approx(BACK, abs=0.05)}
+
+    def test_results_pr_flag_is_per_catalog_row(self, client):
+        """Y's first-ever record must not flag X's row that merely shares its name."""
+        s = seed_708()
+        x = ExerciseFactory(name="Back Squat", slug="back-squat-x")
+        y = ExerciseFactory(name="Back Squat", slug="back-squat-y")
+        link_slot(s.row1_w1, x)
+        link_slot(s.row2_w1, x)
+        row_y = presc(s.d1w1, name="Back Squat", order=1, text="3 x 5", exercise=y)
+        client.force_login(s.athlete)
+        # An earlier DONE session sets X's best (140 x 5) ...
+        assert type_line(client, s.d2w1, s.row2_w1, "140 x 5").status_code == 200
+        finish(s.d2w1, s.athlete)
+        # ... so today X (100 x 5) is no record, while Y (100 x 5) is its first.
+        assert type_line(client, s.d1w1, s.row1_w1, "100 x 5").status_code == 200
+        assert type_line(client, s.d1w1, row_y, "100 x 5").status_code == 200
+        finish(s.d1w1, s.athlete)
+        rows = presenters.session_results(s.d1w1)["rows"]
+        flags = [r["pr"] for r in rows]
+        assert flags == [False, True], flags
+
+
+class TestNullStampFallback:
+    def test_unstamped_row_reads_as_the_slots_current_identity(self, client):
+        s = seed_708()
+        logged_week1(client, s)
+        LoggedSet.objects.update(exercise=None, exercise_name=None)  # old-code row
+        swap(s)
+        got = prs(s)
+        assert set(got) == {"name:front squat"}, list(got)
+        recent = serializers.serialize_recent_logs(s.plan)
+        assert {st["exercise"] for lg in recent for st in lg["sets"]} == {"Front Squat"}
+        ls = LoggedSet.objects.select_related(
+            "exercise_slot", "prescription__exercise_slot"
+        ).get()
+        assert ls.lift == Lift(None, "Front Squat")
+
+
+class TestStampWritePaths:
+    def test_typed_path_stamps_name_and_catalog_fk(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        link_slot(s.row1_w1, ex)
+        logged_week1(client, s)
+        ls = LoggedSet.objects.get()
+        assert (ls.exercise_id, ls.exercise_name) == (ex.pk, "Back Squat")
+        assert ls.lift == Lift(ex.pk, "Back Squat")
+
+    def test_typed_path_stamps_free_text_row(self, client):
+        s = seed_708()
+        logged_week1(client, s)
+        ls = LoggedSet.objects.get()
+        assert (ls.exercise_id, ls.exercise_name) == (None, "Back Squat")
+
+    def _log(self, s, cell=None):
+        return SessionLogFactory(session=s.d1w1, athlete=s.athlete)
+
+    def test_create_stamps_on_insert(self):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        link_slot(s.row1_w1, ex)
+        ls = LoggedSetFactory(session_log=self._log(s), prescription=s.row1_w1)
+        ls.refresh_from_db()
+        assert (ls.exercise_id, ls.exercise_name) == (ex.pk, "Back Squat")
+        bare = LoggedSet.objects.create(
+            session_log=ls.session_log,
+            prescription=s.row2_w1,
+            set_number=9,
+            reps="5",
+            load="100",
+        )
+        bare.refresh_from_db()
+        assert (bare.exercise_id, bare.exercise_name) == (None, "Back Squat")
+
+    def test_resave_after_rename_does_not_restamp(self):
+        s = seed_708()
+        ls = LoggedSetFactory(session_log=self._log(s), prescription=s.row1_w1)
+        swap(s)
+        ls.reps = "8"
+        ls.save()
+        ls.refresh_from_db()
+        assert ls.exercise_name == "Back Squat"
+        ls.reps = "9"
+        ls.save(update_fields=["reps"])
+        ls.refresh_from_db()
+        assert (ls.reps, ls.exercise_name) == ("9", "Back Squat")
+
+    def test_repointing_the_prescription_restamps(self):
+        s = seed_708()
+        ex = ExerciseFactory(name="Deadlift", slug="deadlift")
+        row2_slot = s.row2_w1.exercise_slot
+        row2_slot.name, row2_slot.exercise = "Deadlift", ex
+        row2_slot.save(update_fields=["name", "exercise"])
+        ls = LoggedSetFactory(session_log=self._log(s), prescription=s.row1_w1)
+        ls.prescription = s.row2_w1
+        ls.save()
+        ls.refresh_from_db()
+        assert ls.exercise_slot_id == row2_slot.pk
+        assert (ls.exercise_id, ls.exercise_name) == (ex.pk, "Deadlift")
+
+    def test_repointing_with_update_fields_adds_the_stamp_fields(self):
+        s = seed_708()
+        row2_slot = s.row2_w1.exercise_slot
+        row2_slot.name = "Deadlift"
+        row2_slot.save(update_fields=["name"])
+        ls = LoggedSetFactory(session_log=self._log(s), prescription=s.row1_w1)
+        ls.prescription = s.row2_w1
+        ls.save(update_fields=["prescription"])
+        ls.refresh_from_db()
+        assert ls.exercise_slot_id == row2_slot.pk
+        assert ls.exercise_name == "Deadlift"
+
+    def test_empty_update_fields_writes_nothing(self):
+        s = seed_708()
+        ls = LoggedSetFactory(session_log=self._log(s), prescription=s.row1_w1)
+        ls.reps = "99"
+        ls.exercise_name = "Nonsense"
+        ls.save(update_fields=[])
+        ls.refresh_from_db()
+        assert (ls.reps, ls.exercise_name) == ("10", "Back Squat")
+
+    def test_seed_meso_demo_bulk_create_stamps(self):
+        from store_project.meso.management.commands import seed_meso_demo
+
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        link_slot(s.row1_w1, ex)
+        rows = seed_meso_demo.log_typed_sets(
+            self._log(s), [(s.row1_w1, ["140 x 5", "130 x 5"])]
+        )
+        assert len(rows) == 2
+        stored = list(LoggedSet.objects.all())
+        assert len(stored) == 2
+        assert {(r.exercise_id, r.exercise_name) for r in stored} == {
+            (ex.pk, "Back Squat")
+        }
