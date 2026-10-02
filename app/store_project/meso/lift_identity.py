@@ -24,8 +24,11 @@ name (a staff rename of the catalog entry between two picks, an admin edit).
 It is still one lift, keyed ``id:<pk>`` alone, so an FK target is matched under
 EVERY name its FK carries in the history being searched, as well as its own:
 a free-text "Squat" set counts toward catalog lift X once X has been stamped
-"Squat" anywhere in that history, whichever of X's names the target shows. That
-keeps the ``id:`` estimate from depending on which row asked.
+"Squat" anywhere in that history, whichever of X's names the target shows.
+The persisted estimate (``one_rm.derive_one_rm_values``) goes one step
+further and passes X's names explicitly — its stamps plus the athlete's live
+rows linked to X — so a refresh target's own name (which may come from a
+deleted set's stamp) never decides what ``id:<pk>`` holds.
 
 The rule isn't transitive (a name-only set matches two different FKs that share
 its name), so it can't be a dict key. Targets are matched against an index
@@ -92,17 +95,19 @@ class LiftIndex:
         """Every normalized name catalog lift ``exercise_id`` carries here."""
         return {norm_name(entry[1].name) for entry in self._by_fk.get(exercise_id, [])}
 
-    def matching(self, target):
+    def matching(self, target, names=None):
         """Items whose lift is :func:`same_lift` as ``target``, in input order.
 
         An FK target is tried under each of its names in this index too (see
-        the module docstring). The buckets only narrow the search (every match
-        shares the target's FK or one of those names); :func:`same_lift`
-        decides, so the rule lives in one place.
+        the module docstring), or, when ``names`` is given, under exactly
+        those normalized names instead. The buckets only narrow the search
+        (every match shares the target's FK or one of those names);
+        :func:`same_lift` decides, so the rule lives in one place.
         """
-        names = {norm_name(target.name)}
-        if target.exercise_id is not None:
-            names |= self.names_of(target.exercise_id)
+        if target.exercise_id is None:
+            names = {norm_name(target.name)}
+        elif names is None:
+            names = {norm_name(target.name)} | self.names_of(target.exercise_id)
         aliases = [Lift(target.exercise_id, name) for name in names]
         candidates = {}
         for name in names:

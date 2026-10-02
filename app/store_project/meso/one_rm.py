@@ -30,12 +30,16 @@ is what eventually promotes a live best into this module's confirmed record.
 """
 
 import math
+from collections import defaultdict
 from decimal import Decimal
+
+from django.utils import timezone
 
 from . import models
 from .lift_identity import Lift
 from .lift_identity import LiftIndex
 from .lift_identity import lift_of
+from .lift_identity import norm_name
 from .lift_identity import representatives
 from .serializers import _exercise_key
 from .serializers import _num
@@ -108,10 +112,18 @@ def derive_one_rm_values(athlete, *, lifts=None, unit=None):
             session_log__session__week__mesocycle__plan__unit=unit
         )
     estimates = []
+    # Every name each catalog lift carries for this athlete (#708): its stamps
+    # here (usable estimate or not) and, below, the athlete's live rows linked
+    # to it. An FK target is matched under exactly these, never under the
+    # target's own name alone, so ``id:<pk>`` holds one value whichever row —
+    # or a deleted set's leftover stamp — asked for the refresh.
+    fk_names = defaultdict(set)
     for ls in logged_sets:
         lift = ls.lift
         if lift is None:
             continue
+        if lift.exercise_id is not None:
+            fk_names[lift.exercise_id].add(norm_name(lift.name))
         est = epley_one_rm(ls.load, ls.reps)
         if est is None:
             continue
@@ -120,10 +132,24 @@ def derive_one_rm_values(athlete, *, lifts=None, unit=None):
         targets = representatives(lift for lift, _ in estimates)
     else:
         targets = [lift_of(x) for x in lifts]
+    fks = {t.exercise_id for t in targets if t.exercise_id is not None}
+    if fks:
+        live_rows = models.ExerciseSlot.objects.filter(
+            exercise_id__in=fks,
+            deleted_at__isnull=True,
+            session_slot__mesocycle__plan__relationship__athlete=athlete,
+        ).values_list("exercise_id", "name")
+        for exercise_id, name in live_rows:
+            fk_names[exercise_id].add(norm_name(name))
     index = LiftIndex(estimates, lift=lambda e: e[0])
     best = {}
     for target in targets:
-        matched = index.matching(target)
+        matched = index.matching(
+            target,
+            names=fk_names.get(target.exercise_id, set())
+            if target.exercise_id is not None
+            else None,
+        )
         if not matched:
             continue
         value = max(est for _, est in matched)
@@ -235,8 +261,23 @@ def refresh_one_rms(athlete, lifts, unit):
         value = derived.get(key)
         quantized = _quantize(value) if value is not None else None
         stored = others.get(key)
-        if stored is not None and quantized is not None and quantized == stored.value:
-            # Another row, still what its logs support: no write, no lock.
+        if stored is not None:
+            # Another stored row (#708). Read without a lock above, so write it
+            # only if it is still the LOGGED value read then: a coach's manual
+            # estimate (or another refresh) that landed since must win, never
+            # be overwritten back to a logged one.
+            if quantized is not None and quantized == stored.value:
+                continue
+            still_ours = models.AthleteOneRm.objects.filter(
+                pk=stored.pk,
+                source=models.AthleteOneRm.Source.LOGGED,
+                value=stored.value,
+            )
+            if quantized is None or not (Decimal("0") < quantized <= _MAX_VALUE):
+                still_ours.delete()
+            else:
+                # ``update()`` skips ``auto_now``; keep ``updated_at`` honest.
+                still_ours.update(value=quantized, updated_at=timezone.now())
             continue
         if quantized is None or not (Decimal("0") < quantized <= _MAX_VALUE):
             # No usable same-unit estimate remains (the set was blanked / made

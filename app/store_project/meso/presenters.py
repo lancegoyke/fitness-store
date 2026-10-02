@@ -1384,8 +1384,12 @@ def session_results(session):
     new_records = new_records_in(log) if log is not None else []
     for row, p in zip(rows, prescriptions):
         target = Lift(p.exercise_id, p.name)
+        # The record's representative OR its winning set's own stamp: a set
+        # folded into a catalog record by name still flags its own row.
         row["pr"] = any(
-            r.lift is not None and same_lift(r.lift, target) for r in new_records
+            lift is not None and same_lift(lift, target)
+            for r in new_records
+            for lift in (r.lift, r.performed_lift)
         )
 
     # Completion = logged sets / prescribed sets, from the same helper the

@@ -86,6 +86,9 @@ class PersonalRecord:
     logged_set_id: int
     session_log_id: int
     lift: Lift | None = None
+    # The winning set's own stamp; differs from ``lift`` (the record's
+    # representative) when the set was folded in by name.
+    performed_lift: Lift | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,7 @@ class NewRecord:
     load: str
     logged_set_id: int
     lift: Lift | None = None
+    performed_lift: Lift | None = None
 
 
 def _live_logged_sets(athlete, *, unit):
@@ -197,6 +201,7 @@ def _best_per_lift(performed, targets=None):
                     logged_set_id=ps.logged_set_id,
                     session_log_id=ps.session_log_id,
                     lift=target,
+                    performed_lift=ps.lift,
                 )
     return best
 
@@ -329,6 +334,7 @@ def new_records_in(session_log):
                     load=record.load,
                     logged_set_id=record.logged_set_id,
                     lift=record.lift,
+                    performed_lift=record.performed_lift,
                 )
             )
     return records

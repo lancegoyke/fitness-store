@@ -3184,9 +3184,18 @@ class LoggedSet(models.Model):
                 self.exercise_slot_id = resolved_slot_id
                 if update_fields:
                     kwargs["update_fields"] = set(update_fields) | {"exercise_slot"}
+        # Whether this save writes the anchor at all: a partial save that
+        # leaves both pointers out can't re-point the stored row, whatever the
+        # instance holds in memory.
+        writing = kwargs.get("update_fields")
+        anchor_written = writing is None or bool(
+            set(writing)
+            & {"exercise_slot", "exercise_slot_id", "prescription", "prescription_id"}
+        )
         if update_fields is None or update_fields:
             repointed = (
-                not self._state.adding
+                anchor_written
+                and not self._state.adding
                 and self.exercise_slot_id is not None
                 and self.exercise_slot_id != loaded_slot_id
                 and (
@@ -3194,7 +3203,10 @@ class LoggedSet(models.Model):
                     or self.prescription_id != loaded_prescription_id
                 )
             )
-            wants_stamp = self.exercise_name is None or repointed
+            wants_stamp = repointed or (
+                self.exercise_name is None
+                and (anchor_written or self.exercise_slot_id == loaded_slot_id)
+            )
             if wants_stamp and self.exercise_slot_id is not None:
                 stamp = (
                     ExerciseSlot.objects.using(db_alias)
@@ -3205,12 +3217,16 @@ class LoggedSet(models.Model):
                 if stamp is not None:
                     self.exercise_id, self.exercise_name = stamp
                     if kwargs.get("update_fields"):
+                        # A re-point writes the anchor with the stamp, so the
+                        # row never stores one slot's lift on another slot.
                         kwargs["update_fields"] = set(kwargs["update_fields"]) | {
                             "exercise",
                             "exercise_name",
+                            *(("exercise_slot",) if repointed else ()),
                         }
         super().save(*args, **kwargs)
-        self._loaded_anchor = (self.exercise_slot_id, self.prescription_id)
+        if anchor_written:
+            self._loaded_anchor = (self.exercise_slot_id, self.prescription_id)
 
     @classmethod
     def from_db(cls, db, field_names, values):
