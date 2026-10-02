@@ -159,7 +159,8 @@ export interface GridRow {
   exercise_slot_id: number;
   /** The block-shared row identity (a substitution is sub-line text now). */
   name: string;
-  exercise_id: number | null;
+  /** Exercise UUID (the catalog link), null when the name is free text. */
+  exercise_id: string | null;
   order: number;
   tags: unknown[];
   /** Per-exercise columns (Phase 2a, D2): Tempo / Rest / instructions. */

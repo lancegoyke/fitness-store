@@ -21,6 +21,7 @@
     {% if grid_data %}{{ grid_data|json_script:"meso-grid-data" }}{% endif %}
     {{ chat_thread|json_script:"meso-chat-thread" }}
     {{ designer_flags|json_script:"meso-designer-flags" }}
+    {{ exercise_suggestions|json_script:"meso-exercise-suggest" }}
     <span id="meso-csrf" data-token="{{ csrf_token }}" hidden></span>
 
     {% if messages %}

@@ -24,7 +24,7 @@ function grid(): MesoGrid {
           {
             exercise_slot_id: 101,
             name: "Back Squat",
-            exercise_id: 1,
+            exercise_id: "1",
             order: 0,
             tags: [],
             tempo: "",
@@ -47,7 +47,7 @@ function grid(): MesoGrid {
           {
             exercise_slot_id: 102,
             name: "Romanian Deadlift",
-            exercise_id: 2,
+            exercise_id: "2",
             order: 1,
             tags: [],
             tempo: "",
@@ -61,7 +61,7 @@ function grid(): MesoGrid {
           {
             exercise_slot_id: 103,
             name: "Leg Press",
-            exercise_id: 3,
+            exercise_id: "3",
             order: 2,
             tags: [],
             tempo: "",
@@ -75,7 +75,7 @@ function grid(): MesoGrid {
           {
             exercise_slot_id: 104,
             name: "Calf Raise",
-            exercise_id: 4,
+            exercise_id: "4",
             order: 3,
             tags: [],
             tempo: "",
@@ -89,7 +89,7 @@ function grid(): MesoGrid {
           {
             exercise_slot_id: 105,
             name: "Skipped Curl",
-            exercise_id: 5,
+            exercise_id: "5",
             order: 4,
             tags: [],
             tempo: "",
@@ -114,7 +114,7 @@ function grid(): MesoGrid {
           {
             exercise_slot_id: 201,
             name: "Bench Press",
-            exercise_id: 6,
+            exercise_id: "6",
             order: 0,
             tags: [],
             tempo: "",
@@ -139,7 +139,7 @@ function grid(): MesoGrid {
           {
             exercise_slot_id: 301,
             name: "Cable Curl",
-            exercise_id: 7,
+            exercise_id: "7",
             order: 0,
             tags: [],
             tempo: "",

@@ -2,6 +2,7 @@ import datetime
 import ipaddress
 import json
 import logging
+import uuid
 from urllib.parse import urlencode
 from urllib.parse import urlparse
 
@@ -46,6 +47,7 @@ from django.views.generic import TemplateView
 
 from store_project.analytics.events import EventName
 from store_project.analytics.track import track
+from store_project.exercises.models import Exercise
 from store_project.notifications.emails import send_athlete_waiting_email
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
@@ -118,6 +120,7 @@ from .personal_records import new_records_in
 from .serializers import current_week
 from .serializers import first_live_week
 from .serializers import serialize_chat_thread
+from .serializers import serialize_exercise_suggestions
 from .serializers import serialize_mesocycle_grid
 from .serializers import serialize_new_record
 from .serializers import serialize_plan
@@ -360,6 +363,9 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         # batches so the chat survives a reload (the JS hydrates ``messages``
         # from it, falling back to the greeting when empty).
         ctx["chat_thread"] = serialize_chat_thread(plan)
+        # Exercise-name suggestions for the row-name combobox: the catalog plus
+        # the names this coach already uses across their editable plans.
+        ctx["exercise_suggestions"] = serialize_exercise_suggestions(self.request.user)
         # Agent gate (S6 Phase 3, D4; Phase 5 metering): an active coach is
         # unlimited; a free coach gets a monthly allowance. The meter drives the
         # composer-vs-upgrade-CTA and the "N of M runs left" note; ``can_use_agent``
@@ -4664,10 +4670,23 @@ def _session_for_cell(cell):
     )
 
 
+_UNSET = object()
+
+
 @login_required
 @require_POST
 def prescription_patch(request, plan_id, pk):
-    """Patch one prescription cell (or a small batch of cells)."""
+    """Patch one prescription cell (or a small batch of cells).
+
+    ``exercise_id`` (optional) links the row's block-shared ``ExerciseSlot`` to
+    a catalog ``Exercise`` (a UUID string) or unlinks it (``null``). Present, it
+    wins and applies even when the name did not change (picking "Back Squat"
+    onto a row already typed "Back Squat" only links). ABSENT, a name change
+    unlinks — a free-text rename must not keep a stale catalog FK — and no name
+    change leaves the link alone. So an old client that only echoes ``name``
+    keeps working through a rolling deploy (it just unlinks on a rename). The
+    whole edit is ONE undo step, recorded only when something actually changes.
+    """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
@@ -4704,16 +4723,46 @@ def prescription_patch(request, plan_id, pk):
         if value != cell.name:
             name_edit = value
 
-    if updates or name_edit is not None:
+    # Catalog link: ``link_edit`` is the new ``exercise_id`` (``None`` = unlink)
+    # once we know it differs from the slot's current link; ``_UNSET`` = leave.
+    slot = cell.exercise_slot
+    link_edit = _UNSET
+    if "exercise_id" in payload:
+        raw = payload["exercise_id"]
+        if raw is None:
+            wanted = None
+        elif isinstance(raw, str):
+            try:
+                wanted = uuid.UUID(raw)
+            except ValueError:
+                return HttpResponseBadRequest(
+                    "exercise_id must be a UUID string or null."
+                )
+            if not Exercise.objects.filter(pk=wanted).exists():
+                return HttpResponseBadRequest("exercise_id is unknown.")
+        else:
+            return HttpResponseBadRequest("exercise_id must be a UUID string or null.")
+        if wanted != slot.exercise_id:
+            link_edit = wanted
+    elif name_edit is not None and slot.exercise_id is not None:
+        link_edit = None
+
+    if updates or name_edit is not None or link_edit is not _UNSET:
         with transaction.atomic():
             record_plan_action(plan, f"Edited {cell.name or 'exercise'}")
             if updates:
                 for field, value in updates.items():
                     setattr(cell, field, value)
                 cell.save(update_fields=list(updates))
+            slot_fields = []
             if name_edit is not None:
-                cell.exercise_slot.name = name_edit
-                cell.exercise_slot.save(update_fields=["name"])
+                slot.name = name_edit
+                slot_fields.append("name")
+            if link_edit is not _UNSET:
+                slot.exercise_id = link_edit
+                slot_fields.append("exercise")
+            if slot_fields:
+                slot.save(update_fields=slot_fields)
             _touch_plan(plan)
     # Row-level reply + refreshed history: this endpoint records an undo action
     # but doesn't re-serialize the plan, so without `history` the client's undo

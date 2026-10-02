@@ -18,7 +18,7 @@
 // to exercise useGridNav through the retired WeekGrid and are dropped, not
 // ported (verified: useTableNav.test.tsx's "focus restoration across a grid
 // swap" describe block already covers every tier those blocks pinned).
-import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DesignerRoot } from "./DesignerRoot";
 import type { MesoGrid } from "./lib/api";
@@ -79,7 +79,7 @@ function gridPayload(overrides: Record<string, unknown> = {}) {
           {
             exercise_slot_id: 9,
             name: "Squat",
-            exercise_id: 55,
+            exercise_id: "55",
             order: 0,
             tags: [],
             tempo: "",
@@ -166,7 +166,7 @@ describe("hydration: full payload", () => {
     expect(form).toHaveAttribute("action", "/meso/template/7/use/");
     expect(form).toHaveAttribute("method", "post");
     expect(form.querySelector('input[name="csrfmiddlewaretoken"]')).toHaveValue("tok123");
-    expect(screen.getByRole("combobox")).toHaveValue("4");
+    expect(within(form).getByRole("combobox")).toHaveValue("4");
 
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("start-for-client-form")).not.toBeInTheDocument();

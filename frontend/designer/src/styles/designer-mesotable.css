@@ -373,3 +373,46 @@
   border-color: var(--warn);
   color: var(--warn);
 }
+
+/* ---- Exercise-name suggestions (#608) -------------------------------------
+   The combobox popup under a row-name input. Portaled to <body> and
+   position: fixed (top/left/minWidth set inline from the input's rect), so the
+   table's overflow container and the sticky Exercise column can't clip it; the
+   z-index sits above the sticky column's. */
+.meso-suggest-list {
+  position: fixed;
+  z-index: 50;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+.meso-suggest-option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.meso-suggest-option:hover,
+.meso-suggest-option.is-active {
+  background: var(--rail);
+}
+.meso-suggest-option.is-active {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.meso-suggest-hint {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--dim);
+}

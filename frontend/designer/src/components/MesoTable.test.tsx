@@ -38,7 +38,7 @@ function row(overrides: Partial<GridRow> = {}): GridRow {
   return {
     exercise_slot_id: 9,
     name: "Squat",
-    exercise_id: 55,
+    exercise_id: "55",
     order: 0,
     tags: [],
     tempo: "",
@@ -857,6 +857,185 @@ describe("row rename", () => {
     await user.type(nameInput, "!");
     await user.tab();
     expect(onRenameExercise).toHaveBeenCalledWith(9, "Squat!");
+  });
+});
+
+// --- #608: exercise-name suggestions (combobox on the row-name input) -------
+describe("row name suggestions", () => {
+  const suggestions = {
+    catalog: [
+      { id: "cat-1", name: "Back Squat" },
+      { id: "cat-2", name: "Squat Jump" },
+    ],
+    mine: [{ name: "Box Squat", exercise_id: null }],
+  };
+  function setup(over: Parameters<typeof baseProps>[0] = {}) {
+    const props = baseProps({ exerciseSuggestions: suggestions, grid: grid({ days: [day({ rows: [row({ name: "Press", exercise_id: null })] })] }), ...over });
+    render(<MesoTable {...props} />);
+    return { props, input: screen.getByTestId("row-name-9") as HTMLInputElement };
+  }
+
+  it("is a closed combobox until a keystroke edits the value (not on focus)", async () => {
+    const user = userEvent.setup();
+    const { input } = setup();
+    expect(input).toHaveAttribute("role", "combobox");
+    expect(input).toHaveAttribute("aria-autocomplete", "list");
+    await user.click(input);
+    expect(input).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("shows options with hints and ARIA wiring as the coach types", async () => {
+    const user = userEvent.setup();
+    const { input } = setup();
+    await user.clear(input);
+    await user.type(input, "sq");
+    const list = screen.getByRole("listbox");
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(input).toHaveAttribute("aria-controls", list.id);
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+    const opts = screen.getAllByRole("option");
+    expect(opts.map((o) => o.textContent)).toEqual(["Box Squatyours", "Squat Jumpcatalog", "Back Squatcatalog"]);
+    expect(opts.every((o) => o.getAttribute("aria-selected") === "false")).toBe(true);
+  });
+
+  it("ArrowDown/ArrowUp move the highlight and do not move grid focus", async () => {
+    const user = userEvent.setup();
+    const { input } = setup({
+      grid: grid({ days: [day({ rows: [row({ name: "Press", exercise_id: null }), row({ exercise_slot_id: 10, name: "Row", cells: { "1": cell({ prescription_id: 101 }) } })] })] }),
+    });
+    await user.clear(input);
+    await user.type(input, "sq");
+    await user.keyboard("{ArrowDown}");
+    const opts = screen.getAllByRole("option");
+    expect(opts[0]).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveAttribute("aria-activedescendant", opts[0]!.id);
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveFocus();
+  });
+
+  it("with the list closed, ArrowDown still moves the grid", async () => {
+    const user = userEvent.setup();
+    const { input } = setup({
+      grid: grid({ days: [day({ rows: [row({ name: "Press", exercise_id: null }), row({ exercise_slot_id: 10, name: "Row", cells: { "1": cell({ prescription_id: 101 }) } })] })] }),
+    });
+    await user.click(input);
+    await user.keyboard("{ArrowDown}");
+    expect(input).not.toHaveFocus();
+  });
+
+  it("Enter with a highlight picks a catalog item: one call with name + id, stays in the input", async () => {
+    const user = userEvent.setup();
+    const { props, input } = setup();
+    await user.clear(input);
+    await user.type(input, "back");
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(props.onRenameExercise).toHaveBeenCalledTimes(1);
+    expect(props.onRenameExercise).toHaveBeenCalledWith(9, "Back Squat", "cat-1");
+    expect(input).toHaveValue("Back Squat");
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    // The blur that follows must not re-commit as a plain (unlinking) rename.
+    await user.tab();
+    expect(props.onRenameExercise).toHaveBeenCalledTimes(1);
+  });
+
+  it("picking one of the coach's own names sends its link explicitly, null included", async () => {
+    const user = userEvent.setup();
+    const { props, input } = setup();
+    await user.clear(input);
+    await user.type(input, "box");
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(props.onRenameExercise).toHaveBeenCalledWith(9, "Box Squat", null);
+  });
+
+  it("Tab with a highlight accepts then moves on", async () => {
+    const user = userEvent.setup();
+    const { props, input } = setup();
+    await user.clear(input);
+    await user.type(input, "back");
+    await user.keyboard("{ArrowDown}{Tab}");
+    expect(props.onRenameExercise).toHaveBeenCalledTimes(1);
+    expect(props.onRenameExercise).toHaveBeenCalledWith(9, "Back Squat", "cat-1");
+    expect(input).not.toHaveFocus();
+  });
+
+  it("Enter with nothing highlighted commits the typed text (2 args) and still navigates", async () => {
+    const user = userEvent.setup();
+    const { props, input } = setup({
+      grid: grid({ days: [day({ rows: [row({ name: "Press", exercise_id: null }), row({ exercise_slot_id: 10, name: "Row", cells: { "1": cell({ prescription_id: 101 }) } })] })] }),
+    });
+    await user.clear(input);
+    await user.type(input, "sq");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(props.onRenameExercise).toHaveBeenCalledTimes(1);
+    expect((props.onRenameExercise as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual([9, "sq"]);
+    expect(input).not.toHaveFocus();
+  });
+
+  it("typed rename blur commits with no link arg", async () => {
+    const user = userEvent.setup();
+    const { props, input } = setup();
+    await user.clear(input);
+    await user.type(input, "Pause Squat");
+    await user.tab();
+    expect((props.onRenameExercise as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual([9, "Pause Squat"]);
+  });
+
+  it("Escape closes the list only (draft kept); a second Escape reverts", async () => {
+    const user = userEvent.setup();
+    const { props, input } = setup();
+    await user.clear(input);
+    await user.type(input, "sq");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(input).toHaveValue("sq");
+    expect(input).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(input).toHaveValue("Press");
+    expect(props.onRenameExercise).not.toHaveBeenCalled();
+  });
+
+  it("clicking an option picks it without a blur-commit first", async () => {
+    const user = userEvent.setup();
+    const { props, input } = setup();
+    await user.clear(input);
+    await user.type(input, "sq");
+    await user.click(screen.getByRole("option", { name: /Back Squat/ }));
+    expect(props.onRenameExercise).toHaveBeenCalledTimes(1);
+    expect(props.onRenameExercise).toHaveBeenCalledWith(9, "Back Squat", "cat-1");
+  });
+
+  it("blur closes the list", async () => {
+    const user = userEvent.setup();
+    const { input } = setup();
+    await user.clear(input);
+    await user.type(input, "sq");
+    await user.tab();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("suggests names already in the grid (typed this session) under 'yours'", async () => {
+    const user = userEvent.setup();
+    setup({
+      exerciseSuggestions: undefined,
+      grid: grid({ days: [day({ rows: [row({ name: "Zercher Squat", exercise_id: null }), row({ exercise_slot_id: 10, name: "", cells: { "1": cell({ prescription_id: 101 }) } })] })] }),
+    });
+    const input = screen.getByTestId("row-name-10");
+    await user.type(input, "zer");
+    expect(screen.getByRole("option")).toHaveTextContent("Zercher Squatyours");
+  });
+
+  it("works from the placeholder row (empty value)", async () => {
+    const user = userEvent.setup();
+    const { input } = setup({ grid: grid({ days: [day({ rows: [row({ name: "New exercise", exercise_id: null })] })] }) });
+    expect(input).toHaveValue("");
+    await user.type(input, "back");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
   });
 });
 

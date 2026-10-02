@@ -58,7 +58,7 @@ function row(id: number, weekIds: number[], overrides: Partial<GridRow> = {}): G
   return {
     exercise_slot_id: id,
     name: `Ex ${id}`,
-    exercise_id: id + 1000,
+    exercise_id: String(id + 1000),
     order: 0,
     tags: [],
     tempo: "",

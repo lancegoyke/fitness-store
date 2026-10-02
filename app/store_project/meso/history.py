@@ -130,7 +130,9 @@ def serialize_plan_snapshot(plan):
             {
                 "pk": es.pk,
                 "session_slot_id": es.session_slot_id,
-                "exercise_id": es.exercise_id,
+                # Catalog pk is a UUID — stringify so the JSON snapshot stores;
+                # restore assigns the string straight back to the FK.
+                "exercise_id": str(es.exercise_id) if es.exercise_id else None,
                 "name": es.name,
                 "order": es.order,
                 "tags": list(es.tags or []),
