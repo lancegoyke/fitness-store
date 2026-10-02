@@ -2314,7 +2314,12 @@ class SessionLogQuerySet(models.QuerySet):
         the ``Session`` row lock and read ``newest_session_logs`` first, so the
         second of two racing athlete writes waits and then finds the first's
         log; this fallback covers writers that do NOT take that lock (admin,
-        seed/demo). The insert runs in its
+        seed/demo) when their row is already committed. It cannot cover one
+        still in flight: an admin add of the same pair, uncommitted while an
+        athlete's first write holds the ``Session`` lock, makes this INSERT
+        wait on the unique index while the admin's commit-time FK check waits
+        on that lock, and Postgres aborts one side with a deadlock error
+        (staff-only, same instant; no row is doubled or lost). The insert runs in its
         own savepoint so a lost race does not poison the caller's transaction,
         and the loser adopts the winner's row rather than raising or doubling.
         """
