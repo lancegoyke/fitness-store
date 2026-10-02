@@ -208,18 +208,6 @@ class TestLinkSessionCount:
         )
         assert adherence.link_session_count(rel) == 0
 
-    def test_duplicate_done_logs_count_the_session_once(self):
-        rel = CoachAthleteFactory()
-        week = delivered_week(rel, sessions=1, done=0)
-        session = week.sessions.first()
-        SessionLogFactory(
-            session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
-        )
-        SessionLogFactory(
-            session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
-        )
-        assert adherence.link_session_count(rel) == 1
-
 
 # -- recent_logs (unchanged — already fully date-less) ------------------------
 

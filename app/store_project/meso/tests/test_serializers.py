@@ -460,10 +460,17 @@ class TestLastLoggedColumn:
             when=date(2026, 6, 10),
             sets=[("6", "60", "7")],
         )
+        # The later log sits on another session's Box Squat: one log per
+        # (session, athlete) since #699.
+        wk3 = WeekFactory(mesocycle=s.meso, index=3)
+        wk3_session = day(wk3, day_number=1, name="Lower")
+        wk3_cell = presc(
+            wk3_session, name="Box Squat", order=0, sets="3", reps="6", load="65"
+        )
         self._log(
-            s.session,
+            wk3_session,
             s.athlete,
-            s.presc,
+            wk3_cell,
             when=date(2026, 6, 24),
             sets=[("6", "72.5", "7")],
         )

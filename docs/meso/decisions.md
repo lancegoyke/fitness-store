@@ -3183,8 +3183,10 @@ _(Append dated entries here as decisions land.)_
   coach later soft-deleted still counts toward every performance-history
   read; **case B doesn't** — a `LoggedSet` on a `SessionLog` that is not the
   newest for its `(session, athlete)` pair (`models.NEWEST_LOG_ORDER`,
-  `-created_at, -pk`) counts toward none. The newest log is chosen over ALL
-  the pair's logs regardless of status and the caller's status filter (DONE
+  `-created_at, -pk`) counts toward none. Since #699 the database allows
+  only one log per pair (`meso_sessionlog_one_per_athlete_session`), so case
+  B can only arise from legacy data; the ordering stays as a guard. The
+  newest log is chosen over ALL the pair's logs regardless of status and the caller's status filter (DONE
   etc.) applies on top, so a DONE-only read of a pair whose newest log is
   PENDING sees nothing for that pair; intended. The rule lives once, in
   `models._newest_log_pk_subquery`, exposed as

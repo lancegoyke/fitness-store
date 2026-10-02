@@ -321,29 +321,6 @@ class TestSessionLogStatus:
         log.refresh_from_db()
         assert log.status == SessionLog.Status.DONE
 
-    def test_cell_write_reuses_the_newest_existing_log(self, client):
-        # Mirrors athlete_log_session's ``-created_at`` newest-first lookup —
-        # a stray second log row (however it happened) must not fork a new,
-        # unrelated log with a fresh PENDING status.
-        s = seed()
-        first = SessionLog.objects.create(
-            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
-        )
-        newest = SessionLog.objects.create(
-            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
-        )
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-
-        assert (
-            SessionLog.objects.filter(session=s.session, athlete=s.athlete).count() == 2
-        )
-        cell = sub_cell(s.squat, 1)
-        row = LoggedSet.objects.get(source_line=cell)
-        assert row.session_log_id == newest.pk
-        first.refresh_from_db()
-        assert first.sets.count() == 0
-
 
 # -- optimistic PR toast (5a stage 4, plan §7) --------------------------------
 #
@@ -2170,14 +2147,17 @@ class TestASettledVerdictIsFixedInTime:
         )
         assert new_records_in(earlier), "the first log of a lift is a PR"
 
+        # A different session: one log per (session, athlete) since #699.
+        day2 = day(s.week, day_number=2, name="Lower 2", bias="Quad")
+        squat2 = presc(day2, name="Box Squat", order=0, sets="3", reps="6")
         later = SessionLog.objects.create(
-            session=s.session,
+            session=day2,
             athlete=s.athlete,
             status=SessionLog.Status.DONE,
             date=datetime.date(2026, 9, 8),
         )
         LoggedSet.objects.create(
-            session_log=later, prescription=s.squat, set_number=1, reps="5", load="150"
+            session_log=later, prescription=squat2, set_number=1, reps="5", load="150"
         )
 
         assert new_records_in(earlier), (

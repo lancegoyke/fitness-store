@@ -150,8 +150,11 @@ class TestDeriveOneRmValues:
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
         )
+        # Two DIFFERENT sessions: one log per (session, athlete) since #699.
+        day2 = day(session.week, day_number=2, name="Lower 2")
+        squat2 = build_presc(day2, order=0, name="Back Squat")
         log_session(athlete, session, [(squat, 1, "5", "100", "8")])  # → 116.67
-        log_session(athlete, session, [(squat, 1, "3", "110", "9")])  # → 121 (best)
+        log_session(athlete, day2, [(squat2, 1, "3", "110", "9")])  # → 121 (best)
         values = meso_one_rm.derive_one_rm_values(athlete)
         assert values == {"name:back squat": pytest.approx(121.0)}
 
@@ -240,7 +243,10 @@ class TestRefreshOneRms:
         )
         log_session(athlete, session, [(squat, 1, "1", "100", "8")])
         meso_one_rm.refresh_one_rms(athlete, [squat], plan.unit)
-        log_session(athlete, session, [(squat, 1, "3", "130", "9")])  # → 143
+        # A second session (one log per pair since #699).
+        day2 = day(session.week, day_number=2, name="Lower 2")
+        squat2 = build_presc(day2, order=0, name="Back Squat")
+        log_session(athlete, day2, [(squat2, 1, "3", "130", "9")])  # → 143
         meso_one_rm.refresh_one_rms(athlete, [squat], plan.unit)
         row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
         assert row.value == Decimal("143.00")
