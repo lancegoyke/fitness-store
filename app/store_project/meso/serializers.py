@@ -25,6 +25,8 @@ from django.urls import reverse
 
 from . import models
 from . import parsing
+from .lift_identity import Lift
+from .lift_identity import LiftIndex
 from .names import link_athlete_name
 
 
@@ -575,7 +577,7 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
         .filter(session__week__mesocycle__plan=plan, athlete=plan.athlete)
         .select_related("session")
         # #578 C1: one `Prefetch` joining both hops the anchor can resolve
-        # through, so `s.anchor_slot` below never fires an N+1 query either
+        # through, so `s.lift` (stamp, else the anchor slot fallback #708) never fires an N+1 query either
         # way — a plain `"sets__exercise_slot", "sets__prescription__exercise_slot"`
         # lookup would cost four prefetch queries instead of one: `sets`,
         # `sets__exercise_slot`, `sets__prescription`, and
@@ -603,9 +605,7 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
                 "status": log.status,
                 "sets": [
                     {
-                        "exercise": (
-                            s.anchor_slot.name if s.anchor_slot is not None else ""
-                        ),
+                        "exercise": s.lift.name if s.lift is not None else "",
                         "set": ordinals.get(s.pk, s.set_number),
                         "reps": s.reps,
                         "load": s.load,
@@ -700,10 +700,14 @@ def last_logged_labels(plan, prescriptions, unit):
     a partial session, not the athlete's last performance (the results screen
     treats it the same way). One query over the plan's logged sets — no per-row
     lookups; a lift the athlete has never logged is simply absent from the map.
+
+    Two sides (#708): the HISTORY side is each set's stamped ``LoggedSet.lift``;
+    the TARGET side is the prescription's CURRENT identity. They are matched
+    under ``lift_identity.same_lift``, so after a swap the new lift's "last
+    time" doesn't show what was performed as the old one.
     """
-    target_keys = {p.pk: _exercise_key(p.exercise_id, p.name) for p in prescriptions}
-    wanted = set(target_keys.values())
-    if not wanted:
+    targets = {p.pk: Lift(p.exercise_id, p.name) for p in prescriptions}
+    if not targets:
         return {}
     # `.anchored()` (#578 C1), not a bare `select_related("prescription")` —
     # admits a set whose `prescription` went NULL (a hard-deleted line-0
@@ -718,23 +722,24 @@ def last_logged_labels(plan, prescriptions, unit):
         .select_related("session_log")
         .order_by("-session_log__date", "-session_log__created_at", "set_number")
     )
-    # ``logged_sets`` is newest-log-first; the first log that mentions a lift is
-    # its most recent, and we collect only that log's sets for the lift.
-    best_log = {}
-    sets_by_key = defaultdict(list)
-    for ls in logged_sets:
-        slot = ls.anchor_slot
-        key = _exercise_key(slot.exercise_id, slot.name)
-        if key not in wanted:
-            continue
-        best_log.setdefault(key, ls.session_log_id)
-        if best_log[key] == ls.session_log_id:
-            sets_by_key[key].append(ls)
-    return {
-        pk: _summarize_last_sets(sets_by_key[key], unit)
-        for pk, key in target_keys.items()
-        if sets_by_key.get(key)
-    }
+    # ``logged_sets`` is newest-log-first; the first log that matches a lift is
+    # its most recent, and we collect only that log's matching sets.
+    index = LiftIndex(list(logged_sets), lift=lambda ls: ls.lift)
+    summaries = {}
+    result = {}
+    for pk, target in targets.items():
+        if target not in summaries:
+            matched = index.matching(target)
+            if matched:
+                newest = matched[0].session_log_id
+                summaries[target] = _summarize_last_sets(
+                    [ls for ls in matched if ls.session_log_id == newest], unit
+                )
+            else:
+                summaries[target] = None
+        if summaries[target] is not None:
+            result[pk] = summaries[target]
+    return result
 
 
 def current_week(plan, week=None):

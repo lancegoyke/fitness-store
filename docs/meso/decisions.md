@@ -14,6 +14,23 @@ How to read the status field:
 
 ---
 
+## Lift identity of logged sets (#708) — 2026-10-02
+
+- `LoggedSet` stamps the lift it was performed as (`exercise`, `exercise_name`)
+  at write time, like `unit` (#600). History reads (1RM, records, "last time",
+  agent recent logs) group by the stamp, so a swap or coach rename of the shared
+  slot changes the plan from then on and leaves past sets alone.
+- Match rule (`lift_identity.same_lift`): equal catalog FKs match; if either side
+  has no FK, case-folded names match; different FKs never match. A free-text
+  "Back Squat" later linked to the catalog "Back Squat" keeps its history.
+- `AthleteOneRm.key` stays the FK-first `key_str` of the target lift being
+  refreshed; the value is derived from every set matching that target. Free-text
+  history folds into `id:<pk>` on the first refresh of the linked lift.
+- NULL `exercise_name` = unstamped (old code writing mid-deploy). `LoggedSet.lift`
+  reads such a row through the anchor slot's live identity, permanently.
+- Accepted trade-off (Lance): fixing a typo in a free-text name after sets are
+  logged leaves those sets under the old spelling.
+
 ## Names and labels (#602)
 
 - `User.name` is a person's account name; unnamed users fall back to their email.

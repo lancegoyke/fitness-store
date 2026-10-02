@@ -71,7 +71,6 @@ from store_project.analytics.track import track
 
 from . import one_rm as meso_one_rm
 from . import tour as meso_tour
-from .models import ExerciseSlot
 from .models import LoggedSet
 from .models import Plan
 from .models import Session
@@ -190,24 +189,19 @@ def settle_log(pk, *, cutoff):
         log.save(update_fields=["status"])
 
         # Only THIS log's sets can have changed what DONE-only derivation sees
-        # — refresh exactly the lifts they reference, not the whole session
-        # (which could pull in unrelated already-DONE history unnecessarily,
-        # though harmlessly; scoping it is simply precise about what changed).
-        #
-        # #578 C1: collected via ``anchor_slot_id``, not ``prescription_id`` —
-        # a set whose ``prescription`` went NULL (a hard-deleted line-0 cell,
-        # #577/#581) but whose ``exercise_slot`` survives must still have its
-        # lift refreshed. ``select_related("prescription")`` makes the
-        # fallback hop (``anchor_slot_id``'s read of ``prescription.
-        # exercise_slot_id``) free instead of one query per set.
-        anchor_slot_ids = {
-            ls.anchor_slot_id
-            for ls in log.sets.select_related("prescription")
-            if ls.anchor_slot_id is not None
-        }
-        lifts = list(ExerciseSlot.objects.filter(pk__in=anchor_slot_ids))
+        # — refresh exactly the lifts they reference, not the whole session.
+        # #708: ``lifts_for_sets`` covers each set's stamped lift (what it
+        # counts toward) plus its anchor slot's CURRENT identity (what the
+        # plan's cells look up), which differ after a swap/rename/link. The
+        # ``select_related`` makes both ``lift``'s fallback and the anchor hop
+        # free (#578 C1: ``anchor_slot`` survives a hard-deleted line-0 cell).
+        sets = list(
+            log.sets.select_related("exercise_slot", "prescription__exercise_slot")
+        )
         meso_one_rm.refresh_one_rms(
-            log.athlete, lifts, log.session.week.mesocycle.plan.unit
+            log.athlete,
+            meso_one_rm.lifts_for_sets(sets),
+            log.session.week.mesocycle.plan.unit,
         )
 
     # Outside the atomic block, like `athlete_log_session`'s own call to this:

@@ -33,6 +33,9 @@ import math
 from decimal import Decimal
 
 from . import models
+from .lift_identity import LiftIndex
+from .lift_identity import lift_of
+from .lift_identity import representatives
 from .serializers import _exercise_key
 from .serializers import _num
 
@@ -65,14 +68,18 @@ def epley_one_rm(load, reps):
     return w * (1 + r / 30)
 
 
-def derive_one_rm_values(athlete, *, keys=None, unit=None):
-    """Best Epley 1RM per lift identity from the athlete's *completed* logged sets.
+def derive_one_rm_values(athlete, *, lifts=None, unit=None):
+    """Best Epley 1RM per target lift from the athlete's *completed* logged sets.
 
     One query over the athlete's ``DONE`` logged sets (a pending
     draft is not a finished performance — the results/"last" surfaces treat it the
-    same). Returns ``{key: float}`` — the maximum implied 1RM across every set of
-    that lift. ``keys``, when given, restricts the scan to those lift identities
-    (the lifts in a session just logged); a lift with no usable set is absent.
+    same). Returns ``{key: float}`` keyed by ``key_str`` of each TARGET lift: the
+    maximum implied 1RM over every set whose stamped ``LoggedSet.lift`` matches
+    that target under ``lift_identity.same_lift`` (#708). ``lifts``, when given,
+    are the targets (the lifts just logged or refreshed); untargeted, there is one
+    entry per ``representatives`` lift of the sets with a usable estimate. A target
+    with no matching usable set is absent. If two targets share a key the larger
+    value is kept.
 
     Deliberately DONE-only even though ``personal_records.personal_records``
     (5a) counts PENDING sets for its *live* reads — see this module's
@@ -99,23 +106,29 @@ def derive_one_rm_values(athlete, *, keys=None, unit=None):
         logged_sets = logged_sets.filter(
             session_log__session__week__mesocycle__plan__unit=unit
         )
-    best = {}
+    estimates = []
     for ls in logged_sets:
-        # `.anchored()` already guarantees `anchor_slot` resolves for every
-        # row this iterates — this check is belt only, never expected to
-        # fire, kept because the property's contract (may return `None`) is
-        # more general than what this particular query happens to produce.
-        slot = ls.anchor_slot
-        if slot is None:
-            continue
-        key = key_str(slot.exercise_id, slot.name)
-        if keys is not None and key not in keys:
+        lift = ls.lift
+        if lift is None:
             continue
         est = epley_one_rm(ls.load, ls.reps)
         if est is None:
             continue
-        if key not in best or est > best[key]:
-            best[key] = est
+        estimates.append((lift, est))
+    if lifts is None:
+        targets = representatives(lift for lift, _ in estimates)
+    else:
+        targets = [lift_of(x) for x in lifts]
+    index = LiftIndex(estimates, lift=lambda e: e[0])
+    best = {}
+    for target in targets:
+        matched = index.matching(target)
+        if not matched:
+            continue
+        value = max(est for _, est in matched)
+        key = key_str(target.exercise_id, target.name)
+        if key not in best or value > best[key]:
+            best[key] = value
     return best
 
 
@@ -147,7 +160,18 @@ def refresh_one_rms(athlete, lifts, unit):
     anchor_slot`` rather than a cell that may no longer exist). This function
     only ever reads those two attributes off each element, never anything
     cell-specific, so it doesn't care which.
+
+    **The ``AthleteOneRm.key`` choice (#708).** The key stays the FK-first
+    ``key_str`` of the TARGET lift being refreshed — unchanged format, so
+    ``unique(athlete, key)`` and ``one_rm_values``' per-prescription lookup are
+    untouched, and the client's ``epleyOneRm`` only mirrors the formula, never a
+    key. The value is derived from every set that matches that target under
+    ``lift_identity.same_lift``. So free-text "Back Squat" history folds into
+    ``id:<pk>`` the first time the linked lift refreshes, while the old
+    ``name:back squat`` row stays a correct answer for any free-text Back Squat
+    target.
     """
+    lifts = list(lifts)
     # One representative (exercise_id, name) per identity — a later lift's
     # name wins for display, harmless since they share the identity.
     reps_by_key = {}
@@ -172,7 +196,7 @@ def refresh_one_rms(athlete, lifts, unit):
     )
     # Derive from same-unit logs only, so the stored value is unambiguously in
     # ``unit`` (the unit it's written with).
-    derived = derive_one_rm_values(athlete, keys=set(reps_by_key), unit=unit)
+    derived = derive_one_rm_values(athlete, lifts=lifts, unit=unit)
     # Sorted, so every caller locks this athlete's rows in ONE order.
     # `update_or_create` holds each row it touches until the caller's
     # transaction ends, and two concurrent refreshes over the same lifts in
@@ -204,6 +228,24 @@ def refresh_one_rms(athlete, lifts, unit):
                 "source": models.AthleteOneRm.Source.LOGGED,
             },
         )
+
+
+def lifts_for_sets(logged_sets):
+    """The lifts a refresh must cover after ``logged_sets`` changed (#708).
+
+    Each set's stamped ``lift`` (what it counts toward) AND its anchor slot's
+    current identity (what the plan's cells — and so the logger's suggested
+    load — look up). They differ after a swap, rename or catalog link; refreshing
+    only the stamp would leave a just-linked row's ``id:`` estimate stale.
+    """
+    lifts = []
+    for ls in logged_sets:
+        if ls.lift is not None:
+            lifts.append(ls.lift)
+        slot = ls.anchor_slot
+        if slot is not None:
+            lifts.append(lift_of(slot))
+    return lifts
 
 
 def one_rm_values(athlete, prescriptions, unit):

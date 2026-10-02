@@ -33,6 +33,7 @@ from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
+from store_project.meso.lift_identity import Lift
 from store_project.meso.models import AthleteOneRm
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
@@ -179,7 +180,7 @@ class TestDeriveOneRmValues:
         log_session(athlete, session, [(squat, 1, "AMRAP", "BW", "9")])
         assert meso_one_rm.derive_one_rm_values(athlete) == {}
 
-    def test_keys_filter_restricts_the_scan(self):
+    def test_lifts_filter_restricts_the_scan(self):
         athlete = UserFactory()
         _, session, (squat, bench) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}, {"name": "Bench Press"}]
@@ -189,7 +190,9 @@ class TestDeriveOneRmValues:
             session,
             [(squat, 1, "1", "150", "9"), (bench, 1, "1", "100", "9")],
         )
-        values = meso_one_rm.derive_one_rm_values(athlete, keys={"name:bench press"})
+        values = meso_one_rm.derive_one_rm_values(
+            athlete, lifts=[Lift(None, "Bench Press")]
+        )
         assert values == {"name:bench press": pytest.approx(100.0)}
 
     def test_scoped_to_the_athlete(self):

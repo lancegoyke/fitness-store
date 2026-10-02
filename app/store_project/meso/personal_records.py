@@ -9,8 +9,9 @@ this slice adds the two things that make a *record* rather than a bare number:
 
 Both ride on the same structured performed record, ``LoggedSet`` — never parsed
 free text — and reuse the pinned Epley math verbatim (``one_rm.epley_one_rm``) and
-the hybrid B4 lift identity (``serializers._exercise_key`` via
-``one_rm.key_str``). The scan is unit-scoped exactly as ``derive_one_rm_values``
+the lift identity in ``lift_identity.py`` (#708): a set counts toward the lift
+it was STAMPED with at write time (``LoggedSet.lift``), not whatever its slot
+is called now, so a swap or rename of the slot doesn't relabel past records. The scan is unit-scoped exactly as ``derive_one_rm_values``
 (a bare logged load is denominated in its plan's unit, so kg and lb sets for one
 lift must never pool).
 
@@ -41,6 +42,9 @@ from datetime import date as date_cls
 from django.db.models import Q
 
 from . import models
+from .lift_identity import Lift
+from .lift_identity import LiftIndex
+from .lift_identity import representatives
 from .one_rm import epley_one_rm
 from .one_rm import key_str
 
@@ -56,7 +60,7 @@ class _PerformedSet:
     Epley value the client and server agree on.
     """
 
-    key: str
+    lift: Lift
     name: str
     unit: str
     reps: str
@@ -80,6 +84,7 @@ class PersonalRecord:
     date: date_cls | None
     logged_set_id: int
     session_log_id: int
+    lift: Lift | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +99,7 @@ class NewRecord:
     reps: str
     load: str
     logged_set_id: int
+    lift: Lift | None = None
 
 
 def _live_logged_sets(athlete, *, unit):
@@ -133,18 +139,19 @@ def _performed_sets(logged_sets, *, unit):
     ``one_rm.epley_one_rm``. A set whose load/reps aren't a usable number ("BW",
     "AMRAP", "") yields ``None`` from Epley and is dropped (never a crash).
 
-    Keyed off ``ls.anchor_slot`` (#578 C1), not ``ls.prescription`` — the same
-    durable-identity resolution ``_live_logged_sets``'s ``.anchored()`` filter
-    already guarantees resolves for every row this iterates.
+    Identity is ``ls.lift`` (#708): the write-time stamp, falling back to the
+    anchor slot's live identity for an unstamped row.
     """
     for ls in logged_sets:
         est = epley_one_rm(ls.load, ls.reps)
         if est is None:
             continue
-        slot = ls.anchor_slot
+        lift = ls.lift
+        if lift is None:
+            continue
         yield _PerformedSet(
-            key=key_str(slot.exercise_id, slot.name),
-            name=slot.name,
+            lift=lift,
+            name=lift.name,
             unit=unit,
             reps=ls.reps,
             load=ls.load,
@@ -155,28 +162,38 @@ def _performed_sets(logged_sets, *, unit):
         )
 
 
-def _best_per_lift(performed):
-    """Best (max e1RM) :class:`PersonalRecord` per lift identity — the seam.
+def _best_per_lift(performed, targets=None):
+    """Best (max e1RM) :class:`PersonalRecord` per lift — the seam.
 
     Consumes any iterable of :class:`_PerformedSet`; ties keep the first-seen set
-    (a strict ``>`` never displaces an equal earlier best). This is the whole
-    computation both public functions share.
+    (a strict ``>`` never displaces an equal earlier best). ``targets`` are the
+    lifts to report; by default one per ``representatives`` lift of the history.
+    Each target's best is taken over every set matching it under
+    ``lift_identity.same_lift`` and is keyed by ``key_str`` of the target. This is
+    the whole computation both public functions share.
     """
+    performed = list(performed)
+    if targets is None:
+        targets = representatives(ps.lift for ps in performed)
+    index = LiftIndex(performed, lift=lambda ps: ps.lift)
     best: dict[str, PersonalRecord] = {}
-    for ps in performed:
-        current = best.get(ps.key)
-        if current is None or ps.e1rm > current.e1rm:
-            best[ps.key] = PersonalRecord(
-                key=ps.key,
-                name=ps.name,
-                unit=ps.unit,
-                e1rm=ps.e1rm,
-                reps=ps.reps,
-                load=ps.load,
-                date=ps.date,
-                logged_set_id=ps.logged_set_id,
-                session_log_id=ps.session_log_id,
-            )
+    for target in targets:
+        key = key_str(target.exercise_id, target.name)
+        for ps in index.matching(target):
+            current = best.get(key)
+            if current is None or ps.e1rm > current.e1rm:
+                best[key] = PersonalRecord(
+                    key=key,
+                    name=target.name,
+                    unit=ps.unit,
+                    e1rm=ps.e1rm,
+                    reps=ps.reps,
+                    load=ps.load,
+                    date=ps.date,
+                    logged_set_id=ps.logged_set_id,
+                    session_log_id=ps.session_log_id,
+                    lift=target,
+                )
     return best
 
 
@@ -277,7 +294,10 @@ def new_records_in(session_log):
         prior_qs = prior_qs.filter(
             session_log__status=models.SessionLog.Status.DONE
         ).filter(_logged_before(session_log))
-    prior_best = _best_per_lift(_performed_sets(prior_qs, unit=unit))
+    prior_best = _best_per_lift(
+        _performed_sets(prior_qs, unit=unit),
+        targets=[r.lift for r in this_best.values()],
+    )
 
     records = []
     for key, record in this_best.items():
@@ -294,6 +314,7 @@ def new_records_in(session_log):
                     reps=record.reps,
                     load=record.load,
                     logged_set_id=record.logged_set_id,
+                    lift=record.lift,
                 )
             )
     return records

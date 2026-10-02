@@ -2294,7 +2294,14 @@ def athlete_log_session(request, pk):
         # downgrade just orphaned.) Recomputes from scratch.
         meso_one_rm.refresh_one_rms(
             request.user,
-            list(session.trainable_cells()),
+            [
+                *session.trainable_cells(),
+                *meso_one_rm.lifts_for_sets(
+                    log.sets.select_related(
+                        "exercise_slot", "prescription__exercise_slot"
+                    )
+                ),
+            ],
             session.week.mesocycle.plan.unit,
         )
     if has_legacy_sets:
@@ -3074,6 +3081,22 @@ def _upsert_parsed_set(
                                 (n for n in freed_numbers if n not in taken), None
                             )
                         if number is not None:
+                            # #708: a blur deletes-then-recreates the line's
+                            # own row, so carrying its stamp over is what
+                            # stops a focus/blur (or a number correction) on a
+                            # week-1 line after a swap from relabelling a back
+                            # squat as a front squat; a fresh line stamps the
+                            # row as it is now.
+                            if (
+                                previous is not None
+                                and previous.exercise_name is not None
+                            ):
+                                stamp_exercise_id = previous.exercise_id
+                                stamp_exercise_name = previous.exercise_name
+                            else:
+                                stamp_slot = line_zero_cell.exercise_slot
+                                stamp_exercise_id = stamp_slot.exercise_id
+                                stamp_exercise_name = stamp_slot.name
                             created = LoggedSet.objects.create(
                                 session_log=log,
                                 prescription=line_zero_cell,
@@ -3081,6 +3104,8 @@ def _upsert_parsed_set(
                                 # not instead of it — see
                                 # `LoggedSet.exercise_slot`'s model comment.
                                 exercise_slot_id=line_zero_cell.exercise_slot_id,
+                                exercise_id=stamp_exercise_id,
+                                exercise_name=stamp_exercise_name,
                                 source_line=cell,
                                 set_number=number,
                                 unit=unit,
@@ -3134,9 +3159,12 @@ def _upsert_parsed_set(
                 cells = list(session.trainable_cells())
                 if not any(c.pk == line_zero_cell.pk for c in cells):
                     cells.append(line_zero_cell)
+                # #708: plus the lifts of the sets this blur removed/created —
+                # their stamped lift and their slot's current identity.
+                changed = [*mine, *([created] if created is not None else [])]
                 meso_one_rm.refresh_one_rms(
                     athlete,
-                    cells,
+                    [*cells, *meso_one_rm.lifts_for_sets(changed)],
                     session.week.mesocycle.plan.unit,
                 )
 
