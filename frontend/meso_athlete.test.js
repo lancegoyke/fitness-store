@@ -3244,6 +3244,30 @@ describe("session note (#524)", () => {
     expect(c.readQueue()[0].body).toEqual({ notes: "keep me" });
   });
 
+  it("a stale tab replays another tab's queued note instead of overwriting it with its own blank", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    const a = noteLogger(); // tab A types, then goes away
+    a.notes = "knee pain";
+    a.noteInput();
+    const b = noteLogger(); // tab B loaded earlier with a blank box and never typed
+    expect(b.notes).toBe("");
+    await b.flushQueue();
+    expect(noteCalls()).toEqual([{ notes: "knee pain" }]);
+    expect(b.notes).toBe("knee pain");
+  });
+
+  it("text typed in THIS tab outranks a note queued by another", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    const a = noteLogger();
+    a.notes = "from A";
+    a.noteInput();
+    const b = noteLogger();
+    b.notes = "from B";
+    b.noteInput();
+    await b.noteBlur();
+    expect(noteCalls()).toEqual([{ notes: "from B" }]);
+  });
+
   it("a 400 drops the entry and shows an error, with no retry", async () => {
     global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400, body: { ok: false } }));
     const c = noteLogger();

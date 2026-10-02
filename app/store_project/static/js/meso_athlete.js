@@ -179,6 +179,7 @@ function createLogger() {
     _noteTimer: null, // debounce handle for the note POST
     _notesSave: Promise.resolve(), // promise chain: note POSTs reach the server in order
     _notesRunning: 0, // note saves chained and not yet finished
+    _notesDirty: false, // this tab's textarea holds text typed here, not yet confirmed
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -328,6 +329,10 @@ function createLogger() {
         // Gone from the session: the flush sends it and the server says so.
         if (!ex) continue;
         const line = item.body.line;
+        // A coach cue has taken this number since the line was queued: no
+        // input to show it on. The flush still sends it and the server's 422
+        // drops it, rather than leaving an editable input over the cue.
+        if (this.coachLineSet(ex).has(line)) continue;
         if (!ex.sub_lines.some((l) => l.line === line)) {
           ex.sub_lines.push({ line, text: "", savedText: "" });
           ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
@@ -1149,6 +1154,7 @@ function createLogger() {
     // The status stays blank while typing — "saved offline" there would be noise.
     noteInput() {
       this.noteStatus = "";
+      this._notesDirty = true;
       this.enqueueNotes(this.notes);
       if (this._noteTimer) clearTimeout(this._noteTimer);
       this._noteTimer = setTimeout(() => {
@@ -1198,8 +1204,15 @@ function createLogger() {
     },
 
     async _postNotes() {
-      const text = this.notes;
       const queued = this.queuedNotes();
+      // A note ANOTHER tab wrote ahead is newer than this tab's untouched
+      // textarea: sending the textarea would overwrite it with the text this
+      // tab loaded with (a stale tab replaying a shared entry, or finishing).
+      // Only text typed in THIS tab (`_notesDirty`) outranks the queued one.
+      if (queued && !this._notesDirty && queued.body.notes !== this.notes) {
+        this.notes = queued.body.notes;
+      }
+      const text = this.notes;
       // The server already has this text and nothing is waiting to say otherwise.
       if (text === this._notesSavedText && !queued) return "skipped";
       // Written ahead, as the input handler does — covers a send that doesn't
@@ -1230,6 +1243,7 @@ function createLogger() {
         // Refused for good (too long, say): retrying the same text can only
         // fail again, so it leaves the outbox and the athlete sees it failed.
         this.settleLog(body);
+        this._notesDirty = this.notes !== text;
         this.noteStatus = "error";
         return "rejected";
       }
@@ -1248,6 +1262,7 @@ function createLogger() {
       // text typed since (its key holds a different value now).
       this.settleLog(body);
       this._notesSavedText = text;
+      this._notesDirty = this.notes !== text;
       // Deliberately NOT `data.log.status`: the reply carries the log's
       // status, but a note post must never move the badge (a Finish may be
       // queued separately while the server still says pending).

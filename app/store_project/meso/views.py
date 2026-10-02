@@ -2238,6 +2238,25 @@ def athlete_log_session(request, pk):
         # list of reads that share it, and the reads that deliberately don't.
         log = newest_session_logs(session, request.user).first()
         if log is None:
+            # A blank note on a session with no log (typed, then erased before
+            # the debounce fired) has nothing to keep: saving it would create a
+            # dated PENDING log with no sets and no notes, which nothing sweeps
+            # and which skews last-trained and recent-log reads.
+            if "notes" in payload and "status" not in payload and not notes.strip():
+                return JsonResponse(
+                    {
+                        "ok": True,
+                        "log": {
+                            "id": None,
+                            "status": SessionLog.Status.PENDING,
+                            "date": None,
+                            "notes": "",
+                        },
+                        "progress": presenters.athlete_set_progress(
+                            session, request.user
+                        ),
+                    }
+                )
             log = SessionLog(session=session, athlete=request.user)
         # session_completed analytics (#509): captured before this save changes
         # anything, so it describes the log's state walking in.

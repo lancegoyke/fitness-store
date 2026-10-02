@@ -140,6 +140,16 @@ class TestSessionNote:
         assert log.notes == "felt heavy\n\nbut fine"  # stored as given
         assert resp.json()["log"]["status"] == "pending"
 
+    def test_blank_note_with_no_log_creates_nothing(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = log_post(client, s.session, {"notes": "  \n"})
+        assert resp.status_code == 200
+        assert resp.json()["log"]["status"] == "pending"
+        assert not SessionLog.objects.filter(
+            session=s.session, athlete=s.athlete
+        ).exists()
+
     def test_notes_only_post_keeps_pending_status_and_date(self, client):
         s = seed()
         day_ = datetime.date(2026, 6, 20)
