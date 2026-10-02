@@ -14,10 +14,9 @@ test is the one that can watch that not happen. The sequence:
 1. the athlete types ``225 x 5`` on Box Squat's first sub-line and blurs it —
    parse-at-commit creates a parsed ``LoggedSet``, ``source_line`` = that cell,
    on day 1's log;
-2. the coach drags Box Squat to a second day through the real designer
-   endpoint (``meso:api_prescription_move``, a Django test ``Client``
-   force-logged-in as the coach — the coach UI isn't the subject of this
-   test). The cell travels with the block-shared ``ExerciseSlot``; the
+2. Box Squat's slot is put on a second day as LEGACY data (a slot moved by
+   the retired ``prescription_move`` endpoint, rebuilt straight in the ORM —
+   the coach UI isn't the subject of this test). The cell travels with the block-shared ``ExerciseSlot``; the
    ``LoggedSet`` stays on day 1's log (#568's decision, not touched here);
 3. the athlete opens day 2's session page. The line still reads ``225 x 5``
    (its own text never changed) but now renders tinted — reachability
@@ -33,15 +32,14 @@ After the fix, step 4 never calls ``fetch`` at all, and one ``LoggedSet``
 survives throughout.
 """
 
-import json
 import re
 
 import pytest
-from django.test import Client
 from django.urls import reverse
 from playwright.sync_api import expect
 from store_project.meso.models import LoggedSet
 from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import legacy_move_exercise_to_session
 
 pytestmark = pytest.mark.django_db
 
@@ -86,24 +84,14 @@ INFLIGHT_JS = """(() => {
 
 
 def _move_box_squat_to(delivered_plan, target_session):
-    """The coach's real cross-day drag, through the designer endpoint.
+    """Build LEGACY data: Box Squat's slot moved by the retired ``prescription_move``.
 
-    A Django test ``Client`` force-logged-in as the coach — the coach side of
-    this sequence isn't what's under test, only whether the athlete's own
-    page then shows the consequence, and behaves correctly around it.
+    The endpoint no longer exists (a move is delete + re-add), but old data
+    still has slots moved this way, so this re-creates that state straight in
+    the ORM: the block-shared ``ExerciseSlot`` re-pointed to the target day;
+    the athlete's ``LoggedSet`` is left on day 1's log.
     """
-    client = Client()
-    client.force_login(delivered_plan.coach)
-    response = client.post(
-        reverse(
-            "meso:api_prescription_move",
-            kwargs={"plan_id": delivered_plan.plan.pk, "pk": delivered_plan.squat.pk},
-        ),
-        data=json.dumps({"session_id": target_session.pk, "index": 0}),
-        content_type="application/json",
-    )
-    assert response.status_code == 200, response.content
-    return response
+    legacy_move_exercise_to_session(delivered_plan.squat, target_session)
 
 
 def _focus_and_leave_without_editing(page, viewport, press, card):

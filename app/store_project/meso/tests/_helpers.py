@@ -46,6 +46,42 @@ def day(week, *, day_number=None, name="", bias="", order=None, session_slot=Non
     return Session.objects.create(week=week, session_slot=session_slot)
 
 
+def legacy_move_exercise_to_session(cell, target_session, *, index=0):
+    """Build LEGACY data: a slot moved by the retired ``prescription_move`` endpoint.
+
+    The endpoint is gone (a move is now delete + re-add) but old prod data
+    still has slots re-pointed this way, and the read paths must keep coping
+    with it. This reproduces what the endpoint did, straight in the ORM:
+    re-point ``cell.exercise_slot.session_slot`` (block-wide) to the target
+    day's ``SessionSlot``, densely renumber (0-based) both the source and the
+    target day's live slots with the moved one landing at ``index``, and give
+    every other week of the block a ``Session`` for the target ``SessionSlot``
+    (so the moved slot has a day to render on in each week). The athlete's
+    ``LoggedSet`` rows are left alone, as the endpoint left them.
+    """
+    es = cell.exercise_slot
+    source_slot = es.session_slot
+    target_slot = target_session.session_slot
+    live = ExerciseSlot.objects.filter(deleted_at__isnull=True)
+    target_rows = list(live.filter(session_slot=target_slot).order_by("order"))
+    target_rows.insert(max(0, min(index, len(target_rows))), es)
+    for new_order, row in enumerate(target_rows):
+        ExerciseSlot.objects.filter(pk=row.pk).update(
+            order=new_order, session_slot_id=target_slot.pk
+        )
+    if source_slot.pk != target_slot.pk:
+        source_rows = (
+            live.filter(session_slot=source_slot).exclude(pk=es.pk).order_by("order")
+        )
+        for new_order, row in enumerate(source_rows):
+            ExerciseSlot.objects.filter(pk=row.pk).update(order=new_order)
+    for week in target_session.week.mesocycle.weeks.filter(deleted_at__isnull=True):
+        if not Session.objects.filter(week=week, session_slot=target_slot).exists():
+            Session.objects.create(week=week, session_slot=target_slot)
+    es.refresh_from_db()
+    cell.exercise_slot = es
+
+
 def make_slot(
     session=None, *, session_slot=None, name=None, order=None, exercise=None, tags=None
 ):

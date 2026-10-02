@@ -95,7 +95,9 @@ MesoGrid | null` and `history: GridHistory`, hydrated once from
   `reorderExercises`, `undo`/`redo`, `skipCell`/
   `fillAcrossWeeks`/`addExerciseThisWeek` — `swapCell` retired in Phase 2a
   (a substitution is sub-line text now, written through `writeCellLine`);
-  `moveExerciseToDay` removed in designer-simplify with the "Move to…" menu):
+  `moveExerciseToDay` removed in designer-simplify with the "Move to…" menu, and
+  its backend endpoint is retired too: moving an exercise to another day is
+  delete + re-add):
   await their POST, then call `refetchGrid()` (a plain GET) to re-sync the
   whole grid in one `setGrid`. One shared in-flight guard (`busy`) across
   every structural verb so a double-click can't race two refetches.

@@ -3217,3 +3217,17 @@ _(Append dated entries here as decisions land.)_
   2026-10-02: 0 duplicate `(session, athlete)` pairs and 0 sets on
   soft-deleted sessions, so this changes no number today; it fixes the
   definition before the first stray row exists.
+- 2026-10-02 — **Retired: the `prescription_move` endpoint (#578 Q2a).** Per
+  Lance's decision on #578, moving an exercise to another day is now
+  **delete + re-add**; the `api_prescription_move` URL and its view are gone
+  (no client called it). Old logged sets stay with the day they were done on
+  and count per Q3. This closes **#572 part 1** (a cross-day move re-tinting
+  every already-logged week of the block) and the **#574 move case** by
+  removal: no new move can create that state. Measured on prod: 0 `Moved X`
+  `PlanAction` rows, so no history needs migrating. Legacy `Moved` snapshots,
+  should any exist, still undo/redo: `restore_plan_snapshot` re-points
+  `ExerciseSlot.session_slot_id`/`order` generically from the snapshot, and
+  `tests/test_prescription_move_retired.py` pins that (and that no `LoggedSet`
+  is touched). The `elsewhere` reads and tests that used the endpoint now
+  build the same "slot moved, LoggedSet left behind" state straight in the ORM
+  (`_helpers.legacy_move_exercise_to_session`), labelled as legacy data.

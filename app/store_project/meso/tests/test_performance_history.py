@@ -16,12 +16,10 @@ start filtering ``deleted_at`` (mutation-proved when the change landed).
 """
 
 import datetime
-import json
 
 import pytest
 from django.db import IntegrityError
 from django.db import transaction
-from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso import adherence
@@ -34,6 +32,7 @@ from store_project.meso.models import LoggedSet
 from store_project.meso.models import Prescription
 from store_project.meso.models import SessionLog
 from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import legacy_move_exercise_to_session
 from store_project.meso.tests._helpers import presc
 from store_project.meso.tests._helpers import sub_line
 from store_project.meso.tests.test_parse_at_commit import seed
@@ -143,24 +142,16 @@ class TestSoftDeletedDayStillCounts:
 
 
 def _moved_exercise(client):
-    """A squat sub-line typed on day 1, then the coach moves the squat to day 2.
+    """A squat sub-line typed on day 1; the squat's slot then sits on day 2.
 
-    Returns ``(s, day2, cell)`` with NO LoggedSet yet; each test files the
+    Legacy data: a slot moved by the retired ``prescription_move`` endpoint,
+    rebuilt straight in the ORM. Returns ``(s, day2, cell)`` with NO LoggedSet yet; each test files the
     backing row on the day-1 log it wants.
     """
     s = seed()
     day2 = day(s.week, day_number=2, name="Upper", bias="Push")
     cell = sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
-    client.force_login(s.coach)
-    resp = client.post(
-        reverse(
-            "meso:api_prescription_move",
-            kwargs={"plan_id": s.plan.pk, "pk": s.squat.pk},
-        ),
-        data=json.dumps({"session_id": day2.pk, "index": 0}),
-        content_type="application/json",
-    )
-    assert resp.status_code == 200
+    legacy_move_exercise_to_session(s.squat, day2)
     return s, day2, cell
 
 

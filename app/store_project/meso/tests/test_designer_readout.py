@@ -306,7 +306,7 @@ class TestAthleteSummaryPctAndParsedSets:
     def _moved_block(self, source_text, source_load):
         """A cell whose SOURCE-day log holds a parsed set, then moved to day 2.
 
-        Mirrors ``views.prescription_move``: only ``ExerciseSlot.session_slot``
+        Legacy data: a slot moved by the retired ``prescription_move`` endpoint — only ``ExerciseSlot.session_slot``
         changes; the LoggedSet keeps pointing at the same cell and at the
         SOURCE session's log. Returns the cell and a fresh DESTINATION log.
         """

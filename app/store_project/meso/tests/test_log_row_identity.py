@@ -8,10 +8,7 @@ about surviving code -- ``sub_line_warn_reason`` and the cell-write response
 against the presenter -- and never touched the log endpoint.
 """
 
-import json
-
 import pytest
-from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso import presenters
@@ -20,6 +17,7 @@ from store_project.meso.models import LoggedSet
 from store_project.meso.models import Prescription
 from store_project.meso.models import SessionLog
 from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import legacy_move_exercise_to_session
 from store_project.meso.tests._helpers import sub_line
 from store_project.meso.tests.test_parse_at_commit import seed
 from store_project.meso.tests.test_parse_at_commit import sub_cell
@@ -44,8 +42,9 @@ class TestSubLineWarnAgreesAcrossSurfaces:
     def test_a_moved_exercise_reads_unlogged_on_its_new_day(self, client):
         """After a move, the cell travels but the ``LoggedSet`` doesn't.
 
-        ``prescription_move`` moves the ``ExerciseSlot`` to the new day; the
-        ``LoggedSet`` stays on the old day's log. The DECIDED answer (#568)
+        Legacy data: a slot moved by the retired ``prescription_move``
+        endpoint (rebuilt straight in the ORM). The ``ExerciseSlot`` is on the
+        new day; the ``LoggedSet`` stays on the old day's log. The DECIDED answer (#568)
         is that the line now reads unlogged on the new day -- a behavior
         change for ordinary parsed rows, taken deliberately rather than left
         to the two surfaces to disagree about.
@@ -66,16 +65,8 @@ class TestSubLineWarnAgreesAcrossSurfaces:
             rpe="",
         )
 
-        client.force_login(s.coach)
-        resp = client.post(
-            reverse(
-                "meso:api_prescription_move",
-                kwargs={"plan_id": s.plan.pk, "pk": s.squat.pk},
-            ),
-            data=json.dumps({"session_id": day2.pk, "index": 0}),
-            content_type="application/json",
-        )
-        assert resp.status_code == 200
+        # Legacy data: a slot moved by the retired prescription_move endpoint.
+        legacy_move_exercise_to_session(s.squat, day2)
 
         def render_warn_for(session):
             ctx = presenters.athlete_session(session, s.athlete)
