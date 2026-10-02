@@ -350,7 +350,9 @@ class LoggedSetInline(admin.TabularInline):
     #
     # ``unit`` is the immutable write-time denomination of this historical set;
     # new inline rows derive it from the session log's plan in the formset.
-    readonly_fields = ("exercise_slot", "unit")
+    # ``exercise`` / ``exercise_name`` are the immutable write-time lift stamp
+    # (#708), like ``unit``; ``save()`` writes them on insert.
+    readonly_fields = ("exercise_slot", "unit", "exercise", "exercise_name")
 
 
 @admin.register(SessionLog)

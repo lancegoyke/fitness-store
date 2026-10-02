@@ -26,6 +26,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from . import parsing
+from .lift_identity import Lift
 from .names import clean_name
 
 
@@ -3027,6 +3028,30 @@ class LoggedSet(models.Model):
     unit = models.CharField(
         _("Unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
     )
+    # #708: the lift this set was performed as, stamped at write time like
+    # ``unit`` (#600) — the anchor slot's catalog FK and the name the coach saw
+    # on the row at that moment. History reads group by it (``lift`` below,
+    # ``lift_identity.py``), so an agent swap or a coach rename of the shared
+    # slot changes the plan from then on and leaves what was performed alone.
+    # ``exercise_name`` NULL means UNSTAMPED: a row old code wrote during a
+    # rolling deploy (it doesn't know these columns). ``lift`` falls back to
+    # the anchor slot's live identity for it — exactly the pre-#708 reading —
+    # and that fallback is permanent, not transitional. One loud edge, as with
+    # ``exercise_slot`` after 0050: old code serving against this schema (the
+    # deploy window, or a rollback) doesn't know this FK, so an admin delete of
+    # a catalog ``Exercise`` some stamp points at fails at COMMIT on the
+    # deferred constraint instead of nulling it.
+    exercise = models.ForeignKey(
+        "exercises.Exercise",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="meso_logged_sets",
+        verbose_name=_("Catalog exercise (as logged)"),
+    )
+    exercise_name = models.CharField(
+        _("Exercise name (as logged)"), max_length=255, null=True, blank=True
+    )
     rpe = models.CharField(_("RPE"), max_length=32, blank=True)
     # Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §4). Points at the
     # athlete-authored sub-line cell (line >= 1) whose freeform text
@@ -3123,14 +3148,29 @@ class LoggedSet(models.Model):
         writes through ``alias``; a hardcoded ``default`` read here would
         silently derive the anchor from a different database than the one
         being written to.
+
+        #708: the lift stamp (``exercise`` / ``exercise_name``) is written
+        whenever a save finds the row unstamped and its anchor resolves (an
+        insert, or an old-code row this code saves later), and again only when
+        this save RE-POINTED the row to a different ``exercise_slot`` (that
+        re-files the set to another row, so to that row's lift). A re-point is
+        judged against the anchor the row was LOADED with (``from_db``), not
+        the in-memory value at the top of this method, so a caller that
+        assigns ``exercise_slot`` itself is caught too; a row loaded with no
+        ``exercise_slot`` re-points when its ``prescription`` changes to
+        another slot's cell. An ordinary re-save never re-stamps — the stamp is
+        write-once, which is the point. ``bulk_create`` sites stamp
+        themselves, as they do ``exercise_slot_id``.
         """
         update_fields = kwargs.get("update_fields")
+        original_slot_id = self.exercise_slot_id
+        loaded_slot_id, loaded_prescription_id = getattr(
+            self, "_loaded_anchor", (original_slot_id, self.prescription_id)
+        )
+        db_alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         if self.prescription_id is not None and (
             update_fields is None or update_fields
         ):
-            db_alias = kwargs.get("using") or router.db_for_write(
-                type(self), instance=self
-            )
             resolved_slot_id = (
                 Prescription.objects.using(db_alias)
                 .filter(pk=self.prescription_id)
@@ -3144,7 +3184,67 @@ class LoggedSet(models.Model):
                 self.exercise_slot_id = resolved_slot_id
                 if update_fields:
                     kwargs["update_fields"] = set(update_fields) | {"exercise_slot"}
+        # Whether this save writes the anchor at all: a partial save that
+        # leaves both pointers out can't re-point the stored row, whatever the
+        # instance holds in memory.
+        writing = kwargs.get("update_fields")
+        anchor_written = writing is None or bool(
+            set(writing)
+            & {"exercise_slot", "exercise_slot_id", "prescription", "prescription_id"}
+        )
+        if update_fields is None or update_fields:
+            repointed = (
+                anchor_written
+                and not self._state.adding
+                and self.exercise_slot_id is not None
+                and self.exercise_slot_id != loaded_slot_id
+                and (
+                    loaded_slot_id is not None
+                    or self.prescription_id != loaded_prescription_id
+                )
+            )
+            wants_stamp = repointed or (
+                self.exercise_name is None
+                and (anchor_written or self.exercise_slot_id == loaded_slot_id)
+            )
+            if wants_stamp and self.exercise_slot_id is not None:
+                stamp = (
+                    ExerciseSlot.objects.using(db_alias)
+                    .filter(pk=self.exercise_slot_id)
+                    .values_list("exercise_id", "name")
+                    .first()
+                )
+                if stamp is not None:
+                    self.exercise_id, self.exercise_name = stamp
+                    if kwargs.get("update_fields"):
+                        # A re-point writes the anchor with the stamp, so the
+                        # row never stores one slot's lift on another slot.
+                        kwargs["update_fields"] = set(kwargs["update_fields"]) | {
+                            "exercise",
+                            "exercise_name",
+                            *(("exercise_slot",) if repointed else ()),
+                        }
         super().save(*args, **kwargs)
+        if anchor_written:
+            self._loaded_anchor = (self.exercise_slot_id, self.prescription_id)
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        """Remember the anchor the row was loaded with (#708, see ``save``)."""
+        instance = super().from_db(db, field_names, values)
+        if "exercise_slot_id" in instance.__dict__ and "prescription_id" in (
+            instance.__dict__
+        ):
+            instance._loaded_anchor = (
+                instance.exercise_slot_id,
+                instance.prescription_id,
+            )
+        return instance
+
+    def refresh_from_db(self, *args, **kwargs):
+        """Reload, and re-baseline the anchor ``save`` compares a re-point to."""
+        super().refresh_from_db(*args, **kwargs)
+        self._loaded_anchor = (self.exercise_slot_id, self.prescription_id)
 
     @property
     def anchor_slot_id(self):
@@ -3181,6 +3281,21 @@ class LoggedSet(models.Model):
         if self.prescription_id is not None:
             return self.prescription.exercise_slot
         return None
+
+    @property
+    def lift(self):
+        """The lift this set was performed as (#708), or ``None``.
+
+        The write-time stamp when there is one; otherwise (an unstamped row old
+        code wrote mid-deploy) the anchor slot's live identity, which is what
+        every read did before #708. ``None`` only when neither resolves.
+        """
+        if self.exercise_name is not None:
+            return Lift(self.exercise_id, self.exercise_name)
+        slot = self.anchor_slot
+        if slot is None:
+            return None
+        return Lift(slot.exercise_id, slot.name)
 
 
 # ---------------------------------------------------------------------------

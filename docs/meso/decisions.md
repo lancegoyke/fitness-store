@@ -14,6 +14,42 @@ How to read the status field:
 
 ---
 
+## Lift identity of logged sets (#708) — 2026-10-02
+
+- `LoggedSet` stamps the lift it was performed as (`exercise`, `exercise_name`)
+  at write time, like `unit` (#600). History reads (1RM, records, "last time",
+  agent recent logs) group by the stamp, so a swap or coach rename of the shared
+  slot changes the plan from then on and leaves past sets alone.
+- Match rule (`lift_identity.same_lift`): equal catalog FKs match; if either side
+  has no FK, case-folded names match; different FKs never match. A free-text
+  "Back Squat" later linked to the catalog "Back Squat" keeps its history.
+- A catalog lift stamped under several names (a staff catalog rename between
+  picks) is still one lift: an FK target matches name-only sets under every name
+  its FK carries in the history. The stored `id:<pk>` estimate uses exactly the
+  FK's stamped names plus the names of the athlete's live rows linked to it, so
+  it holds one value whichever row (or leftover stamp) triggered the refresh.
+- `AthleteOneRm.key` stays the FK-first `key_str` of the target lift being
+  refreshed; the value is derived from every set matching that target. Free-text
+  history folds into `id:<pk>` on the first refresh of the linked lift. A
+  refresh also re-derives the athlete's other stored logged rows in that unit
+  (written only when their value changed), since one set can feed several.
+- NULL `exercise_name` = unstamped (old code writing mid-deploy). `LoggedSet.lift`
+  reads such a row through the anchor slot's live identity, permanently. A row
+  old code re-creates during the deploy window (a re-blur) loses its stamp the
+  same way; with ~0 real-user logs and a window of seconds, no re-stamp pass.
+- A typed line's re-blur carries the replaced row's stamp over, so editing a
+  week-1 number after a swap corrects the back squat. The cost: a line typed
+  before a swap and rewritten afterwards to a different lift's numbers stays
+  under the old lift. Clearing a line and typing it again is a new set, stamped
+  as the row is now. The stamp is taken when the server processes the write,
+  so a line queued offline before a swap and flushed after it is stamped as the
+  new lift (the payload carries no identity).
+- Plan-shaped surfaces (results rows, the designer, the athlete week page) still
+  label sets by their row's current name; a "logged as" hint is #714. Linking or
+  renaming doesn't refresh the stored 1RM until the next finished session: #715.
+- Accepted trade-off (Lance): fixing a typo in a free-text name after sets are
+  logged leaves those sets under the old spelling.
+
 ## Names and labels (#602)
 
 - `User.name` is a person's account name; unnamed users fall back to their email.

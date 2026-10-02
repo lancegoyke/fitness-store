@@ -69,8 +69,16 @@ def test_a_row_with_the_column_set_survives_with_its_fields_intact():
         log = SessionLogFactory(
             session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
         )
-        row = LoggedSet.objects.create(
-            session_log=log, prescription=s.squat, set_number=1, reps="5", load="225"
+        # The database is at 0059 here, which predates #708's lift-stamp
+        # columns, so the current model can't insert — use the 0059 model.
+        historical = executor.loader.project_state([MESO_0059]).apps
+        row = historical.get_model("meso", "LoggedSet").objects.create(
+            session_log_id=log.pk,
+            prescription_id=s.squat.pk,
+            exercise_slot_id=s.squat.exercise_slot_id,
+            set_number=1,
+            reps="5",
+            load="225",
         )
         with connection.cursor() as cursor:
             cursor.execute(

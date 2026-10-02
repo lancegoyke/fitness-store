@@ -227,6 +227,9 @@ jobs:
       # the newest-per-pair rule must hold on Postgres, not just SQLite.
       # test_one_sessionlog_postgres is the #699 first-write race: two concurrent
       # first writes for one (session, athlete) must end with exactly one log.
+      # #708: test_migration_0063_lift_stamp_backfill runs 0062/0063 for real
+      # (the subquery UPDATE must work on Postgres), and test_lift_identity_708
+      # pins the stamped-lift reads, settle and the re-blur carry-over there too.
       # Add a new Postgres-only file here in the same commit that creates it.
       - name: Run the PostgreSQL-only tests
         run: |
@@ -250,4 +253,6 @@ jobs:
             app/store_project/meso/tests/test_decline_race_postgres.py \
             app/store_project/meso/tests/test_migration_0060_drop_reclaimed_column.py \
             app/store_project/meso/tests/test_performance_history.py \
-            app/store_project/meso/tests/test_one_sessionlog_postgres.py
+            app/store_project/meso/tests/test_one_sessionlog_postgres.py \
+            app/store_project/meso/tests/test_migration_0063_lift_stamp_backfill.py \
+            app/store_project/meso/tests/test_lift_identity_708.py

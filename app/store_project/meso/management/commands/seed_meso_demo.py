@@ -1389,8 +1389,12 @@ def log_typed_sets(log, items):
     if to_update:
         Prescription.objects.bulk_update(to_update, ["text", "athlete_authored"])
 
+    # #708: bulk_create skips ``save()``, so stamp the lift here — one read of
+    # the slots (not one per row).
+    slots = ExerciseSlot.objects.in_bulk({lz.exercise_slot_id for lz, _, _ in planned})
     rows = []
     for line_zero, cell, (reps, load, rpe) in planned:
+        slot = slots[line_zero.exercise_slot_id]
         taken = taken_by_prescription.setdefault(line_zero.pk, set())
         set_number = cell.line
         while set_number in taken:
@@ -1403,6 +1407,8 @@ def log_typed_sets(log, items):
                 # #578 C1: written alongside `prescription`, not instead of it
                 # — see `LoggedSet.exercise_slot`'s model comment.
                 exercise_slot_id=line_zero.exercise_slot_id,
+                exercise_id=slot.exercise_id,
+                exercise_name=slot.name,
                 source_line=cell,
                 set_number=set_number,
                 reps=reps,

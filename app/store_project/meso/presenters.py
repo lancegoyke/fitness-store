@@ -43,6 +43,8 @@ from . import parsing
 from . import tour
 from .billing import access as billing_access
 from .billing import agent_usage_report
+from .lift_identity import Lift
+from .lift_identity import same_lift
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
@@ -65,7 +67,6 @@ from .models import sub_line_warn_reason
 from .names import athlete_name
 from .names import coach_name
 from .names import link_athlete_name
-from .one_rm import key_str
 from .one_rm import one_rm_values
 from .personal_records import new_records_in
 from .personal_records import personal_records
@@ -1377,11 +1378,19 @@ def session_results(session):
     # athlete's prior best e1RM — DONE-only, so a pending draft or unlogged session
     # yields none. Flag the matching row (by the same B4 lift identity the engine
     # keys on) so the coach sees which lift PR'd, and hand the list to the summary
-    # for the celebration callout.
+    # for the celebration callout. #708: target side = the row's CURRENT identity,
+    # history side = the record's stamped lift — after a swap the row no longer
+    # claims a PR performed as the old lift (the callout still names it).
     new_records = new_records_in(log) if log is not None else []
-    pr_keys = {r.key for r in new_records}
     for row, p in zip(rows, prescriptions):
-        row["pr"] = key_str(p.exercise_id, p.name) in pr_keys
+        target = Lift(p.exercise_id, p.name)
+        # The record's representative OR its winning set's own stamp: a set
+        # folded into a catalog record by name still flags its own row.
+        row["pr"] = any(
+            lift is not None and same_lift(lift, target)
+            for r in new_records
+            for lift in (r.lift, r.performed_lift)
+        )
 
     # Completion = logged sets / prescribed sets, from the same helper the
     # athlete's header uses (see ``set_progress``).
