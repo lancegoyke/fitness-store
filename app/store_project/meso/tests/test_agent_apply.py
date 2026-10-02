@@ -111,6 +111,34 @@ class TestApplyChange:
         presc.refresh_from_db()
         assert presc.text == "3 x 10, RPE 7, 92.5 kg"
 
+    def test_progress_keeps_the_coachs_notation_and_notes(self):
+        plan, _, presc = make_plan()
+        presc.text = "3x5 @ 225\nfelt heavy"
+        presc.save()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.PROGRESS,
+            prescription=presc,
+            payload={"load": "230"},
+        )
+        agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        assert presc.text == "3x5 @ 230\nfelt heavy"
+
+    def test_progress_on_a_cell_without_a_load_composes_canonically(self):
+        plan, _, presc = make_plan()
+        presc.text = "3x5"
+        presc.save()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.PROGRESS,
+            prescription=presc,
+            payload={"load": "230"},
+        )
+        agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        assert presc.text == "3 x 5, 230"
+
     def test_volume_rewrites_the_cells_set_count(self):
         plan, _, presc = make_plan()  # default cell "3 x 10, RPE 7, 60"
         change = ProposedChangeFactory(

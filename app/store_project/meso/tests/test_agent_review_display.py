@@ -66,11 +66,12 @@ def test_blank_progress_gets_before_after_and_day_tag(client):
 
 def test_model_supplied_display_text_is_kept():
     plan, _, cell = make_plan()
-    cell.text = "3x5 @ 235"
-    cell.save()
     cleaned = _clean(
         plan,
         _blank(
+            kind="swap",
+            new_name="Box Squat",
+            new_load="",
             prescription_id=cell.pk,
             before="old",
             after="new",
@@ -124,3 +125,45 @@ def test_session_volume_with_no_readable_cells_starts_rejected():
         _blank(kind="volume", session_id=session.pk, new_sets="3", new_load=""),
     )
     assert cleaned["status"] == ProposedChange.Status.REJECTED
+
+
+@pytest.mark.parametrize(
+    ("kind", "cell_text", "value", "model_after", "written"),
+    [
+        ("progress", "3x5 @ 225", {"new_load": "230"}, "3 x 5, 230", "3x5 @ 230"),
+        (
+            "progress",
+            "3 x 5, RPE 8, 225",
+            {"new_load": "230"},
+            "3x5 @ 230",
+            "3 x 5, RPE 8, 230",
+        ),
+        ("volume", "3x5 @ 225", {"new_sets": "4"}, "4 x 5, 225", "4x5 @ 225"),
+    ],
+)
+def test_card_after_is_exactly_what_apply_writes(
+    kind, cell_text, value, model_after, written
+):
+    """605.9c: the model's own rendering never reaches the card, the write does."""
+    from store_project.meso.agent import apply as agent_apply
+
+    plan, _, cell = make_plan()
+    cell.text = cell_text
+    cell.save()
+    cleaned = _clean(
+        plan,
+        _blank(
+            kind=kind,
+            prescription_id=cell.pk,
+            after=model_after,
+            **{"new_load": "", **value},
+        ),
+    )
+    batch = AgentProposalBatch.objects.create(
+        plan=plan, coach=plan.relationship.coach, instruction="x"
+    )
+    change = ProposedChange.objects.create(batch=batch, **cleaned)
+    agent_apply.apply_change(change)
+    cell.refresh_from_db()
+    assert cleaned["after"] == written
+    assert cell.text == written

@@ -213,6 +213,7 @@ def _fill_display(cleaned):
         cleaned["day_label"] = str(session)[:128]
 
     before = after = ""
+    authoritative_after = None
     # Can ``apply_change`` actually write this? A progress/volume whose target
     # cell the parser can't read is a safe skip at apply time, so approving it
     # would be a no-op the card dressed up as an edit.
@@ -225,7 +226,10 @@ def _fill_display(cleaned):
         new_text = agent_apply.recomposed_text(presc, component, payload.get(component))
         if new_text is not None:
             before = _first_line(presc.text)
-            after = new_text
+            # What the card shows is what the apply writes: derived here from
+            # the same function, never the model's own rendering of the edit
+            # (605.9c — it wrote ``3x5 @ 230`` on the card, ``3 x 5, 230`` landed).
+            after = authoritative_after = _first_line(new_text)
         else:
             applicable = False
     elif kind == "volume" and session is not None and payload.get("sets"):
@@ -240,7 +244,9 @@ def _fill_display(cleaned):
 
     if not cleaned["before"]:
         cleaned["before"] = before[:255]
-    if not cleaned["after"]:
+    if authoritative_after is not None:
+        cleaned["after"] = authoritative_after[:255]
+    elif not cleaned["after"]:
         cleaned["after"] = after[:255]
     if not applicable or not (cleaned["before"] or cleaned["after"]):
         cleaned["status"] = ProposedChange.Status.REJECTED
