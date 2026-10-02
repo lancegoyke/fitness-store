@@ -279,15 +279,50 @@ describe("finish", () => {
     expect(c.error).toBe(true);
   });
 
-  it("keeps 'done' without an error when a 200's body can't be read", async () => {
-    vi.useFakeTimers();
+  // A 200 we can't read is not proof the server stored the write (a proxy can
+  // answer 200 with HTML or `{}`), so it is queued like a network failure.
+  it.each([
+    ["an unparseable body", { jsonError: true }],
+    ["a JSON body with no log", { body: {} }],
+  ])("keeps the write queued when a 200 has %s", async (_name, reply) => {
     const c = makeLogger();
-    global.fetch = vi.fn().mockResolvedValue(res({ jsonError: true }));
+    global.fetch = vi.fn().mockResolvedValue(res(reply));
     await c.finish();
     expect(c.status).toBe("done");
+    expect(c.queued).toBe(true);
+    expect(c.statusBeforeQueued).toBe("pending");
     expect(c.error).toBe(false);
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0].body).toEqual({ status: "done" });
+  });
+
+  it.each([
+    ["an unparseable body", { jsonError: true }],
+    ["a JSON body with no log", { body: {} }],
+  ])("a later flush with a good 200 settles a finish that got %s", async (_name, reply) => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    global.fetch = vi.fn().mockResolvedValue(res(reply));
+    await c.finish();
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: logBody("done", { logged: 2, prescribed: 4 }) }),
+    );
+    await c.flushQueue();
     expect(c.readQueue()).toHaveLength(0);
-    expect(c.saved).toBe(true);
+    expect(c.status).toBe("done");
+    expect(c.progressLabel).toBe("2 of 4 sets logged");
+  });
+
+  it("takes the status back off when a 200 can't be read and storage is full", async () => {
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    global.fetch = vi.fn().mockResolvedValue(res({ jsonError: true }));
+    await c.finish();
+    expect(c.status).toBe("pending"); // nothing holds the write: the button returns
+    expect(c.error).toBe(true);
   });
 
   it("reflects the server's log and progress on success", async () => {

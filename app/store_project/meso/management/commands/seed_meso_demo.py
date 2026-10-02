@@ -1215,7 +1215,9 @@ def sample_log_items(prescriptions):
     """``SAMPLE_LOG`` as ``log_typed_sets`` items: ``(cell, [typed text, ...])``.
 
     ``prescriptions`` maps exercise name -> line-0 cell (``session.cells()``);
-    an exercise the plan doesn't carry is skipped. E.g. Box Squat's sets become
+    an exercise the plan doesn't carry is left out, and so is a row the coach
+    skipped — a real blur on a skipped row writes no set
+    (``_upsert_parsed_set`` bails on ``skipped``). E.g. Box Squat's sets become
     ``"70 x 6, RPE 7"`` x3 and ``"70 x 6, RPE 8.5"``; Standing Calf Raise
     ``"60 x 15"``.
     """
@@ -1225,7 +1227,7 @@ def sample_log_items(prescriptions):
             [typed_set_text(*triple) for triple in sets],
         )
         for name, sets in SAMPLE_LOG["sets"].items()
-        if name in prescriptions
+        if name in prescriptions and not prescriptions[name].skipped
     ]
 
 

@@ -1789,7 +1789,10 @@ def set_progress(prescriptions, sets_by_slot):
 
     THE one count the athlete's header ("N of M sets logged") and the coach's
     results (completion %, the tile's "N of M sets logged") share, so the two
-    screens cannot disagree about how much of a session was done.
+    screens cannot disagree about how much of one log was done. They can still
+    read different logs: the coach's results score the newest DONE log, the
+    athlete's page the newest log of any status (``newest_session_logs``), so
+    a pending log typed after a finished one shows only on the athlete's side.
 
     ``prescriptions`` is ``session.trainable_cells()``; ``sets_by_slot`` groups
     the log's sets by ``anchor_slot_id`` (sets with no anchor are left out of

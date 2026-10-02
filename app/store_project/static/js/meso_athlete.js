@@ -426,7 +426,6 @@ function createLogger() {
           this.status = previousStatus;
           throw new Error("Request failed: " + res.status);
         }
-        if (ahead) this.dropEntry(ahead);
         let data;
         try {
           data = await res.json();
@@ -434,13 +433,20 @@ function createLogger() {
             throw new Error("unexpected reply shape");
           }
         } catch (e) {
-          // A 200 whose body can't be read (a proxy mangling it): the write
-          // landed, so "done" stands and there is nothing to retry or report.
-          // The count re-syncs on the next response.
-          this.statusBeforeQueued = "";
-          this.reportSaved();
+          // A 200 we can't read is not proof the server stored the write: a
+          // proxy can answer 200 with HTML or `{}`. Treat it like a network
+          // failure and keep the entry. Replaying `{status: "done"}` is
+          // idempotent (DONE is sticky, the date is kept), so a retry costs
+          // nothing whether or not the first write landed.
+          if (this.keepForLater(payload) || this.holdsThisLog(ahead)) {
+            this.statusBeforeQueued = previousStatus;
+          } else {
+            this.status = previousStatus;
+          }
           return;
         }
+        // Only a reply we could read says the server has this write.
+        if (ahead) this.dropEntry(ahead);
         this.status = data.log.status;
         this.statusBeforeQueued = ""; // the server has this write; nothing to put back
         this.applyProgress(data.progress);
