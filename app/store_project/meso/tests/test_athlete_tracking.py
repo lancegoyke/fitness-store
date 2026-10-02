@@ -405,6 +405,11 @@ class TestSubLineUndoIsolation:
         )
         # A2's snapshot captures the coach's line-1 = "RPE 8".
         coach_patch(client, s.plan, s.squat, "3 x 6, RPE 7, 99")
+        # A3: the coach clears the line. A coach cue WITH words is read-only to
+        # the athlete (#524); a blank one is free for them to claim.
+        coach_cell_write(
+            client, s.plan, s.squat.exercise_slot_id, s.session.week_id, 1, ""
+        )
         # The athlete edits that same line-1 cell — flips it athlete-authored.
         client.force_login(s.athlete)
         post(
@@ -413,8 +418,9 @@ class TestSubLineUndoIsolation:
             {"exercise_id": s.squat.pk, "line": 1, "text": "athlete note"},
         )
         line1 = sub_cells(s.squat).get()
-        # Coach undoes A2 (whose snapshot still holds the coach "RPE 8").
+        # Coach undoes A3, then A2 (whose snapshot still holds the coach "RPE 8").
         client.force_login(s.coach)
+        assert client.post(undo_url(s.plan)).status_code == 200
         assert client.post(undo_url(s.plan)).status_code == 200
 
         line1.refresh_from_db()
@@ -475,7 +481,8 @@ class TestSubLineUndoIsolation:
 class TestSubLinePresenter:
     def test_athlete_session_exposes_editable_sub_lines(self, client):
         s = seed()
-        sub_line(s.squat, "RPE 8")  # a line-1 cell beneath the squat row
+        # An athlete-authored line-1 cell (a coach cue is read-only, #524).
+        sub_line(s.squat, "RPE 8", athlete_authored=True)
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
         # "RPE 8" isn't a set attempt (5a §8) — warn is False. `warn_reason`
@@ -499,7 +506,7 @@ class TestSubLinePresenter:
         from store_project.meso.models import SessionLog
 
         s = seed()
-        sub_line(s.squat, "225 x", line=1)  # unresolved-set — warns
+        sub_line(s.squat, "225 x", line=1, athlete_authored=True)  # warns
         logged_line = sub_line(s.squat, "225 x 5", line=2, athlete_authored=True)
         # The row the real write path would have created. Without it the text
         # claims a set that doesn't exist, which now warns on its own — see

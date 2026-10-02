@@ -16,6 +16,27 @@ function textLabel(text: string): string {
     .join(" · ") || "—";
 }
 
+const GENERIC_PLACEHOLDER = "225 x 5, RPE 8 — or a note";
+const MAX_LINES = 20;
+
+/** The athlete-format placeholder for a cell's first line, or the generic one.
+ * Only a plain "NxM @ load" (integer reps, absolute numeric load) converts:
+ * "3x5 @ 225" -> "225 x 5". Ranges, AMRAP, bw, % targets fall back. */
+export function athletePlaceholder(text: string): string {
+  const first = text.split(/\r?\n/)[0]?.trim() ?? "";
+  const m = /^(\d+)\s*[x×]\s*(\d+)\s*@\s*(\d+(?:\.\d+)?)\s*(?:kg|lbs?)?$/i.exec(first);
+  return m ? `${m[3]} x ${m[2]}` : GENERIC_PLACEHOLDER;
+}
+
+/** How many empty lines the athlete's page pads (mirrors the server's
+ * `pad_lines`: the prescribed set count, 3 when it has none, clamped 1-12). */
+function prescribedSets(text: string): number {
+  const first = text.split(/\r?\n/)[0]?.trim() ?? "";
+  const m = /^(\d+)\s*[x×]/i.exec(first);
+  const n = m ? Number(m[1]) : 0;
+  return Math.max(1, Math.min(n || 3, 12));
+}
+
 export function AthletePreview({
   grid,
   coachmarkVisible,
@@ -125,7 +146,20 @@ export function AthletePreview({
           <div className="meso-phone-body">
             {exercises.map((exercise) => {
               const note = exercise.note?.trim();
-              const lines = (exercise.lines ?? []).filter((line) => line.text.trim());
+              const sub = (exercise.lines ?? []).filter((line) => line.text.trim());
+              const athleteLines = sub.filter((line) => line.athlete_authored);
+              const cues = sub.filter((line) => !line.athlete_authored);
+              // Empty lines never reuse a number a cue or an athlete line holds.
+              const taken = new Set(sub.map((line) => line.line));
+              const emptyCount = Math.max(
+                1,
+                Math.min(prescribedSets(exercise.text) - athleteLines.length, MAX_LINES - sub.length),
+              );
+              const emptyLines: number[] = [];
+              for (let n = 1; emptyLines.length < emptyCount && n <= MAX_LINES; n++) {
+                if (!taken.has(n)) emptyLines.push(n);
+              }
+              const placeholder = athletePlaceholder(exercise.text);
               return (
                 <div
                   key={exercise.id}
@@ -141,7 +175,7 @@ export function AthletePreview({
                   </div>
                   <div className="meso-phone-exercise-log">
                     <div className="meso-phone-exercise-log-label">what you did</div>
-                    {lines.map((line, lineIndex) => (
+                    {athleteLines.map((line, lineIndex) => (
                       <input
                         key={line.line}
                         className="meso-phone-exercise-line"
@@ -150,10 +184,63 @@ export function AthletePreview({
                         readOnly
                       />
                     ))}
+                    {emptyLines.map((n) => (
+                      <input
+                        key={`empty-${n}`}
+                        className="meso-phone-exercise-line"
+                        data-testid={`athlete-empty-line-${exercise.id}-${n}`}
+                        data-line={n}
+                        placeholder={placeholder}
+                        value=""
+                        readOnly
+                      />
+                    ))}
+                    <button
+                      type="button"
+                      className="meso-btn meso-btn--ghost"
+                      style={{ padding: "4px 8px", fontSize: 12 }}
+                      disabled
+                    >
+                      + add a line
+                    </button>
                   </div>
+                  {cues.length > 0 && (
+                    <div
+                      className="meso-phone-exercise-log"
+                      data-testid={`athlete-cues-${exercise.id}`}
+                      style={{ borderTop: "1px solid var(--line-2)" }}
+                    >
+                      <div className="meso-phone-exercise-log-label">from your coach</div>
+                      {cues.map((cue) => (
+                        <div
+                          key={cue.line}
+                          className="meso-mono"
+                          data-testid={`athlete-cue-${exercise.id}-${cue.line}`}
+                          style={{ fontSize: 12, color: "var(--dim)", marginBottom: 4 }}
+                        >
+                          {cue.text}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
+            <div className="meso-phone-exercise-log" data-testid="athlete-preview-notes">
+              <label className="meso-phone-exercise-log-label" htmlFor="athlete-preview-notes-box">
+                Notes for your coach
+              </label>
+              <textarea
+                id="athlete-preview-notes-box"
+                className="meso-phone-exercise-line"
+                rows={3}
+                disabled
+                placeholder="Logging happens on their phone"
+              />
+            </div>
+            <button type="button" className="meso-btn meso-btn--primary" disabled>
+              Finish session
+            </button>
           </div>
         </div>
       </div>

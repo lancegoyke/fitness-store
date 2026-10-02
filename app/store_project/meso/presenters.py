@@ -11,6 +11,7 @@ until those surfaces grow their own slices.
 
 import datetime
 import math
+import re
 import statistics
 import time
 from collections import defaultdict
@@ -523,6 +524,21 @@ def _relative_when(dt):
     return f"{coarse} ago"
 
 
+_NOTE_PREVIEW_CHARS = 60
+
+
+def _note_preview(notes):
+    """A session note as one short line for the roster feed (#524).
+
+    Whitespace (incl. newlines) is collapsed and the text cut at ~60 characters
+    with an ellipsis.
+    """
+    flat = " ".join((notes or "").split())
+    if len(flat) <= _NOTE_PREVIEW_CHARS:
+        return flat
+    return flat[: _NOTE_PREVIEW_CHARS - 1].rstrip() + "…"
+
+
 def roster_activity(coach, *, limit=8):
     """The coach's recent-activity feed — athletes' latest completed sessions.
 
@@ -549,6 +565,7 @@ def roster_activity(coach, *, limit=8):
                 },
                 "kind": "log",
                 "text": f"logged {session_label}",
+                "note": _note_preview(log.notes),
                 "when": _relative_when(log.created_at),
             }
         )
@@ -1395,6 +1412,8 @@ def session_results(session):
             "name": link_athlete_name(plan.relationship),
         },
         "plan_id": plan.pk,
+        # The athlete's one session note (#524) — raw, the template escapes it.
+        "athlete_note": (log.notes if log is not None else "") or "",
         "rows": rows,
         "summary": {
             "session": _session_label(session),
@@ -1912,6 +1931,50 @@ def _target_label(prescription, lines=()):
     return _text_label("\n".join(p for p in parts if p and p.strip()))
 
 
+# The athlete's one session-level note cap (``SessionLog.notes``, #524). Defined
+# here, not in ``views`` (which imports this module), and re-exported there.
+MAX_SESSION_NOTES = 2000
+
+_PLAIN_LOAD = re.compile(r"^(\d+(?:\.\d+)?)(?:kg|lbs?)?$", re.IGNORECASE)
+
+
+def _line_placeholder(prescription):
+    """``(placeholder, reps)`` for an empty "what you did" line (#524).
+
+    The placeholder shows the set's own target in the line format
+    ``parsing.parse_performed`` accepts (``3x5 @ 225`` -> ``225 x 5``), so what
+    the athlete sees is also what they can type. A target the athlete format
+    can't express (a range, AMRAP, a duration, bodyweight, no load) gets no
+    placeholder, and the proposal is round-tripped through ``parse_performed``
+    before it is offered, so a hint can never be text the page would then warn
+    about. A %1RM target has no load of its own (the client turns it into a bar
+    load from the athlete's 1RM), so it yields no placeholder but still hands
+    back ``reps`` for the client to combine with that load.
+    """
+    parsed = parsing.parse_prescription(prescription.text or "") or {}
+    reps = parsed.get("reps")
+    if not isinstance(reps, int) or isinstance(reps, bool) or reps < 1:
+        return "", ""
+    load = str(parsed.get("load") or "").strip()
+    if load.endswith("%"):
+        return "", str(reps)
+    match = _PLAIN_LOAD.match(load)
+    if not match:
+        return "", ""
+    number = match.group(1)
+    if "." in number:
+        number = number.rstrip("0").rstrip(".")
+    placeholder = f"{number} x {reps}"
+    performed = parsing.parse_performed(placeholder)
+    if (
+        performed.get("kind") != "set"
+        or str(performed.get("load")) != number
+        or performed.get("reps") != reps
+    ):
+        return "", ""
+    return placeholder, ""
+
+
 def athlete_session(session, athlete):
     """One session as the athlete's logger page.
 
@@ -2013,9 +2076,20 @@ def athlete_session(session, athlete):
         ):
             elsewhere_by_line[row.source_line_id].append(row)
 
+    def _coach_lines(slot_id):
+        # The coach's cues (``athlete_authored=False``, line>=1): read-only, so
+        # no warn data, and rendered AFTER the athlete's sets (#524). Blank
+        # ones are dropped. `lines_by_slot` is in line order already.
+        return [
+            {"line": c.line, "text": c.text}
+            for c in lines_by_slot.get(slot_id, ())
+            if not c.athlete_authored and c.text.strip()
+        ]
+
     def _sub_lines(slot_id):
-        # The row's editable tracking stack (Phase 4a): its line>=1 cells for
-        # this week as ``[{line, text, warn}]``. Blank cells are dropped from
+        # The row's editable tracking stack (Phase 4a): its ATHLETE-authored
+        # line>=1 cells for this week as ``[{line, text, warn}]`` (the coach's
+        # cues are ``coach_lines``, #524). Blank cells are dropped from
         # the display (a cleared sub-line is a blank cell, not a deleted row).
         # ``warn`` (5a, plan §8) is derived on read, not stored: re-classify
         # the cell's own text with ``parse_performed``. Text that *looks* like a
@@ -2046,7 +2120,7 @@ def athlete_session(session, athlete):
         # ``loggable=not skipped`` rather than relying on this default.
         rendered = []
         for line_cell in lines_by_slot.get(slot_id, ()):
-            if not line_cell.text.strip():
+            if not line_cell.athlete_authored or not line_cell.text.strip():
                 continue
             # #572: the client needs WHY, not just whether — see
             # `sub_line_warn_reason`. `warn` stays a bool so every template
@@ -2109,6 +2183,7 @@ def athlete_session(session, athlete):
         "progress_as_of": progress_as_of,
         "progress_label": progress_label(progress["logged"], progress["prescribed"]),
         "notes": log.notes if log else "",
+        "notes_max": MAX_SESSION_NOTES,
         "log_url": reverse("meso:athlete_log_session", kwargs={"pk": session.pk}),
         # Where the logger persists a manually-entered 1RM (Phase 2) — server-side
         # now, so it syncs across devices and the coach can see it.
@@ -2122,6 +2197,10 @@ def athlete_session(session, athlete):
                 "target": _target_label(p),
                 # The editable per-week tracking stack the athlete writes to.
                 "sub_lines": _sub_lines(p.exercise_slot_id),
+                # The coach's cues, read-only and shown after the sets (#524).
+                "coach_lines": _coach_lines(p.exercise_slot_id),
+                # An empty line's hint: this set's target as a typeable line.
+                **dict(zip(("placeholder", "placeholder_reps"), _line_placeholder(p))),
                 # The stored 1RM as a bare number string ("140"), or "" — the
                 # client appends the unit and may layer a typed override on top.
                 "one_rm": _one_rm_label(one_rm_map.get(p.pk)),
@@ -2167,6 +2246,9 @@ def athlete_log_payload(session_ctx):
             "meso:athlete_cell_write", kwargs={"pk": session_ctx["id"]}
         ),
         "status": session_ctx["status"],
+        # The one session-level note (#524) and its character cap.
+        "notes": session_ctx["notes"],
+        "notes_max": session_ctx["notes_max"],
         # The unit lets the %1RM helper render a suggested bar load (S2 Phase 2b).
         "unit": session_ctx["unit"],
         # The count plus when it was read, so a later line save's response
@@ -2191,6 +2273,12 @@ def athlete_log_payload(session_ctx):
                 # The editable tracking stack (Phase 4a) — the client hydrates a
                 # freeform sub-line input per entry, saved on blur.
                 "sub_lines": e.get("sub_lines", []),
+                # Read-only coach cues, shown after the athlete's sets (#524).
+                "coach_lines": e.get("coach_lines", []),
+                # Empty-line hint (``"225 x 5"``) and, for a %1RM target, the
+                # reps the client pairs with its suggested load.
+                "placeholder": e.get("placeholder", ""),
+                "placeholder_reps": e.get("placeholder_reps", ""),
                 "pad_lines": e["pad_lines"],
                 "logged_readonly": e["logged_readonly"],
             }

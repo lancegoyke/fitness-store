@@ -6,6 +6,12 @@
  * finish() POSTs `{status: "done"}` to the log endpoint (api/me/session/<id>/log/)
  * to complete the session. The server counts the sets the lines became and
  * sends the count back as `progress`, which `progressLabel` shows.
+ *
+ * Two things sit beside the athlete's lines. The coach's own cues for an exercise
+ * (`coach_lines`) are read-only text after the sets: they occupy line numbers, so
+ * the athlete's stack only ever uses the FREE ones (the cell endpoint refuses a
+ * changed write onto a coach line). And one session note ("Notes for your coach")
+ * saves through the log endpoint as `{notes}` — see `noteInput`/`saveNotes`.
  */
 // ---- %1RM ergonomics helpers (S2 Phase 2b) ----
 // Pure maths shared by the logger and its tests. A %1RM target ("75%") is an
@@ -166,6 +172,13 @@ function createLogger() {
     _ownEntries: {}, // ids of the outbox entries this page wrote or restored
     _flushing: null, // the flush pass in progress, if any
     _flushAgain: false, // a flush was asked for mid-pass; run one more
+    notes: "", // the athlete's note to their coach for the whole session
+    notesMax: 2000,
+    _notesSavedText: "", // the note as the server last confirmed it
+    noteStatus: "", // "", "saved", "queued" or "error" — the note's own footer
+    _noteTimer: null, // debounce handle for the note POST
+    _notesSave: Promise.resolve(), // promise chain: note POSTs reach the server in order
+    _notesRunning: 0, // note saves chained and not yet finished
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -185,6 +198,9 @@ function createLogger() {
       this.unit = data.unit || "";
       this.exercises = data.exercises || [];
       this.applyProgress(data.progress);
+      this.notes = data.notes || "";
+      this.notesMax = data.notes_max || 2000;
+      this._notesSavedText = this.notes;
       // Default the freeform tracking stack (Phase 4a) so the template's
       // `x-for` over `ex.sub_lines` is safe even for an exercise with none.
       //
@@ -203,14 +219,26 @@ function createLogger() {
       // every reload. Filling 1..n by number does that; appending would walk
       // the numbers up on each visit. Lines the athlete has beyond the
       // prescription are always kept.
+      //
+      // The coach's cues hold line numbers of their own (`coach_lines`; an
+      // older server mid-deploy sends none), and the athlete's stack must never
+      // land on one — the cell endpoint refuses a changed write there. So the
+      // padding takes the first `want` FREE numbers instead of 1..want, still
+      // by number and still the same on every reload: coach cues on line 1 and
+      // a prescription of 3 pad lines 2, 3 and 4.
       for (const ex of this.exercises) {
         if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
+        if (!Array.isArray(ex.coach_lines)) ex.coach_lines = [];
         const want = Math.min(
           Math.max(Number.isInteger(ex.pad_lines) ? ex.pad_lines : 1, 1),
           MAX_CELL_LINE,
         );
         const present = new Set(ex.sub_lines.map((l) => l.line));
-        for (let n = 1; n <= want; n += 1) {
+        const taken = new Set(ex.coach_lines.map((c) => c.line));
+        let padded = 0;
+        for (let n = 1; n <= MAX_CELL_LINE && padded < want; n += 1) {
+          if (taken.has(n)) continue;
+          padded += 1;
           if (!present.has(n)) ex.sub_lines.push({ line: n, text: "" });
         }
         ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
@@ -248,8 +276,15 @@ function createLogger() {
       // then flush everything logged while offline (S7, #527), now and
       // whenever wifi returns.
       this.restoreQueuedLines();
+      this.restoreQueuedNotes();
       this.flushQueue();
       window.addEventListener("online", () => this.flushQueue());
+      // Best effort for a note still being typed: the write-ahead already
+      // protects the text, this only gets it to the server sooner.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") this.noteBlur();
+      });
+      window.addEventListener("pagehide", () => this.noteBlur());
     },
 
     // Promote a pre-Phase-2 override (the retired `meso-e1rm` localStorage store,
@@ -306,6 +341,17 @@ function createLogger() {
         // Its text is on the line now, as this page's own.
         if (item.id) this._ownEntries[item.id] = true;
       }
+    },
+
+    // The same for the session note (see `restoreQueuedLines`): the server
+    // renders the note it last saved, which is older than the one typed
+    // offline. Show the queued text; `flushQueue` then sends it.
+    restoreQueuedNotes() {
+      const item = this.queuedNotes();
+      if (!item) return;
+      this.notes = item.body.notes;
+      this.noteStatus = "queued";
+      if (item.id) this._ownEntries[item.id] = true;
     },
 
     // ---- derived progress ----
@@ -376,7 +422,17 @@ function createLogger() {
       // The payload is a constant, so settling the lines below can't change
       // it: there is no second, rebuilt copy to enqueue.
       const ahead = this.enqueue(payload);
-      // Lines first (#527). Pressing the button blurs the line being typed, so
+      // The note first of all: a note typed just before Finish is still
+      // debouncing or in flight, and the log must not land before or over it.
+      // (It stays a separate request — `payload` is unchanged so an older
+      // server never sees a key it doesn't know — and its outbox entry is
+      // merged with `ahead`, so neither erases the other.)
+      try {
+        await this.settleNotes();
+      } catch (err) {
+        console.error("Could not settle the note before finishing", err);
+      }
+      // Lines next (#527). Pressing the button blurs the line being typed, so
       // its save is already on its way: let it land, then send any line still
       // queued from earlier. The log then reaches the server after the sets its
       // lines carry, one request at a time, and the count it reports below
@@ -457,7 +513,7 @@ function createLogger() {
           return;
         }
         // Only a reply we could read says the server has this write.
-        if (ahead) this.dropEntry(ahead);
+        if (ahead) this.settleLog(payload);
         this.status = data.log.status;
         this.statusBeforeQueued = ""; // the server has this write; nothing to put back
         this.applyProgress(data.progress);
@@ -473,7 +529,7 @@ function createLogger() {
         console.error("Log save failed", err);
         this.error = true;
         // A refusal is the athlete's to retry, not the outbox's.
-        if (ahead) this.dropEntry(ahead);
+        if (ahead) this.settleLog(payload);
       } finally {
         this.saving = false;
       }
@@ -514,10 +570,17 @@ function createLogger() {
       const lineQueued = this.exercises.some((e) =>
         (e.sub_lines || []).some((l) => l.queued),
       );
+      // A note still being typed has its write-ahead entry in the outbox too,
+      // but that isn't "waiting for the network" — it's about to be sent.
+      const noteBusy = !!this._noteTimer || this._notesRunning > 0;
       return (
         lineQueued ||
         this.readQueue().some(
-          (i) => !isCellEntry(i) && i.url === this.logUrl && this.isMine(i),
+          (i) =>
+            !isCellEntry(i) &&
+            i.url === this.logUrl &&
+            this.isMine(i) &&
+            !(noteBusy && Object.keys(i.body).join() === "notes"),
         )
       );
     },
@@ -603,8 +666,32 @@ function createLogger() {
     // that earlier copy sits there perfectly intact and due to flush: the
     // write is queued, not lost, and saying "couldn't save" (or taking the
     // status back off) would under-claim what the page actually holds.
+    //
+    // By content, not id: a note queued after `entry` merges into it (see
+    // `enqueue`), which gives the merged entry a new id while it still holds
+    // everything `entry` did.
     holdsThisLog(entry) {
-      return !!entry && this.readQueue().some((item) => item.id === entry.id);
+      if (!entry) return false;
+      const held = this.queuedLog();
+      return (
+        !!held &&
+        Object.keys(entry.body).every(
+          (k) => JSON.stringify(held.body[k]) === JSON.stringify(entry.body[k]),
+        )
+      );
+    },
+
+    // The one outbox entry for this session's log that this page may send.
+    queuedLog() {
+      return this.readQueue().find(
+        (i) => !isCellEntry(i) && i.url === this.logUrl && this.isMine(i),
+      );
+    },
+
+    // The queued entry carrying this session's note, if any.
+    queuedNotes() {
+      const item = this.queuedLog();
+      return item && typeof item.body.notes === "string" ? item : null;
     },
 
     // True when the outbox took it. False means storage refused (a full or
@@ -622,11 +709,70 @@ function createLogger() {
     },
 
     // Returns the entry as stored, or null when storage refused it.
+    //
+    // The log url still holds ONE entry, but a new write is MERGED over the
+    // one it replaces rather than replacing it whole: the log carries two
+    // independent things (`status` from Finish, `notes` from the session note),
+    // and a Finish queued after an undelivered note must not erase the note, nor
+    // a note the Finish. Per key the latest value wins, and each key lives
+    // until it is delivered (`settleLog`). Only this athlete's entry is
+    // merged; another's is dropped as it always was.
     enqueue(payload) {
-      const queue = this.readQueue().filter((item) => item.url !== this.logUrl);
-      const item = this.stamp({ url: this.logUrl, body: payload });
+      const all = this.readQueue();
+      const same = (i) => !isCellEntry(i) && i.url === this.logUrl;
+      const earlier = all.filter(same).filter((i) => this.isMine(i));
+      // Only the two keys the log endpoint knows to deliver independently are
+      // carried over: anything else in an old entry (a queue written before
+      // typed lines, with its `sets`) is superseded as it always was.
+      const carried = earlier.map((i) => {
+        const kept = {};
+        for (const key of ["status", "notes"]) {
+          if (key in i.body) kept[key] = i.body[key];
+        }
+        return kept;
+      });
+      const body = Object.assign({}, ...carried, payload);
+      const queue = all.filter((item) => item.url !== this.logUrl);
+      const item = this.stamp({ url: this.logUrl, body });
       queue.push(item);
       return this.writeQueue(queue) ? item : null;
+    },
+
+    // Write the note ahead, like a line: the text is in the outbox before any
+    // request, so closing the page can't lose it. Cheap (one localStorage write).
+    enqueueNotes(text) {
+      const item = this.enqueue({ notes: text });
+      if (item) this._ownEntries[item.id] = true;
+      return item;
+    },
+
+    // Take what was delivered out of this session's log entry — key by key, not
+    // the entry whole. A merged entry can carry a note AND a status, and the
+    // request that landed carried only one of them; and a key rewritten while
+    // the request was in flight (the athlete kept typing) holds a different
+    // value now and stays. An entry left with no keys is removed. `sent` is the
+    // body as it went out.
+    settleLog(sent) {
+      const queue = this.readQueue();
+      const index = queue.findIndex(
+        (i) => !isCellEntry(i) && i.url === this.logUrl && this.isMine(i),
+      );
+      if (index === -1) return;
+      const body = { ...queue[index].body };
+      let changed = false;
+      for (const key of Object.keys(sent)) {
+        if (key in body && JSON.stringify(body[key]) === JSON.stringify(sent[key])) {
+          delete body[key];
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      if (Object.keys(body).length) {
+        queue[index] = { ...queue[index], body };
+      } else {
+        queue.splice(index, 1);
+      }
+      this.writeQueue(queue);
     },
 
     // Queue one line's write, replacing any earlier one for the same cell:
@@ -750,6 +896,21 @@ function createLogger() {
     },
 
     async flushLog(item) {
+      // This session's note goes through the note's own chain, so a replay
+      // can't race (or overtake) the debounced save of what's in the textarea:
+      // both would otherwise be in flight at once, and the older text could land
+      // last. What is left of the entry afterwards — a Finish queued alongside —
+      // is sent below, without the note.
+      let body = item.body;
+      if (item.url === this.logUrl && typeof body.notes === "string") {
+        const outcome = await this.saveNotes();
+        if (outcome === "offline" || outcome === "kept") return outcome;
+        const rest = this.queuedLog();
+        body = rest ? { ...rest.body } : {};
+        delete body.notes;
+        if (!Object.keys(body).length) return outcome === "saved" ? "mine" : "saved";
+        item = { ...item, body };
+      }
       let res;
       try {
         res = await postJson(item.url, item.body, this.csrf);
@@ -781,7 +942,7 @@ function createLogger() {
         // queued and is refused again on its own page, where the athlete can
         // see it.
         if (item.url !== this.logUrl) return "kept";
-        this.dropEntry(item);
+        this.settleLog(item.body);
         // The badge goes back with it. `finish()` flipped `status` to "done"
         // optimistically before queuing this entry and recorded what it was
         // before (`statusBeforeQueued`); now that the server has refused the
@@ -807,14 +968,21 @@ function createLogger() {
       } catch (e) {
         return "kept";
       }
-      this.dropEntry(item);
-      if (item.url !== this.logUrl) return "saved";
+      if (item.url === this.logUrl) {
+        this.settleLog(item.body);
+      } else {
+        this.dropEntry(item);
+        return "saved";
+      }
       // A pass can already be sending this session's older log when finish()
       // starts, so its reply can land mid-finish — checked after the body is
       // read, which can itself outlast the tap. finish's own reply is the one
       // that reports, so leave the reconciling to it.
       if (this.saving) return "mine";
-      this.status = data.log.status;
+      // Only a write that carried a status gets to say what the status is.
+      // What is left after a note's own replay has none (see above), but a
+      // log entry from before notes existed always does.
+      if ("status" in item.body) this.status = data.log.status;
       this.applyProgress(data.progress);
       return "mine";
     },
@@ -920,18 +1088,179 @@ function createLogger() {
     // per line, saved on blur. `addLine` appends an empty sub-line (capped at
     // MAX_CELL_LINE); `saveCell` upserts one (exercise_id, line, text) cell.
 
-    // Append an empty sub-line to the exercise's stack, up to MAX_CELL_LINE.
+    // Line numbers the coach's cues occupy on this exercise. The athlete's
+    // stack never uses them.
+    coachLineSet(ex) {
+      return new Set(((ex && ex.coach_lines) || []).map((c) => c.line));
+    },
+
+    // The number a new athlete line would take: the smallest FREE (not
+    // coach-occupied) number past the highest line the athlete has, or null
+    // when none is left under the cap. Numbered off the max, not the length: a
+    // sparse stack (the server dropped a cleared line but kept a later one)
+    // would otherwise fabricate a duplicate number, breaking Alpine keys and
+    // `saveCell` targeting.
+    nextFreeLine(ex) {
+      if (!ex) return null;
+      const taken = this.coachLineSet(ex);
+      const maxLine = (ex.sub_lines || []).reduce(
+        (m, l) => Math.max(m, l.line || 0),
+        0,
+      );
+      for (let n = maxLine + 1; n <= MAX_CELL_LINE; n += 1) {
+        if (!taken.has(n)) return n;
+      }
+      return null;
+    },
+
+    // What an empty line shows. The server's own guess (the prescription as a
+    // line, e.g. "225 x 5") wins; failing that a %1RM lift with a known load
+    // can build one from the suggested load and the prescribed reps; failing
+    // that, the generic hint.
+    linePlaceholder(ex) {
+      if (ex && ex.placeholder) return ex.placeholder;
+      if (ex && ex.placeholder_reps && this.isPercentLift(ex)) {
+        // The bare number: the unit is the plan's, so typing it is redundant,
+        // and "135 x 5" is the shape the line parser is known to accept.
+        const load = loadForPercent(this.effectiveOneRm(ex), this.percentTarget(ex));
+        if (load != null) return fmtNum(load) + " x " + ex.placeholder_reps;
+      }
+      return "225 x 5, RPE 8 — or a note";
+    },
+
+    // Append an empty sub-line to the exercise's stack on the next free number,
+    // up to MAX_CELL_LINE.
     addLine(ex) {
       if (!ex) return;
       if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
-      // Number off the MAX existing line, not the length: a sparse stack (the
-      // server dropped a cleared line but kept a later one) would otherwise
-      // fabricate a duplicate line number, breaking Alpine keys and `saveCell`
-      // targeting. The cap is against that max too.
-      const maxLine = ex.sub_lines.reduce((m, l) => Math.max(m, l.line || 0), 0);
-      if (maxLine >= MAX_CELL_LINE) return;
+      const line = this.nextFreeLine(ex);
+      if (line == null) return;
       // Nothing is saved on a new line, so blurring it empty posts nothing.
-      ex.sub_lines.push({ line: maxLine + 1, text: "", savedText: "" });
+      ex.sub_lines.push({ line, text: "", savedText: "" });
+    },
+
+    // ---- session note ("Notes for your coach") ----
+    // One freeform note for the whole session, saved through the log endpoint
+    // as `{notes}`. It never touches `status`: the note is editable after the
+    // session is done, and a note post is not a Finish.
+
+    // Every keystroke writes the text ahead to the outbox (cheap, and the only
+    // thing that survives a closed tab); the POST itself waits for a pause.
+    // The status stays blank while typing — "saved offline" there would be noise.
+    noteInput() {
+      this.noteStatus = "";
+      this.enqueueNotes(this.notes);
+      if (this._noteTimer) clearTimeout(this._noteTimer);
+      this._noteTimer = setTimeout(() => {
+        this._noteTimer = null;
+        this.saveNotes();
+      }, 900);
+    },
+
+    // Leaving the field (or the page) sends now, without waiting out the pause.
+    noteBlur() {
+      if (this._noteTimer) {
+        clearTimeout(this._noteTimer);
+        this._noteTimer = null;
+      }
+      return this.saveNotes();
+    },
+
+    // Let a note still debouncing or in flight land, so a Finish that follows
+    // reaches the server after it. A failed save leaves the note queued; Finish
+    // goes ahead regardless.
+    async settleNotes() {
+      if (this._noteTimer) {
+        clearTimeout(this._noteTimer);
+        this._noteTimer = null;
+      }
+      await this._notesSave.catch(() => {});
+      if (this.notes !== this._notesSavedText || this.queuedNotes()) {
+        await this.saveNotes();
+      }
+    },
+
+    // Serialize note POSTs, like `saveCell`: two in flight could land out of
+    // order and leave the older text. The text is read when the request goes
+    // out, so edits made while an earlier one runs coalesce into the latest.
+    // Resolves to "saved", "offline", "kept", "rejected" or "skipped".
+    saveNotes() {
+      if (!this.logUrl) return Promise.resolve("skipped");
+      this._notesRunning += 1;
+      const run = this._notesSave
+        .catch(() => {})
+        .then(() => this._postNotes())
+        .finally(() => {
+          this._notesRunning -= 1;
+        });
+      this._notesSave = run;
+      return run;
+    },
+
+    async _postNotes() {
+      const text = this.notes;
+      const queued = this.queuedNotes();
+      // The server already has this text and nothing is waiting to say otherwise.
+      if (text === this._notesSavedText && !queued) return "skipped";
+      // Written ahead, as the input handler does — covers a send that doesn't
+      // start from typing (a Finish, a replay whose entry was since replaced).
+      let held = !!queued && queued.body.notes === text;
+      if (!held) held = !!this.enqueueNotes(text);
+      const body = { notes: text };
+      const keep = () => {
+        // Storage refused the write-ahead: nothing will sync it.
+        this.noteStatus = held ? "queued" : "error";
+      };
+      let res;
+      try {
+        res = await postJson(this.logUrl, body, this.csrf);
+      } catch (netErr) {
+        keep();
+        return "offline";
+      }
+      if (res.redirected || isWrongAccount(res)) {
+        keep();
+        return "offline";
+      }
+      if (isRetryableStatus(res.status)) {
+        keep();
+        return "kept";
+      }
+      if (!res.ok) {
+        // Refused for good (too long, say): retrying the same text can only
+        // fail again, so it leaves the outbox and the athlete sees it failed.
+        this.settleLog(body);
+        this.noteStatus = "error";
+        return "rejected";
+      }
+      let data;
+      try {
+        data = await res.json();
+        if (!data || typeof data.log !== "object" || data.log === null) {
+          throw new Error("unexpected reply shape");
+        }
+      } catch (e) {
+        // A 200 we can't read isn't proof the note landed; keep the entry.
+        keep();
+        return "kept";
+      }
+      // Only the keys as sent: a Finish queued alongside stays, and so does
+      // text typed since (its key holds a different value now).
+      this.settleLog(body);
+      this._notesSavedText = text;
+      // Deliberately NOT `data.log.status`: the reply carries the log's
+      // status, but a note post must never move the badge (a Finish may be
+      // queued separately while the server still says pending).
+      this.applyProgress(data.progress);
+      if (this.notes === text) {
+        this.noteStatus = "saved";
+        setTimeout(() => {
+          if (this.noteStatus === "saved") this.noteStatus = "";
+        }, 2400);
+      } else {
+        this.noteStatus = "";
+      }
+      return "saved";
     },
 
     // Serialize saves PER CELL. Two blurs for one sub-line can otherwise be in

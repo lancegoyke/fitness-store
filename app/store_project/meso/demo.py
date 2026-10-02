@@ -722,6 +722,7 @@ def _ensure_demo_log(athlete, plan, today):
         athlete=athlete,
         defaults={
             "status": SessionLog.Status.DONE,
+            "notes": SAMPLE_LOG["notes"],
             "date": today - timedelta(days=SAMPLE_LOG["logged_days_ago"]),
         },
     )

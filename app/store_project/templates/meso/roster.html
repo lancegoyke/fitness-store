@@ -382,6 +382,7 @@
                       <span class="meso-muted"> {{ ev.text }}</span>
                     {% endif %}
                   </div>
+                  {% if ev.note %}<div class="meso-row-meta" data-testid="activity-note" style="margin-top:2px;">📝 {{ ev.note }}</div>{% endif %}
                   <div class="meso-row-meta" style="margin-top:2px;">{{ ev.when }}</div>
                 </div>
               </div>

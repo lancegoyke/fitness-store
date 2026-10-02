@@ -51,7 +51,7 @@ class TestSubLineWarnAgreesAcrossSurfaces:
         # and never re-derives a fresh backing row -- the only way to observe
         # `_cell_warn_reason_or_blank`'s read without it healing the very gap this
         # test means to catch.
-        cell = sub_line(s.squat, "225 x 5", line=1)
+        cell = sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
         old_log = SessionLog.objects.create(
             session=s.session, athlete=s.athlete, date=timezone.localdate()
         )
@@ -73,21 +73,27 @@ class TestSubLineWarnAgreesAcrossSurfaces:
             session=s.session, athlete=s.athlete, date=timezone.localdate()
         )
 
+        def render_warn_for(session):
+            ctx = presenters.athlete_session(session, s.athlete)
+            squat_ctx = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+            return next(
+                line["warn"] for line in squat_ctx["sub_lines"] if line["line"] == 1
+            )
+
+        # The newest log has no set backing this athlete-authored line: the
+        # page tints it. (#524: a coach cue can no longer be the line under
+        # test -- it is read-only and never warns -- so the line is the
+        # athlete's own, and a blur re-derives its set.)
         client.force_login(s.athlete)
+        assert render_warn_for(s.session) is True, (
+            "the newest log has no set backing this line -- the page must "
+            "call it unlogged/tinted"
+        )
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert resp.status_code == 200
         blur_warn = resp.json()["cell"]["warn"]
-
-        ctx = presenters.athlete_session(s.session, s.athlete)
-        squat_ctx = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        render_warn = next(
-            line["warn"] for line in squat_ctx["sub_lines"] if line["line"] == 1
-        )
-
-        assert blur_warn == render_warn is True, (
-            "the newest log has no set backing this line -- both surfaces "
-            f"must call it unlogged/tinted (blur={blur_warn}, render={render_warn})"
-        )
+        # ...and once the blur has backed it, both surfaces agree it is logged.
+        assert blur_warn == render_warn_for(s.session) is False
 
     def test_a_moved_exercise_reads_unlogged_on_its_new_day(self, client):
         """After a move, the cell travels but the ``LoggedSet`` doesn't.
@@ -100,7 +106,7 @@ class TestSubLineWarnAgreesAcrossSurfaces:
         """
         s = seed()
         day2 = day(s.week, day_number=2, name="Upper", bias="Push")
-        cell = sub_line(s.squat, "225 x 5", line=1)
+        cell = sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
         old_log = SessionLog.objects.create(
             session=s.session, athlete=s.athlete, date=timezone.localdate()
         )
@@ -125,21 +131,24 @@ class TestSubLineWarnAgreesAcrossSurfaces:
         )
         assert resp.status_code == 200
 
+        def render_warn_for(session):
+            ctx = presenters.athlete_session(session, s.athlete)
+            squat_ctx = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+            return next(
+                line["warn"] for line in squat_ctx["sub_lines"] if line["line"] == 1
+            )
+
+        # (#524: the cell is the athlete's own — a coach cue is read-only and
+        # never warns — so a blur re-derives its set on the new day.)
         client.force_login(s.athlete)
+        assert render_warn_for(day2) is True, (
+            "the old day's set must not back the line on its new day -- the "
+            "page must read it unlogged"
+        )
         resp = write_cell(client, day2, s.squat, 1, "225 x 5")
         assert resp.status_code == 200
         blur_warn = resp.json()["cell"]["warn"]
-
-        ctx = presenters.athlete_session(day2, s.athlete)
-        squat_ctx = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        render_warn = next(
-            line["warn"] for line in squat_ctx["sub_lines"] if line["line"] == 1
-        )
-
-        assert blur_warn == render_warn is True, (
-            "the old day's set must not back the line on its new day -- both "
-            f"surfaces must read unlogged (blur={blur_warn}, render={render_warn})"
-        )
+        assert blur_warn == render_warn_for(day2) is False
 
 
 # -- adversarial review round: P1-A/P1-B/P2-A/P2-B ---------------------------

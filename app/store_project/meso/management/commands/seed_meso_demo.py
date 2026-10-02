@@ -843,11 +843,25 @@ SAMPLE_PLAN = {
 # hot and the last leg-curl set falling short, so the results screen shows a real
 # completion %, an RPE-over flag, and a shortfall note. ``(reps, load, rpe)`` per
 # set, keyed by the prescription's name.
+# The athlete's one session note (#524) on the sample log, so the coach's
+# results page and roster feed have something real to show in the demo.
+SAMPLE_LOG_NOTE = (
+    "Squats felt heavy today but bar speed was fine. "
+    "Left shoulder a bit tight on the last bench set."
+)
+# Short notes cycled over the seeded history logs (deterministic by week/day).
+HISTORY_LOG_NOTES = (
+    "Felt good, moved well.",
+    "Slept badly, so the top sets were a grind.",
+    "Easy day, could have added load.",
+)
+
 SAMPLE_LOG = {
     "mesocycle": "Hypertrophy",
     "week_index": 2,
     "day_number": 1,
     "logged_days_ago": 2,
+    "notes": SAMPLE_LOG_NOTE,
     "sets": {
         "Box Squat (to parallel)": [
             ("6", "70", "7"),
@@ -1788,6 +1802,9 @@ class Command(BaseCommand):
                     athlete=athlete,
                     defaults={
                         "status": SessionLog.Status.DONE,
+                        "notes": HISTORY_LOG_NOTES[
+                            (weeks_ago + session.day_number) % len(HISTORY_LOG_NOTES)
+                        ],
                         "date": today
                         - timedelta(weeks=weeks_ago)
                         + timedelta(days=(session.day_number - 1) * 2),
@@ -1844,6 +1861,7 @@ class Command(BaseCommand):
             athlete=athlete,
             defaults={
                 "status": SessionLog.Status.DONE,
+                "notes": SAMPLE_LOG["notes"],
                 "date": today - timedelta(days=SAMPLE_LOG["logged_days_ago"]),
             },
         )

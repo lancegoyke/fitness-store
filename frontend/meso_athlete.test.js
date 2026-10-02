@@ -6,6 +6,8 @@
 // machine. The athlete logs by typing lines; `finish()` only stamps the session
 // done, and the server's `progress` count rides back on every response.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   createLogger,
   epleyOneRm,
@@ -2977,5 +2979,511 @@ describe("finish() — waits on the cell queue before its own log POST (#527)", 
     expect(c.saved).toBe(false);
     expect(c.queued).toBe(false);
     expect(c.lineError).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coach cues after the sets, free line numbers, placeholder, session note (#524)
+// ---------------------------------------------------------------------------
+
+const NOTE_CELL_URL = "/meso/api/me/session/42/cell/";
+
+// Mount the page data and run init(), the way the browser does.
+function initWith(data, { queue = null } = {}) {
+  if (queue) localStorage.setItem("meso-log-queue", JSON.stringify(queue));
+  document.body.innerHTML =
+    '<span id="meso-csrf" data-token="tok"></span>' +
+    '<script id="meso-log-data" type="application/json">' +
+    JSON.stringify({
+      log_url: LOG_URL,
+      cell_url: NOTE_CELL_URL,
+      status: "pending",
+      exercises: [],
+      ...data,
+    }) +
+    "</script>";
+  const c = createLogger();
+  c.init();
+  return c;
+}
+
+const lineNumbers = (ex) => ex.sub_lines.map((l) => l.line);
+
+describe("free line numbers around the coach's cues (#524)", () => {
+  beforeEach(() => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+  });
+
+  it("a cue on line 1 with 3 pad lines gives the athlete 2, 3, 4", () => {
+    const c = initWith({
+      exercises: [{ id: 1, pad_lines: 3, coach_lines: [{ line: 1, text: "tempo 3-1-1" }] }],
+    });
+    expect(lineNumbers(c.exercises[0])).toEqual([2, 3, 4]);
+  });
+
+  it("cues on 1 and 3 with 2 pad lines give 2, 4", () => {
+    const c = initWith({
+      exercises: [
+        {
+          id: 1,
+          pad_lines: 2,
+          coach_lines: [
+            { line: 1, text: "a" },
+            { line: 3, text: "b" },
+          ],
+        },
+      ],
+    });
+    expect(lineNumbers(c.exercises[0])).toEqual([2, 4]);
+  });
+
+  it("keeps the athlete's own lines and doesn't pad past them twice", () => {
+    const c = initWith({
+      exercises: [
+        {
+          id: 1,
+          pad_lines: 2,
+          coach_lines: [{ line: 1, text: "a" }],
+          sub_lines: [{ line: 2, text: "100 x 5" }],
+        },
+      ],
+    });
+    expect(lineNumbers(c.exercises[0])).toEqual([2, 3]);
+    expect(c.exercises[0].sub_lines[0].text).toBe("100 x 5");
+  });
+
+  it("coach_lines defaults to [] when the server sends none", () => {
+    const c = initWith({ exercises: [{ id: 1, pad_lines: 2 }] });
+    expect(c.exercises[0].coach_lines).toEqual([]);
+    expect(lineNumbers(c.exercises[0])).toEqual([1, 2]);
+  });
+
+  it("addLine skips coach lines", () => {
+    const c = initWith({
+      exercises: [{ id: 1, pad_lines: 1, coach_lines: [{ line: 2, text: "c" }] }],
+    });
+    const ex = c.exercises[0];
+    expect(lineNumbers(ex)).toEqual([1]);
+    expect(c.nextFreeLine(ex)).toBe(3);
+    c.addLine(ex);
+    expect(lineNumbers(ex)).toEqual([1, 3]);
+  });
+
+  it("addLine respects the cap when the top numbers are coach lines", () => {
+    const c = initWith({
+      exercises: [
+        {
+          id: 1,
+          pad_lines: 1,
+          sub_lines: [{ line: 19, text: "x" }],
+          coach_lines: [{ line: 20, text: "c" }],
+        },
+      ],
+    });
+    const ex = c.exercises[0];
+    expect(c.nextFreeLine(ex)).toBeNull();
+    const before = ex.sub_lines.length;
+    c.addLine(ex);
+    expect(ex.sub_lines).toHaveLength(before);
+  });
+});
+
+describe("linePlaceholder (#524)", () => {
+  const generic = "225 x 5, RPE 8 — or a note";
+
+  it("the server's placeholder wins", () => {
+    const c = makeLogger();
+    expect(c.linePlaceholder({ placeholder: "225 x 5", placeholder_reps: "5", text: "5 x 5 @ 70%", one_rm: "200" })).toBe("225 x 5");
+  });
+
+  it("a %1RM lift with a suggested load and reps builds one", () => {
+    const c = makeLogger();
+    const ex = { placeholder: "", placeholder_reps: "5", text: "3 x 5 @ 67.5%", one_rm: "200", e1rm: "" };
+    expect(c.linePlaceholder(ex)).toBe("135 x 5");
+  });
+
+  it("falls back to the generic hint otherwise", () => {
+    const c = makeLogger();
+    expect(c.linePlaceholder({ placeholder: "", placeholder_reps: "5", text: "3 x 5" })).toBe(generic); // not a %1RM lift
+    expect(c.linePlaceholder({ placeholder: "", placeholder_reps: "", text: "3 x 5 @ 70%", one_rm: "200" })).toBe(generic); // no reps
+    expect(c.linePlaceholder({ placeholder: "", placeholder_reps: "5", text: "3 x 5 @ 70%", one_rm: "", e1rm: "" })).toBe(generic); // no load
+    expect(c.linePlaceholder({})).toBe(generic);
+  });
+});
+
+describe("a coach-line refusal (422) drops the entry (#524)", () => {
+  it("is permanent: entry dropped, line shows couldn't save, no retry", async () => {
+    const c = makeLogger({ cellUrl: NOTE_CELL_URL });
+    const ex = { id: 1, sub_lines: [{ line: 1, text: "mine", savedText: "" }] };
+    c.exercises = [ex];
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ ok: false, status: 422, body: { ok: false, error: "coach line", code: "coach_line" } }),
+    );
+    expect(await c.saveCell(ex, 1)).toBe("rejected");
+    expect(ex.sub_lines[0].saveError).toBe(true);
+    expect(ex.sub_lines[0].queued).toBe(false);
+    expect(c.readQueue()).toHaveLength(0);
+    await c.flushQueue();
+    expect(global.fetch).toHaveBeenCalledTimes(1); // nothing retried it
+  });
+});
+
+describe("session note (#524)", () => {
+  function noteLogger(over = {}) {
+    return makeLogger({ notes: "", _notesSavedText: "", ...over });
+  }
+  const noteCalls = () =>
+    global.fetch.mock.calls.filter(([u]) => u === LOG_URL).map(([, o]) => JSON.parse(o.body));
+
+  it("initialises from the server payload", () => {
+    const c = initWith({ notes: "sore knee", notes_max: 500 });
+    expect(c.notes).toBe("sore knee");
+    expect(c.notesMax).toBe(500);
+    expect(initWith({}).notesMax).toBe(2000);
+  });
+
+  it("input writes ahead to the outbox before any POST", () => {
+    vi.useFakeTimers();
+    global.fetch = vi.fn(() => new Promise(() => {}));
+    const c = noteLogger();
+    c.notes = "felt heavy";
+    c.noteInput();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0]).toMatchObject({ url: LOG_URL, body: { notes: "felt heavy" } });
+    expect(c.noteStatus).toBe(""); // not "offline" just for typing
+  });
+
+  it("debounces: one POST with the latest text", async () => {
+    vi.useFakeTimers();
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    const c = noteLogger();
+    for (const t of ["a", "ab", "abc"]) {
+      c.notes = t;
+      c.noteInput();
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    expect(global.fetch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(700);
+    expect(noteCalls()).toEqual([{ notes: "abc" }]);
+    expect(c.noteStatus).toBe("saved");
+    expect(c.readQueue()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(c.noteStatus).toBe("");
+  });
+
+  it("blur posts immediately and clears the timer", async () => {
+    vi.useFakeTimers();
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    const c = noteLogger();
+    c.notes = "x";
+    c.noteInput();
+    await c.noteBlur();
+    expect(noteCalls()).toEqual([{ notes: "x" }]);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(noteCalls()).toHaveLength(1);
+  });
+
+  it("a blur with nothing changed posts nothing", async () => {
+    global.fetch = vi.fn();
+    const c = noteLogger({ notes: "same", _notesSavedText: "same" });
+    expect(await c.noteBlur()).toBe("skipped");
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("never changes status: pending stays pending, done stays done", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    const c = noteLogger();
+    c.notes = "n";
+    await c.noteBlur();
+    expect(c.status).toBe("pending"); // even if the reply says done
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    c.status = "done";
+    c.notes = "n2";
+    await c.noteBlur();
+    expect(c.status).toBe("done");
+  });
+
+  it("applies the reply's progress", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending", { logged: 2, prescribed: 5 }) }));
+    const c = noteLogger();
+    c.notes = "n";
+    await c.noteBlur();
+    expect(c.progressLabel).toBe("2 of 5 sets logged");
+  });
+
+  it("offline: stays queued, then flushQueue delivers {notes} to the log url", async () => {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const c = noteLogger();
+    c.notes = "offline note";
+    c.noteInput();
+    expect(await c.noteBlur()).toBe("offline");
+    expect(c.noteStatus).toBe("queued");
+    expect(c.readQueue()).toHaveLength(1);
+
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    await c.flushQueue();
+    expect(noteCalls()).toEqual([{ notes: "offline note" }]);
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.noteStatus).toBe("saved");
+    expect(c.status).toBe("pending");
+  });
+
+  it.each([
+    ["a retryable 503", { ok: false, status: 503 }],
+    ["a login redirect", { redirected: true }],
+    ["a CSRF 403", { ok: false, status: 403 }],
+    ["an unreadable 200", { jsonError: true }],
+  ])("%s keeps the note queued", async (_n, r) => {
+    global.fetch = vi.fn().mockResolvedValue(res(r));
+    const c = noteLogger();
+    c.notes = "keep me";
+    c.noteInput();
+    await c.noteBlur();
+    expect(c.noteStatus).toBe("queued");
+    expect(c.readQueue()[0].body).toEqual({ notes: "keep me" });
+  });
+
+  it("a 400 drops the entry and shows an error, with no retry", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400, body: { ok: false } }));
+    const c = noteLogger();
+    c.notes = "too long";
+    c.noteInput();
+    expect(await c.noteBlur()).toBe("rejected");
+    expect(c.noteStatus).toBe("error");
+    expect(c.readQueue()).toHaveLength(0);
+    await c.flushQueue();
+    expect(noteCalls()).toHaveLength(1);
+  });
+
+  it("text typed while the POST is in flight survives it and is sent next", async () => {
+    let release;
+    global.fetch = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((r) => (release = r)))
+      .mockResolvedValue(res({ body: logBody("pending") }));
+    const c = noteLogger();
+    c.notes = "one";
+    c.noteInput();
+    const first = c.noteBlur();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    c.notes = "one two";
+    c.noteInput(); // write-ahead replaces the queued "one"
+    release(res({ body: logBody("pending") }));
+    await first;
+    expect(c.readQueue()[0].body).toEqual({ notes: "one two" }); // not dropped as "sent"
+    await c.noteBlur();
+    expect(noteCalls()).toEqual([{ notes: "one" }, { notes: "one two" }]);
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("reload with a queued note shows its text, flags it queued, and flushes it", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    const c = initWith(
+      { notes: "old server text" },
+      { queue: [{ id: "n1", url: LOG_URL, body: { notes: "typed offline" } }] },
+    );
+    expect(c.notes).toBe("typed offline");
+    expect(c.noteStatus).toBe("queued");
+    expect(c._ownEntries.n1).toBe(true);
+    await c.flushQueue();
+    expect(noteCalls()).toEqual([{ notes: "typed offline" }]);
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.noteStatus).toBe("saved");
+  });
+
+  it("is editable after the session is done (no status gating)", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    const c = noteLogger({ status: "done" });
+    c.notes = "after the fact";
+    c.noteInput();
+    await c.noteBlur();
+    expect(noteCalls()).toEqual([{ notes: "after the fact" }]);
+    expect(c.status).toBe("done");
+  });
+
+  it("does not post for a page with no log url", async () => {
+    global.fetch = vi.fn();
+    const c = noteLogger({ logUrl: "" });
+    expect(await c.saveNotes()).toBe("skipped");
+  });
+});
+
+describe("outbox: a note and a Finish both survive each other (#524)", () => {
+  const logCalls = () =>
+    global.fetch.mock.calls.filter(([u]) => u === LOG_URL).map(([, o]) => JSON.parse(o.body));
+
+  it("enqueue merges bodies: a note over a queued Finish keeps both", () => {
+    const c = makeLogger();
+    c.enqueue({ status: "done" });
+    c.enqueueNotes("n");
+    const q = c.readQueue();
+    expect(q).toHaveLength(1);
+    expect(q[0].body).toEqual({ status: "done", notes: "n" });
+  });
+
+  it("enqueue merges: a Finish over a queued note keeps both, latest value per key wins", () => {
+    const c = makeLogger();
+    c.enqueueNotes("first");
+    c.enqueueNotes("second");
+    c.enqueue({ status: "done" });
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0].body).toEqual({ notes: "second", status: "done" });
+  });
+
+  it("does not merge another athlete's entry", () => {
+    const c = makeLogger({ owner: "me" });
+    c.writeQueue([{ id: "x", owner: "someone-else", url: LOG_URL, body: { notes: "theirs" } }]);
+    c.enqueue({ status: "done" });
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0].body).toEqual({ status: "done" });
+  });
+
+  it("settleLog removes only the delivered keys, and only at the value sent", () => {
+    const c = makeLogger();
+    c.enqueue({ status: "done", notes: "new" });
+    c.settleLog({ notes: "old" }); // the note changed since: stays
+    expect(c.readQueue()[0].body).toEqual({ status: "done", notes: "new" });
+    c.settleLog({ notes: "new" });
+    expect(c.readQueue()[0].body).toEqual({ status: "done" });
+    c.settleLog({ status: "done" });
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("note delivered while a Finish is queued: the Finish entry survives", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    const c = makeLogger({ notes: "n", _notesSavedText: "" });
+    c.status = "done";
+    c.enqueue({ status: "done" });
+    c.enqueueNotes("n");
+    await c.noteBlur();
+    expect(logCalls()).toEqual([{ notes: "n" }]);
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0].body).toEqual({ status: "done" });
+  });
+
+  it("Finish after an undelivered note: the note is posted first, then the Finish", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    const c = makeLogger({ notes: "", _notesSavedText: "" });
+    c.notes = "pain left shoulder";
+    c.noteInput(); // queued, debounce pending
+    await c.finish();
+    expect(logCalls()).toEqual([{ notes: "pain left shoulder" }, { status: "done" }]);
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.status).toBe("done");
+    expect(c._noteTimer).toBeNull();
+  });
+
+  it("Finish while the note POST is in flight waits for it", async () => {
+    let release;
+    global.fetch = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((r) => (release = r)))
+      .mockResolvedValue(res({ body: logBody("done") }));
+    const c = makeLogger();
+    c.notes = "n";
+    c.noteInput();
+    const note = c.noteBlur();
+    const fin = c.finish();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    release(res({ body: logBody("pending") }));
+    await note;
+    await fin;
+    expect(logCalls()).toEqual([{ notes: "n" }, { status: "done" }]);
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("Finish goes through even when the note can't be delivered; the note stays queued", async () => {
+    global.fetch = vi.fn(async (_u, o) => {
+      if (JSON.parse(o.body).notes !== undefined) return res({ ok: false, status: 503 });
+      return res({ body: logBody("done") });
+    });
+    const c = makeLogger();
+    c.notes = "n";
+    c.noteInput();
+    await c.finish();
+    expect(c.status).toBe("done");
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0].body).toEqual({ notes: "n" }); // Finish's settle left the note
+  });
+
+  it("both offline: one merged entry; flush delivers the note, then the Finish", async () => {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const c = makeLogger();
+    c.notes = "n";
+    c.noteInput();
+    await c.finish();
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0].body).toEqual({ notes: "n", status: "done" });
+    expect(c.status).toBe("done");
+
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    await c.flushQueue();
+    expect(logCalls()).toEqual([{ notes: "n" }, { status: "done" }]);
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.status).toBe("done");
+  });
+
+  it("a notes-only replay never downgrades a page that shows done", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    const c = makeLogger({ notes: "n", _notesSavedText: "" });
+    c.status = "done";
+    c.enqueue({ status: "done" }); // Finish still queued
+    c.enqueueNotes("n");
+    await c.flushQueue();
+    // The note's reply said pending, but only the {status} replay may speak for status.
+    expect(logCalls()[0]).toEqual({ notes: "n" });
+    expect(c.status).toBe("pending"); // the status entry's own reply, as today
+  });
+
+  it("a notes-only entry replayed by flushLog leaves status alone", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    const c = makeLogger({ notes: "n", _notesSavedText: "" });
+    c.status = "done";
+    c.enqueueNotes("n");
+    await c.flushQueue();
+    expect(c.status).toBe("done");
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("a legacy status-only entry still applies the reply's status", async () => {
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done", { logged: 1, prescribed: 1 }) }));
+    const c = makeLogger();
+    c.enqueue({ status: "done" });
+    await c.flushQueue();
+    expect(c.status).toBe("done");
+    expect(c.progressLabel).toBe("1 of 1 set logged");
+  });
+
+  it("a note still being typed doesn't make the footer say 'will sync'", () => {
+    vi.useFakeTimers();
+    global.fetch = vi.fn(() => new Promise(() => {}));
+    const c = makeLogger();
+    c.notes = "typing";
+    c.noteInput();
+    expect(c.hasQueuedWrites()).toBe(false);
+  });
+});
+
+describe("athlete_session.html (#524)", () => {
+  const html = readFileSync(
+    resolve(process.cwd(), "app/store_project/templates/meso/athlete_session.html"),
+    "utf8",
+  );
+
+  it("the note textarea is bound to notes_max and not gated on status", () => {
+    const tag = html.match(/<textarea[\s\S]*?<\/textarea>/)[0];
+    expect(tag).toContain(':maxlength="notesMax"');
+    expect(tag).not.toContain("status");
+    expect(html.indexOf('data-testid="session-note"')).toBeLessThan(html.indexOf("meso-log-actions"));
+    expect(html).toContain('for="meso-session-note"');
+  });
+
+  it("coach cues are escaped text, not inputs", () => {
+    const block = html.slice(html.indexOf('data-testid="coach-cues"'), html.indexOf('data-testid="session-note"'));
+    expect(block).toContain('x-text="c.text"');
+    expect(block).not.toContain("<input");
+    expect(block).not.toContain("x-html");
   });
 });

@@ -271,7 +271,7 @@ class TestRestoreAfterRewriteSparesANullPrescriptionRow:
         original = LoggedSet.objects.get(source_line=cell)
 
         client.force_login(s.coach)
-        assert reclaim(client, s, text="brace harder").status_code == 200
+        assert reclaim(client, s, text="").status_code == 200
 
         # Simulate the #577 damage directly: a pre-fix `restore_plan_snapshot`
         # purge hard-deleted this row's line-0 cell out from under it, and
