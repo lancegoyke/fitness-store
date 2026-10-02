@@ -26,6 +26,8 @@ SKIP_DIRS = {
 }
 SUFFIXES = {".py", ".html", ".js", ".ts", ".tsx", ".css", ".md"}
 NEEDLE = "reclaimed"
+# The 4c migration test must name the column it proves is dropped.
+ALLOWED = {"test_migration_0060_drop_reclaimed_column.py"}
 
 
 def test_the_field_and_its_reverse_relation_are_gone():
@@ -39,6 +41,8 @@ def test_no_source_line_mentions_the_retired_column():
     for root in (REPO_ROOT / "app", REPO_ROOT / "frontend"):
         for path in root.rglob("*"):
             if not path.is_file() or path.suffix not in SUFFIXES or path == me:
+                continue
+            if path.name in ALLOWED:
                 continue
             if SKIP_DIRS & set(path.relative_to(REPO_ROOT).parts):
                 continue
