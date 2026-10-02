@@ -1014,3 +1014,21 @@ class TestRecentLogsOrdinalsFollowTheLift:
         swap(s)
         b = LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=2)
         assert serializers.set_ordinals([a, b]) == {a.pk: 1, b.pk: 2}
+
+    def test_linking_to_the_catalog_keeps_one_count_under_one_label(self):
+        """Free-text "Back Squat" linked to the catalog's mid-session is one lift."""
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        log = SessionLogFactory(session=s.d1w1, athlete=s.athlete)
+        for n in (1, 2):
+            LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=n)
+        slot = s.row1_w1.exercise_slot
+        slot.exercise = ex
+        slot.save(update_fields=["exercise"])
+        LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=3)
+        sets = serializers.serialize_recent_logs(s.plan)[0]["sets"]
+        assert [(x["exercise"], x["set"]) for x in sets] == [
+            ("Back Squat", 1),
+            ("Back Squat", 2),
+            ("Back Squat", 3),
+        ]

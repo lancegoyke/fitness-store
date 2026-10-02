@@ -27,6 +27,7 @@ from . import models
 from . import parsing
 from .lift_identity import Lift
 from .lift_identity import LiftIndex
+from .lift_identity import norm_name
 from .names import link_athlete_name
 
 
@@ -564,10 +565,10 @@ def set_ordinals(logged_sets, *, by_lift=False):
         key = slot_id
         if by_lift:
             lift = s.lift
-            key = (
-                slot_id,
-                _exercise_key(lift.exercise_id, lift.name) if lift else None,
-            )
+            # By the NAME the agent is shown, not the FK: linking a free-text
+            # "Back Squat" to the catalog's mid-session keeps one label, so it
+            # must keep one count (``same_lift`` treats them as one lift).
+            key = (slot_id, norm_name(lift.name) if lift else None)
         by_slot[key].append(s)
     ordinals = {}
     for group in by_slot.values():
