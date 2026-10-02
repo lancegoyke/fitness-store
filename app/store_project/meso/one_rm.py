@@ -29,10 +29,13 @@ finished performance to permanently write down; 5b's 24 h quiet-period settle
 is what eventually promotes a live best into this module's confirmed record.
 """
 
+import logging
 import math
+import uuid
 from collections import defaultdict
 from decimal import Decimal
 
+from django.db import transaction
 from django.utils import timezone
 
 from . import models
@@ -300,6 +303,46 @@ def refresh_one_rms(athlete, lifts, unit):
                 "source": models.AthleteOneRm.Source.LOGGED,
             },
         )
+
+
+logger = logging.getLogger(__name__)
+
+
+def refresh_after_identity_change(plan, slots):
+    """Refresh the plan athlete's stored 1RM for rows whose identity just changed (#715).
+
+    A rename, swap, catalog link or an undo/redo of one gives the row a key no
+    ``AthleteOneRm`` row exists for yet, so the athlete's %1RM suggestion went
+    blank until their next finished session even though ``same_lift`` folds
+    their history into the new identity. Call it inside the write's
+    transaction: the refresh is queued ``on_commit``, so it never runs under the
+    plan lock and ``update_or_create`` takes its ``AthleteOneRm`` rows after
+    the documented plan-before-athlete-rows order has been released (docs/meso/
+    decisions.md, Row-lock order). ``robust=True``: a failed refresh must not
+    turn the coach's already-committed edit into a 500; the next log re-derives.
+
+    A template plan has no athlete: nothing to refresh. A manual 1RM stays the
+    athlete's own number (``refresh_one_rms`` skips it).
+    """
+    athlete = plan.athlete
+    # A restored snapshot assigns ``exercise_id`` as a STRING; history is keyed
+    # by UUID, so an un-normalised id would match nothing and the refresh would
+    # delete a valid stored row. Normalise to a UUID here.
+    lifts = [
+        Lift(uuid.UUID(str(lift.exercise_id)) if lift.exercise_id else None, lift.name)
+        for lift in map(lift_of, slots)
+    ]
+    if athlete is None or not lifts:
+        return
+    unit = plan.unit
+
+    def _refresh():
+        try:
+            refresh_one_rms(athlete, lifts, unit)
+        except Exception:
+            logger.exception("1RM refresh after an identity change failed")
+
+    transaction.on_commit(_refresh, robust=True)
 
 
 def lifts_for_sets(logged_sets):

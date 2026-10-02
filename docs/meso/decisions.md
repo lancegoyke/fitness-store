@@ -45,8 +45,10 @@ How to read the status field:
   so a line queued offline before a swap and flushed after it is stamped as the
   new lift (the payload carries no identity).
 - Plan-shaped surfaces (results rows, the designer, the athlete week page) still
-  label sets by their row's current name; a "logged as" hint is #714. Linking or
-  renaming doesn't refresh the stored 1RM until the next finished session: #715.
+  label sets by their row's current name; a "logged as" hint is #714. Linking,
+  renaming, swapping or undoing one refreshes that row's stored 1RM for the plan's
+  athlete at once (#715): queued `on_commit`, so it runs after the plan lock is
+  released; skipped for template plans; a manual 1RM is never overwritten.
 - Accepted trade-off (Lance): fixing a typo in a free-text name after sets are
   logged leaves those sets under the old spelling.
 

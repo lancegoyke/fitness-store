@@ -538,8 +538,10 @@ def restore_plan_snapshot(plan, snapshot):
             }
         ).values_list("pk", flat=True)
     }
+    reidentified = []
     for exercise_slot in models.ExerciseSlot.objects.filter(pk__in=exercise_slot_pks):
         row = exercise_slot_rows[exercise_slot.pk]
+        before = (str(exercise_slot.exercise_id), exercise_slot.name)
         # Only exercised by legacy "Moved X" snapshots now (prescription_move is retired).
         exercise_slot.session_slot_id = row["session_slot_id"]
         exercise_slot.exercise_id = (
@@ -553,6 +555,14 @@ def restore_plan_snapshot(plan, snapshot):
         exercise_slot.note = row.get("note", "")
         exercise_slot.deleted_at = _parse_dt(row["deleted_at"])
         exercise_slot.save()
+        if before != (str(exercise_slot.exercise_id), exercise_slot.name):
+            reidentified.append(exercise_slot)
+    if reidentified:
+        # #715: an undo/redo that restores another identity needs the same
+        # 1RM refresh a forward edit gets (queued on_commit, off the plan lock).
+        from . import one_rm
+
+        one_rm.refresh_after_identity_change(plan, reidentified)
 
     for session in models.Session.objects.filter(pk__in=session_pks):
         row = session_rows[session.pk]

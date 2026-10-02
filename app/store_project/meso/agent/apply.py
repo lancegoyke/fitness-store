@@ -304,6 +304,11 @@ def _apply_swap(change, name):
     slot.name = name
     slot.exercise = None
     slot.save(update_fields=["name", "exercise"])
+    # #715: the swapped lift's own history (never the old lift's sets) feeds
+    # its 1RM straight away, so the %1RM suggestion isn't blank until a log.
+    from .. import one_rm
+
+    one_rm.refresh_after_identity_change(slot.session_slot.mesocycle.plan, [slot])
     return {"id": change.pk, "kind": change.kind, "field": "name", "value": name}
 
 
