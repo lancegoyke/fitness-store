@@ -2159,7 +2159,14 @@ _(Append dated entries here as decisions land.)_
   still holding a coach version of that pk must not overwrite a later athlete
   edit); the stray-cell hard-delete excludes athlete-authored. A coach edit to
   the same cell (`cell_line_write`) **reclaims** it — flips `athlete_authored`
-  back to `False`, folding it into coach history again. The coach still sees
+  back to `False`, folding it into coach history again. (#703: the reclaim no
+  longer flips the flag BEFORE the snapshot. `record_plan_action` is handed the
+  cell's pk and captures it as an `"athlete_authored": True` row, so a coach
+  undo hands the line back to the athlete, authorship included; undo/redo's
+  mirror snapshot marks the coach row `reclaim_if_text` so redo re-reclaims only
+  if the athlete hasn't changed the text since (compare-and-set). Snapshots
+  recorded before #703 still restore a rewritten line coach-owned — no
+  backfill.) The coach still sees
   athlete lines live (the designer reads cells via `serialize_plan`, not
   snapshots). The endpoint mirrors `athlete_log_session`: athlete-scoped
   (foreign/archived/unknown → flat 404), **no billing gate** (the coach's

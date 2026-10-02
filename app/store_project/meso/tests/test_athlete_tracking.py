@@ -446,9 +446,9 @@ class TestSubLineUndoIsolation:
         assert cell.athlete_authored is False
 
     def test_coach_undo_after_reclaim_restores_athlete_text(self, client):
-        # Reclaim-then-snapshot: when a coach edits an EXISTING athlete-authored
-        # cell, the athlete's original text must survive a coach undo (restored
-        # as a coach-owned cell), never be hard-deleted.
+        # When a coach edits an EXISTING athlete-authored cell, the athlete's
+        # original text must survive a coach undo, handed back as the athlete's
+        # own line (#703), never hard-deleted.
         s = seed()
         # Athlete authors line-1 = "mine".
         client.force_login(s.athlete)
@@ -461,12 +461,12 @@ class TestSubLineUndoIsolation:
         )
         cell_pk = sub_cells(s.squat).get().pk
 
-        # Coach undo restores the athlete's original text (as a coach cell) —
-        # the row still EXISTS, not hard-deleted.
+        # Coach undo restores the athlete's original text (as the athlete's
+        # line) — the row still EXISTS, not hard-deleted.
         assert client.post(undo_url(s.plan)).status_code == 200
         cell = Prescription.objects.get(pk=cell_pk)
         assert cell.text == "mine"
-        assert cell.athlete_authored is False
+        assert cell.athlete_authored is True
 
         # Coach redo reapplies the coach edit.
         assert client.post(redo_url(s.plan)).status_code == 200

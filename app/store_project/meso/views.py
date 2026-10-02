@@ -5603,8 +5603,8 @@ def api_plan_undo(request, plan_id):
                 return JsonResponse(
                     {"ok": False, "error": "Nothing to undo"}, status=400
                 )
-            redo_snapshot = serialize_plan_snapshot(plan)
             restore_snapshot, seq, label = popped.snapshot, popped.seq, popped.label
+            redo_snapshot = serialize_plan_snapshot(plan, restoring=restore_snapshot)
             popped.delete()
             PlanAction.objects.create(
                 plan=plan,
@@ -5643,8 +5643,8 @@ def api_plan_redo(request, plan_id):
                 return JsonResponse(
                     {"ok": False, "error": "Nothing to redo"}, status=400
                 )
-            undo_snapshot = serialize_plan_snapshot(plan)
             restore_snapshot, seq, label = popped.snapshot, popped.seq, popped.label
+            undo_snapshot = serialize_plan_snapshot(plan, restoring=restore_snapshot)
             popped.delete()
             PlanAction.objects.create(
                 plan=plan,
@@ -5940,24 +5940,31 @@ def cell_line_write(request, plan_id, slot_id):
         # was corrected to take Plan first (#562), because the cell in question
         # is precisely the athlete-authored one an athlete may be blurring.
         #
-        # It changes no WRITE order: the flag flip below still lands before
-        # `record_plan_action` snapshots, which is what the next comment is
-        # about.
+        # It changes no WRITE order: `record_plan_action` still snapshots
+        # before the cell write below.
         Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         existing = Prescription.objects.filter(
             exercise_slot=slot, week=week, line=line
         ).first()
-        if existing is not None and existing.athlete_authored:
-            # Reclaim-then-snapshot (Phase 4a review): a coach edit reclaims an
-            # athlete-authored cell back into coach history. Persist the flag
-            # flip ALONE first, so ``record_plan_action`` snapshots this cell as
-            # a coach cell still holding the athlete's original text — a later
-            # coach undo then RESTORES that text (as a coach-owned cell) instead
-            # of hard-deleting the rewritten row (which the snapshot, taken while
-            # the cell was still athlete-authored, would have omitted entirely).
-            existing.athlete_authored = False
-            existing.save(update_fields=["athlete_authored"])
-        record_plan_action(plan, f"Edited {slot.name or 'exercise'}")
+        # Authorship-preserving reclaim (#703): a coach edit reclaims an
+        # athlete-authored cell into coach history (the flag flips on the write
+        # below), but the cell is NOT flipped before the snapshot. Instead its
+        # pk is handed to `record_plan_action`, which captures it as an
+        # athlete row (`"athlete_authored": True`). A later coach undo then
+        # hands the line BACK to the athlete — text and authorship — rather
+        # than restoring it as a coach cue the athlete can no longer correct
+        # (the earlier design flipped the flag first, so the snapshot held the
+        # athlete's words as a coach cell). Redo takes the
+        # line again only if the athlete hasn't touched it since (see
+        # `history._cell_disposition`).
+        taken_from_athlete = (
+            [existing.pk] if existing is not None and existing.athlete_authored else ()
+        )
+        record_plan_action(
+            plan,
+            f"Edited {slot.name or 'exercise'}",
+            athlete_cell_pks=taken_from_athlete,
+        )
         cell, _created = Prescription.objects.get_or_create(
             exercise_slot=slot, week=week, line=line
         )

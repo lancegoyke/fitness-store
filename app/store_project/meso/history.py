@@ -23,6 +23,25 @@ undo stack. Other mesocycle fields (including ``order`` and ``week_count``)
 remain excluded, as do ``delivered_at``, ``WeekDelivery``,
 ``SessionLog``/``LoggedSet``, and ``AthleteOneRm`` — undo must never touch
 delivery stamps or athlete data.
+
+Authorship (#703). A cell's ``athlete_authored`` flag travels with its text, so
+an undo restores a cell exactly as it was, authorship included. Normal capture
+still excludes athlete-authored cells (an athlete line is never reverted by a
+coach undo). The one exception is a cell a coach write is about to RECLAIM
+(``cell_line_write`` over an athlete's line): ``record_plan_action`` is told
+its pk (``athlete_cell_pks``) and captures it as a row marked
+``"athlete_authored": True``. Restoring that row HANDS THE LINE BACK to the
+athlete — but only when this chain itself took it (the DB cell is coach-owned
+now); if the athlete's own flag is already set, their current line wins. The
+mirror snapshot undo/redo records (``serialize_plan_snapshot(restoring=...)``)
+marks the coach row it takes in exchange with ``"reclaim_if_text"``: a redo may
+take the line back again, but only if its text still equals what the undo
+handed back (compare-and-set — the athlete hasn't touched it since). Athlete
+data is never reverted or destroyed. Snapshots recorded before this change
+carry neither key and still restore a rewritten line as coach-owned (no
+backfill). ``_cell_disposition`` is the single predicate the serializer and
+the restorer both use, so they cannot disagree about which rows hand back or
+reclaim.
 """
 
 import logging
@@ -71,8 +90,68 @@ def _parse_dt(value):
     return parse_datetime(value)
 
 
-def serialize_plan_snapshot(plan):
+_SKIP = "skip"
+_WRITE = "write"
+_HANDBACK = "handback"
+_RECLAIM = "reclaim"
+
+
+def _cell_disposition(row, db_cell):
+    """What restoring snapshot cell ``row`` does to ``db_cell`` (``None`` if absent).
+
+    The ONE predicate behind both halves of the authorship rule (#703):
+    ``restore_plan_snapshot`` acts on it, and ``serialize_plan_snapshot`` asks
+    it of the snapshot about to be restored to build the mirror snapshot, so
+    the two cannot disagree.
+
+    * ``_SKIP`` — leave the DB cell alone (the athlete's current line wins).
+    * ``_HANDBACK`` — an athlete row landing on a cell that is not (or not
+      yet) athlete-authored: write it and set ``athlete_authored=True``.
+    * ``_RECLAIM`` — a coach row carrying ``reclaim_if_text`` landing on an
+      athlete-authored cell whose text still equals it: write it coach-owned.
+    * ``_WRITE`` — an ordinary coach-row write (cell coach-owned or absent).
+    """
+    db_athlete = db_cell is not None and db_cell.athlete_authored
+    if row.get("athlete_authored"):
+        return _SKIP if db_athlete else _HANDBACK
+    if db_athlete:
+        marker = row.get("reclaim_if_text")
+        if marker is not None and db_cell.text == marker:
+            return _RECLAIM
+        return _SKIP
+    return _WRITE
+
+
+def _cell_row(c, *, athlete=False, reclaim_if_text=None):
+    row = {
+        "pk": c.pk,
+        "exercise_slot_id": c.exercise_slot_id,
+        "week_id": c.week_id,
+        "line": c.line,
+        "text": c.text,
+        "skipped": c.skipped,
+    }
+    if athlete:
+        row["athlete_authored"] = True
+    if reclaim_if_text is not None:
+        row["reclaim_if_text"] = reclaim_if_text
+    return row
+
+
+def serialize_plan_snapshot(plan, *, athlete_cell_pks=(), restoring=None):
     """A self-contained, plan-wide snapshot of every editable row.
+
+    ``athlete_cell_pks`` additionally captures those athlete-authored cells of
+    ``plan``, each row marked ``"athlete_authored": True`` — the cells a coach
+    write is about to reclaim, so an undo can hand them back (#703). Plain
+    capture still excludes every athlete-authored cell.
+
+    ``restoring`` is the snapshot about to be restored right after this call
+    (undo/redo's mirror). Against the current DB it (a) marks the coach row of
+    every cell that restore will HAND BACK with ``reclaim_if_text`` (the
+    restoring row's text), and (b) captures, as an athlete row, every
+    athlete-authored cell that restore will RECLAIM — so the opposite action
+    can put each back as it is now. See ``_cell_disposition``.
 
     Captures ALL ``Week``/``SessionSlot``/``ExerciseSlot``/``Session``/
     ``Prescription`` rows belonging to ``plan`` — including soft-deleted ones.
@@ -96,6 +175,34 @@ def serialize_plan_snapshot(plan):
     cells = models.Prescription.objects.filter(
         week__mesocycle__plan=plan, athlete_authored=False
     )
+    cell_rows = {c.pk: _cell_row(c) for c in cells}
+    athlete_pks = set(athlete_cell_pks)
+    if restoring is not None:
+        marked = [
+            r
+            for r in restoring.get("cells", [])
+            if r.get("athlete_authored") or r.get("reclaim_if_text") is not None
+        ]
+        db_cells = {
+            c.pk: c
+            for c in models.Prescription.objects.filter(
+                pk__in=[r["pk"] for r in marked], week__mesocycle__plan=plan
+            )
+        }
+        for r in marked:
+            db_cell = db_cells.get(r["pk"])
+            if db_cell is None:
+                continue
+            kind = _cell_disposition(r, db_cell)
+            if kind == _HANDBACK and db_cell.pk in cell_rows:
+                cell_rows[db_cell.pk]["reclaim_if_text"] = r.get("text", "")
+            elif kind == _RECLAIM:
+                athlete_pks.add(db_cell.pk)
+    if athlete_pks:
+        for c in models.Prescription.objects.filter(
+            pk__in=athlete_pks, week__mesocycle__plan=plan, athlete_authored=True
+        ):
+            cell_rows[c.pk] = _cell_row(c, athlete=True)
     return {
         "plan": {"title": plan.title},
         "mesocycles": [
@@ -152,17 +259,7 @@ def serialize_plan_snapshot(plan):
             }
             for s in sessions
         ],
-        "cells": [
-            {
-                "pk": c.pk,
-                "exercise_slot_id": c.exercise_slot_id,
-                "week_id": c.week_id,
-                "line": c.line,
-                "text": c.text,
-                "skipped": c.skipped,
-            }
-            for c in cells
-        ],
+        "cells": list(cell_rows.values()),
     }
 
 
@@ -596,18 +693,31 @@ def restore_plan_snapshot(plan, snapshot):
             )
             continue
         cell = existing_cells.get(pk) or models.Prescription(pk=pk)
-        # Never overwrite an athlete-authored cell (Phase 4a), even when an
-        # OLDER snapshot still holds a coach version of that same pk (a
-        # capture-only exclusion would let this restore clobber the athlete's
-        # later edit). The authority is the CURRENT DB row's flag, not the
-        # snapshot's — the snapshot never carries athlete cells at all.
-        if cell.athlete_authored:
+        # Authorship (#703): ``_cell_disposition`` decides, from the CURRENT DB
+        # row's flag (never the snapshot's alone — an older coach snapshot
+        # still holding a coach version of an athlete's pk must not overwrite
+        # the athlete's later edit). An athlete row lands only when this chain
+        # took the line (handback); a coach row reclaims an athlete cell only
+        # under ``reclaim_if_text`` compare-and-set. Everything else that
+        # would touch an athlete-authored cell is skipped.
+        kind = _cell_disposition(row, existing_cells.get(pk))
+        if kind == _SKIP:
+            if cell.athlete_authored and row.get("reclaim_if_text") is not None:
+                logger.info(
+                    "meso.history: skipped re-reclaiming cell %s — the athlete "
+                    "changed it since the undo handed it back",
+                    pk,
+                )
             continue
         cell.exercise_slot_id = row["exercise_slot_id"]
         cell.week_id = row["week_id"]
         cell.line = row.get("line", 0)
         cell.text = row.get("text", "")
         cell.skipped = row["skipped"]
+        if kind == _HANDBACK:
+            cell.athlete_authored = True
+        elif kind == _RECLAIM:
+            cell.athlete_authored = False
         cell.save()
 
     # Rows of this plan created *after* the snapshot was taken are absent from
@@ -853,7 +963,7 @@ def restore_plan_snapshot(plan, snapshot):
             ).delete()
 
 
-def record_plan_action(plan, label):
+def record_plan_action(plan, label, *, athlete_cell_pks=()):
     """Record one UNDO ``PlanAction`` for ``plan``, right before its mutation.
 
     Must run inside the caller's transaction, called immediately BEFORE the
@@ -872,6 +982,10 @@ def record_plan_action(plan, label):
     both read the same max ``seq`` and the loser's insert would 500 on
     ``unique_plan_action_seq``. (The undo/redo endpoints take the same lock,
     so recording also serializes against a concurrent restore.)
+
+    ``athlete_cell_pks`` names athlete-authored cells the caller is about to
+    reclaim; they are captured as athlete rows so undo can hand them back
+    (#703). See ``serialize_plan_snapshot``.
     """
     models.Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
     # Labels often embed a row's free-text name (255 chars allowed) — clamp to
@@ -889,7 +1003,7 @@ def record_plan_action(plan, label):
         stack=models.PlanAction.Stack.UNDO,
         seq=max_seq + 1,
         label=label,
-        snapshot=serialize_plan_snapshot(plan),
+        snapshot=serialize_plan_snapshot(plan, athlete_cell_pks=athlete_cell_pks),
     )
     undo_pks = list(
         models.PlanAction.objects.filter(plan=plan, stack=models.PlanAction.Stack.UNDO)
