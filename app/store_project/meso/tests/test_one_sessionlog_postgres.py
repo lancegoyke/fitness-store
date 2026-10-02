@@ -15,12 +15,14 @@ SQLite test databases are not shared across threads. Run locally with::
 """
 
 import json
+from unittest import mock
 
 import pytest
 from django.db import connection
 from django.test import Client
 from django.urls import reverse
 
+from store_project.meso import models
 from store_project.meso import views
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import SessionLog
@@ -35,10 +37,24 @@ pytestmark = [
     ),
 ]
 
-#: A pause right after the view reads "is there a log yet?" — still inside the
-#: Session lock, so the second request queues on the lock and then reads the
-#: first one's committed log.
+#: A pause right after the view reads "is there a log yet?". The view's own
+#: row locks (Plan, then Session) make the second request queue and then read
+#: the first one's committed log. ``newest_session_logs`` returns a LAZY
+#: queryset, so ``_eager_newest_session_logs`` runs the read before the pause;
+#: hooking the bare function would pause before the read and prove nothing.
 AFTER_LOG_LOOKUP = (views, "newest_session_logs", "after")
+
+
+def _eager_newest_session_logs(*args, **kwargs):
+    qs = models.newest_session_logs(*args, **kwargs)
+    len(qs)  # evaluate now; the view's `.first()` then answers from this cache
+    return qs
+
+
+@pytest.fixture(autouse=True)
+def _eager_lookup():
+    with mock.patch.object(views, "newest_session_logs", _eager_newest_session_logs):
+        yield
 
 
 def _cell_request(s, line, text):
