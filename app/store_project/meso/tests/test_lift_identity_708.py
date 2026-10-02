@@ -15,6 +15,8 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -36,6 +38,7 @@ from store_project.meso.models import AthleteOneRm
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
+from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.tests._helpers import day
@@ -560,3 +563,251 @@ class TestStampWritePaths:
         assert {(r.exercise_id, r.exercise_name) for r in stored} == {
             (ex.pk, "Back Squat")
         }
+
+
+# --- review round 1 regressions --------------------------------------------
+
+
+def d2w2(s):
+    return Session.objects.get(week=s.d1w2.week, session_slot=s.d2w1.session_slot)
+
+
+def rename_slot(cell, name):
+    slot = cell.exercise_slot
+    slot.name = name
+    slot.save(update_fields=["name"])
+
+
+class TestOneCatalogLiftSeveralNames:
+    """One catalog lift stamped "Squat" and "Back Squat" showed two different 1RMs."""
+
+    def test_every_name_of_the_fk_sees_the_same_history(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        rename_slot(s.row1_w1, "Squat")
+        rename_slot(s.row2_w1, "Squat")
+        client.force_login(s.athlete)
+        # C: free-text "Squat" 150 x 1.
+        assert type_line(client, s.d1w1, s.row1_w1, "150 x 1").status_code == 200
+        finish(s.d1w1, s.athlete)
+        # Link the row as (E, "Squat"); B: 100 x 3 logged on it.
+        coach_patch(client, s, s.row1_w1, {"name": "Squat", "exercise_id": str(ex.pk)})
+        assert type_line(client, s.d1w2, s.row1_w2, "100 x 3").status_code == 200
+        finish(s.d1w2, s.athlete)
+        # A staff rename between picks: another row links as (E, "Back Squat").
+        coach_patch(
+            client, s, s.row2_w1, {"name": "Back Squat", "exercise_id": str(ex.pk)}
+        )
+        row_bs = fresh(s.row2_w2)
+        assert row_bs.exercise_id == ex.pk
+        assert type_line(client, d2w2(s), row_bs, "100 x 5").status_code == 200
+        finish(d2w2(s), s.athlete)
+
+        key = f"id:{ex.pk}"
+        records = prs(s)
+        assert list(records) == [key], list(records)
+        assert records[key].e1rm == pytest.approx(150, abs=0.05), (
+            f"free-text set missing from the record: {records[key].e1rm}"
+        )
+
+        by_back = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(ex.pk, "Back Squat")], unit=Unit.KILOGRAMS
+        )
+        by_squat = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(ex.pk, "Squat")], unit=Unit.KILOGRAMS
+        )
+        assert by_back == by_squat == {key: pytest.approx(150, abs=0.05)}, (
+            by_back,
+            by_squat,
+        )
+
+        refresh(s, [row_bs])
+        assert one_rms(s).get(key) == pytest.approx(150, abs=0.05), one_rms(s)
+
+    def test_new_record_baseline_includes_the_free_text_set(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        rename_slot(s.row1_w1, "Squat")
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "150 x 1").status_code == 200
+        finish(s.d1w1, s.athlete)
+        coach_patch(client, s, s.row1_w1, {"name": "Squat", "exercise_id": str(ex.pk)})
+        assert type_line(client, s.d1w2, s.row1_w2, "100 x 3").status_code == 200
+        finish(s.d1w2, s.athlete)
+        coach_patch(
+            client, s, s.row2_w1, {"name": "Back Squat", "exercise_id": str(ex.pk)}
+        )
+        row_bs = fresh(s.row2_w2)
+        assert type_line(client, d2w2(s), row_bs, "100 x 5").status_code == 200
+        finish(d2w2(s), s.athlete)
+        # A later session on the "Back Squat" row: 120 x 1 beats nothing.
+        later = day(s.d1w2.week, day_number=9, name="Later")
+        row_later = presc(later, name="Back Squat", order=0, text="1 x 1", exercise=ex)
+        assert type_line(client, later, row_later, "120 x 1").status_code == 200
+        finish(later, s.athlete)
+        assert meso_prs.new_records_in(the_log(later, s.athlete)) == []
+
+
+class TestRefreshCoversCrossMatchingRows:
+    """Editing a free-text Back Squat set left the catalog Back Squat 1RM stale."""
+
+    def test_other_stored_rows_are_rederived(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        other = ExerciseFactory(name="Back Squat", slug="back-squat-f")
+        link_slot(s.row2_w1, ex)
+        deadlift = presc(s.d2w1, name="Deadlift", order=1, text="3 x 5")
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "200 x 1").status_code == 200
+        assert type_line(client, s.d2w1, deadlift, "100 x 5").status_code == 200
+        finish(s.d1w1, s.athlete)
+        finish(s.d2w1, s.athlete)
+        refresh(s, [fresh(s.row1_w1), fresh(deadlift)])
+        assert one_rms(s)["name:back squat"] == pytest.approx(200, abs=0.05)
+
+        assert type_line(client, s.d2w1, s.row2_w1, "100 x 5").status_code == 200
+        finish(s.d2w1, s.athlete)
+        refresh(s, [fresh(s.row2_w1)])
+        key = f"id:{ex.pk}"
+        assert one_rms(s)[key] == pytest.approx(200, abs=0.05), one_rms(s)
+
+        manual = AthleteOneRm.objects.create(
+            athlete=s.athlete,
+            exercise=other,
+            name="Back Squat",
+            key=f"id:{other.pk}",
+            value=999,
+            unit=Unit.KILOGRAMS,
+            source=AthleteOneRm.Source.MANUAL,
+        )
+        dl = AthleteOneRm.objects.get(athlete=s.athlete, key="name:deadlift")
+        dl_before = (dl.pk, dl.value, dl.updated_at)
+
+        with CaptureQueriesContext(connection) as ctx:
+            assert type_line(client, s.d1w1, s.row1_w1, "100 x 1").status_code == 200
+
+        want = 100 * (1 + 5 / 30)
+        got = one_rms(s)
+        assert got[key] == pytest.approx(want, abs=0.05), (
+            f"catalog Back Squat 1RM stale after the free-text edit: {got}"
+        )
+        assert got["name:back squat"] == pytest.approx(want, abs=0.05), got
+
+        dl.refresh_from_db()
+        assert (dl.pk, dl.value, dl.updated_at) == dl_before
+        writes = [
+            q["sql"]
+            for q in ctx.captured_queries
+            if q["sql"].lstrip().upper().startswith(("UPDATE", "DELETE"))
+            and "meso_athleteonerm" in q["sql"]
+            and q["sql"].rstrip().endswith(f'."id" = {dl.pk}')
+        ]
+        assert writes == [], writes
+
+        manual.refresh_from_db()
+        assert float(manual.value) == 999
+        assert manual.source == AthleteOneRm.Source.MANUAL
+
+
+def cell_on(s, name, exercise=None):
+    """A second slot's cell under ``name`` (the re-point target)."""
+    rename_slot(s.row2_w1, name)
+    if exercise is not None:
+        link_slot(s.row2_w1, exercise)
+    return fresh(s.row2_w1)
+
+
+def stamped(row):
+    row.refresh_from_db()
+    return (row.exercise_id, row.exercise_name)
+
+
+class TestRepointAgainstLoadedAnchor:
+    """Moving a logged set to another row left it counted under the old lift."""
+
+    def _row(self, s):
+        log = SessionLogFactory(session=s.d1w1, athlete=s.athlete)
+        ls = LoggedSetFactory(session_log=log, prescription=s.row1_w1)
+        assert stamped(ls) == (None, "Back Squat")
+        return log, LoggedSet.objects.get(pk=ls.pk)
+
+    def test_caller_assigned_slot_is_caught(self):
+        s = seed_708()
+        ex = ExerciseFactory(name="Deadlift", slug="deadlift")
+        target = cell_on(s, "Deadlift", ex)
+        _, row = self._row(s)
+        row.prescription = target
+        row.exercise_slot = target.exercise_slot
+        row.save()
+        assert stamped(row) == (ex.pk, "Deadlift")
+
+    def test_caller_assigned_slot_with_update_fields(self):
+        s = seed_708()
+        ex = ExerciseFactory(name="Deadlift", slug="deadlift")
+        target = cell_on(s, "Deadlift", ex)
+        _, row = self._row(s)
+        row.prescription = target
+        row.exercise_slot = target.exercise_slot
+        row.save(update_fields=["prescription", "exercise_slot"])
+        assert stamped(row) == (ex.pk, "Deadlift")
+
+    def test_unanchored_row_gets_stamped_when_anchored(self):
+        s = seed_708()
+        ex = ExerciseFactory(name="Deadlift", slug="deadlift")
+        target = cell_on(s, "Deadlift", ex)
+        log = SessionLogFactory(session=s.d1w1, athlete=s.athlete)
+        made = LoggedSet.objects.create(
+            session_log=log, set_number=9, reps="5", load="100"
+        )
+        assert stamped(made) == (None, None)
+        row = LoggedSet.objects.get(pk=made.pk)
+        row.prescription = target
+        row.save()
+        assert stamped(row) == (ex.pk, "Deadlift")
+
+    def test_row_loaded_without_a_slot_repoints_on_prescription(self):
+        s = seed_708()
+        ex = ExerciseFactory(name="Deadlift", slug="deadlift")
+        target = cell_on(s, "Deadlift", ex)
+        _, row = self._row(s)
+        LoggedSet.objects.filter(pk=row.pk).update(exercise_slot=None)
+        row = LoggedSet.objects.get(pk=row.pk)
+        assert row.exercise_slot_id is None
+        row.prescription = target
+        row.save()
+        assert stamped(row) == (ex.pk, "Deadlift")
+
+    def test_plain_resave_after_rename_keeps_the_stamp(self):
+        s = seed_708()
+        _, row = self._row(s)
+        rename_slot(s.row1_w1, "Front Squat")
+        row = LoggedSet.objects.get(pk=row.pk)
+        row.reps = "8"
+        row.save()
+        assert stamped(row) == (None, "Back Squat")
+
+
+class TestCasefoldNames:
+    """A "Fußheben" set was missed by a target spelled "FUSSHEBEN"."""
+
+    def test_full_casefold_matches(self, client):
+        s = seed_708()
+        rename_slot(s.row1_w1, "Fußheben")
+        rename_slot(s.row2_w1, "Fußheben")
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "100 x 5").status_code == 200
+        assert type_line(client, s.d2w1, s.row2_w1, "80 x 5").status_code == 200
+        finish(s.d1w1, s.athlete)
+        finish(s.d2w1, s.athlete)
+        LoggedSet.objects.filter(session_log__session=s.d1w1).update(
+            exercise_name="Fußheben"
+        )
+        LoggedSet.objects.filter(session_log__session=s.d2w1).update(
+            exercise_name="FUSSHEBEN"
+        )
+        got = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(None, "FUSSHEBEN")], unit=Unit.KILOGRAMS
+        )
+        assert list(got.values()) == [pytest.approx(100 * (1 + 5 / 30), abs=0.05)], got
+        records = prs(s)
+        assert len(records) == 1, [(k, r.name) for k, r in records.items()]
