@@ -811,3 +811,179 @@ class TestCasefoldNames:
         assert list(got.values()) == [pytest.approx(100 * (1 + 5 / 30), abs=0.05)], got
         records = prs(s)
         assert len(records) == 1, [(k, r.name) for k, r in records.items()]
+
+
+# --- review round 2 regressions --------------------------------------------
+
+
+def link_row(client, s, cell, ex, name):
+    coach_patch(client, s, cell, {"name": name, "exercise_id": str(ex.pk)})
+
+
+class TestCanonicalCatalogEstimate:
+    """``id:<pk>`` holds one value, whichever row (or leftover stamp) asked."""
+
+    def test_names_come_from_live_rows_not_the_target(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        rename_slot(s.row1_w1, "Squat")
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "150 x 1").status_code == 200
+        finish(s.d1w1, s.athlete)
+        # Row 1 is now linked as (E, "Squat") but nothing is logged under it.
+        link_row(client, s, s.row1_w1, ex, "Squat")
+        link_row(client, s, s.row2_w1, ex, "Back Squat")
+        row_bs = fresh(s.row2_w2)
+        assert type_line(client, d2w2(s), row_bs, "100 x 5").status_code == 200
+        finish(d2w2(s), s.athlete)
+
+        key = f"id:{ex.pk}"
+        refresh(s, [row_bs])
+        assert one_rms(s).get(key) == pytest.approx(150, abs=0.05), (
+            f"free-text 'Squat' set missing from the stored estimate: {one_rms(s)}"
+        )
+        by_back = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(ex.pk, "Back Squat")], unit=Unit.KILOGRAMS
+        )
+        by_squat = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(ex.pk, "Squat")], unit=Unit.KILOGRAMS
+        )
+        assert by_back == by_squat == {key: pytest.approx(150, abs=0.05)}, (
+            by_back,
+            by_squat,
+        )
+
+    def test_deleted_stamp_name_does_not_decide_the_estimate(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        rename_slot(s.row1_w1, "Squat")
+        client.force_login(s.athlete)
+        # Free-text "Squat" 200 x 1.
+        assert type_line(client, s.d1w1, s.row1_w1, "200 x 1").status_code == 200
+        finish(s.d1w1, s.athlete)
+        # Linked as (E, "Squat"); a week-2 set is stamped (E, "Squat").
+        link_row(client, s, s.row1_w1, ex, "Squat")
+        assert type_line(client, s.d1w2, s.row1_w2, "100 x 1").status_code == 200
+        finish(s.d1w2, s.athlete)
+        # Row 2: (E, "Back Squat") 150 x 1.
+        link_row(client, s, s.row2_w1, ex, "Back Squat")
+        assert type_line(client, s.d2w1, s.row2_w1, "150 x 1").status_code == 200
+        finish(s.d2w1, s.athlete)
+        # No live row is (E, "Squat") any more.
+        link_row(client, s, s.row1_w1, ex, "Back Squat")
+        # The athlete clears the only set stamped (E, "Squat").
+        assert type_line(client, s.d1w2, fresh(s.row1_w2), "").status_code == 200
+        assert not LoggedSet.objects.filter(exercise_name="Squat", exercise=ex).exists()
+        assert the_log(s.d1w2, s.athlete).status == SessionLog.Status.DONE
+
+        key = f"id:{ex.pk}"
+        assert one_rms(s).get(key) == pytest.approx(150, abs=0.05), (
+            f"stale name from the deleted stamp decided the estimate: {one_rms(s)}"
+        )
+        canonical = meso_one_rm.derive_one_rm_values(
+            s.athlete, lifts=[Lift(ex.pk, "Back Squat")], unit=Unit.KILOGRAMS
+        )
+        assert one_rms(s)[key] == pytest.approx(canonical[key], abs=0.05), canonical
+
+
+class TestOtherRowsCompareAndSet:
+    def _seed(self, client):
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        link_slot(s.row2_w1, ex)
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "200 x 1").status_code == 200
+        assert type_line(client, s.d2w1, s.row2_w1, "100 x 5").status_code == 200
+        finish(s.d1w1, s.athlete)
+        finish(s.d2w1, s.athlete)
+        refresh(s, [fresh(s.row1_w1)])
+        refresh(s, [fresh(s.row2_w1)])
+        key = f"id:{ex.pk}"
+        row = AthleteOneRm.objects.get(athlete=s.athlete, key=key)
+        assert float(row.value) == pytest.approx(200, abs=0.05)
+        assert row.source == AthleteOneRm.Source.LOGGED
+        return s, key
+
+    def test_concurrent_manual_estimate_survives(self, client, monkeypatch):
+        s, key = self._seed(client)
+        real = meso_one_rm.derive_one_rm_values
+
+        def racing(*args, **kwargs):
+            # Lands after ``others`` was read, before the re-derive writes.
+            AthleteOneRm.objects.filter(athlete=s.athlete, key=key).update(
+                source=AthleteOneRm.Source.MANUAL, value=250
+            )
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(meso_one_rm, "derive_one_rm_values", racing)
+        assert type_line(client, s.d1w1, s.row1_w1, "100 x 1").status_code == 200
+        row = AthleteOneRm.objects.get(athlete=s.athlete, key=key)
+        assert (row.source, float(row.value)) == (AthleteOneRm.Source.MANUAL, 250.0), (
+            row.source,
+            row.value,
+        )
+
+    def test_stale_other_row_is_updated_and_touched(self, client):
+        s, key = self._seed(client)
+        before = AthleteOneRm.objects.get(athlete=s.athlete, key=key).updated_at
+        assert type_line(client, s.d1w1, s.row1_w1, "100 x 1").status_code == 200
+        row = AthleteOneRm.objects.get(athlete=s.athlete, key=key)
+        assert float(row.value) == pytest.approx(100 * (1 + 5 / 30), abs=0.05)
+        assert row.source == AthleteOneRm.Source.LOGGED
+        assert row.updated_at > before
+
+
+class TestPrFlagOnWinningStamp:
+    def test_free_text_winner_keeps_its_flag_after_a_link(self, client):
+        s = seed_708()
+        x = ExerciseFactory(name="Back Squat", slug="back-squat-x")
+        y = ExerciseFactory(name="Back Squat", slug="back-squat-y")
+        row_b = presc(s.d1w1, name="Back Squat", order=1, text="3 x 5", exercise=x)
+        client.force_login(s.athlete)
+        assert type_line(client, s.d1w1, s.row1_w1, "200 x 1").status_code == 200
+        assert type_line(client, s.d1w1, row_b, "100 x 1").status_code == 200
+        finish(s.d1w1, s.athlete)
+        # Only row A (the free-text winner) moves to catalog lift Y.
+        link_row(client, s, s.row1_w1, y, "Back Squat")
+        rows = presenters.session_results(s.d1w1)["rows"]
+        flags = [r["pr"] for r in rows]
+        assert flags == [True, True], (flags, [r["name"] for r in rows])
+
+
+class TestRepointNeedsAnchorWrite:
+    def _setup(self):
+        s = seed_708()
+        ex = ExerciseFactory(name="Deadlift", slug="deadlift")
+        target = cell_on(s, "Deadlift", ex)
+        log = SessionLogFactory(session=s.d1w1, athlete=s.athlete)
+        made = LoggedSetFactory(session_log=log, prescription=s.row1_w1)
+        row = LoggedSet.objects.get(pk=made.pk)
+        sa, sb = s.row1_w1.exercise_slot_id, target.exercise_slot_id
+        assert row.exercise_slot_id == sa != sb
+        return s, ex, target, row, sa, sb
+
+    @staticmethod
+    def _db(row):
+        return LoggedSet.objects.values_list(
+            "exercise_slot_id", "prescription_id", "exercise_id", "exercise_name"
+        ).get(pk=row.pk)
+
+    def test_prescription_only_save_moves_the_anchor_with_the_stamp(self):
+        s, ex, target, row, sa, sb = self._setup()
+        row.prescription = target
+        row.exercise_slot = target.exercise_slot
+        row.save(update_fields=["prescription"])
+        assert self._db(row) == (sb, target.pk, ex.pk, "Deadlift")
+
+    def test_save_that_skips_the_anchor_does_not_repoint(self):
+        s, ex, target, row, sa, sb = self._setup()
+        before = self._db(row)
+        row.prescription = target
+        row.exercise_slot = target.exercise_slot
+        row.reps = "7"
+        row.save(update_fields=["reps"])
+        assert self._db(row)[:] == before, self._db(row)
+        assert LoggedSet.objects.get(pk=row.pk).reps == "7"
+        # A later full save writes the anchor, so it re-points then.
+        row.save()
+        assert self._db(row) == (sb, target.pk, ex.pk, "Deadlift")
