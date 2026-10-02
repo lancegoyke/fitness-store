@@ -183,4 +183,4 @@ def test_first_log_tip_is_server_rendered_suppressed(client):
 
 
 def test_pwa_cache_version():
-    assert views.PWA_CACHE_VERSION == "meso-pwa-v13"
+    assert views.PWA_CACHE_VERSION == "meso-pwa-v14"

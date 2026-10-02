@@ -61,10 +61,9 @@ def test_a_row_with_the_column_set_survives_with_its_fields_intact():
     executor = MigrationExecutor(connection)
     leaf_nodes = executor.loader.graph.leaf_nodes("meso")
     try:
-        executor.migrate([MESO_0059])
-        executor.loader.build_graph()
-        assert COLUMN in _columns()
-
+        # Seeded at head, BEFORE rolling back: the current `Prescription` has
+        # columns (`entered_by_coach`, #709) the 0059 table doesn't, and the
+        # row survives the rollback.
         s = seed()
         log = SessionLogFactory(
             session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
@@ -80,6 +79,9 @@ def test_a_row_with_the_column_set_survives_with_its_fields_intact():
             reps="5",
             load="225",
         )
+        executor.migrate([MESO_0059])
+        executor.loader.build_graph()
+        assert COLUMN in _columns()
         with connection.cursor() as cursor:
             cursor.execute(
                 f"UPDATE {TABLE} SET {COLUMN} = %s WHERE id = %s",

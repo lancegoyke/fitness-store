@@ -21,9 +21,9 @@
 // usePlanData's switchWeek) to re-sync the whole grid — mirroring
 // usePlanData/useReorder's ref-guard idiom, one shared in-flight guard across
 // every structural verb so a double-click can't race two refetches.
-import { useCallback, useRef, useState } from "react";
-import { apiPost } from "../lib/api";
-import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, MesoGrid } from "../lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { apiPost, apiPostResult } from "../lib/api";
+import type { CellLine, GridCell, GridDay, GridHistory, GridRow, GridWeek, MesoGrid } from "../lib/api";
 
 export type Id = number | string;
 
@@ -175,45 +175,274 @@ function updateRowInGrid(grid: MesoGrid, exerciseSlotId: Id, patch: Partial<Grid
   };
 }
 
-/** Immutably set one (week × line) sub-line's text on a row — updates an
- * existing entry or inserts a new one in line order (the optimistic local
- * mirror of the server's get_or_create upsert in `cell_line_write`). */
-function updateCellLineInGrid(
+/** Highest sub-line number a cell can hold. Mirrors the server's
+ * `views.MAX_CELL_LINE` (20); the server is the authority and its answer
+ * replaces our optimistic prediction. */
+const MAX_CELL_LINE = 20;
+
+/** How long the "Moved below <First>'s line" notice stays up. */
+const MOVED_NOTICE_MS = 6000;
+
+export const SAVE_ERROR_MESSAGE =
+  "Couldn't save your last change — it's still on screen but not saved. Check your connection and try again.";
+
+/** One coach write to a (slot, week) cell, as queued/in flight. */
+export interface CellLineWriteOpts {
+  /** "new": the client believed the line blank/absent; "edit": it believed the
+   * line held non-blank text of the coach's. Lets the server refuse (never
+   * overwrite) when the line changed hands. */
+  intent?: "new" | "edit";
+  /** The chip: make the line a logged set / a cue. */
+  kind?: "set" | "cue";
+}
+
+interface CellWrite extends CellLineWriteOpts {
+  line: number;
+  text: string;
+  /** Idempotency token for an `intent:"new"` write; a retry re-sends the SAME
+   * token so a write that already landed is not written twice. */
+  token?: string;
+  /** The line number the optimistic repaint put the text on (differs from
+   * `line` when a "new" write was predicted to relocate). */
+  placed: number;
+}
+
+export interface CellRefusal {
+  id: number;
+  text: string;
+  message: string;
+  /** false for `no_free_line`: adding would fail the same way. */
+  canAdd: boolean;
+}
+
+/** Transient per-cell UI state the table renders under a cell. */
+export interface CellUiState {
+  /** "moved": informational (clears itself); "error": dismissable, role=alert. */
+  notice?: { kind: "moved" | "error"; message: string };
+  /** A refused write whose text is held as the ghost line's unsaved draft. */
+  /** Refused writes whose text is held for the coach (a LIST: two refusals in
+   * one cell never overwrite each other). Only the row's own Add or Discard
+   * removes it. */
+  refusals?: CellRefusal[];
+  /** Line numbers whose last write did not reach the server (retry offered). */
+  unsaved?: number[];
+}
+
+export function cellUiKey(exerciseSlotId: Id, weekId: Id): string {
+  return `${exerciseSlotId}:${weekId}`;
+}
+
+/** First whitespace token of the athlete's name (null when there is none). */
+function athleteFirstName(grid: MesoGrid | null): string | null {
+  const first = grid?.athlete?.name?.trim().split(/\s+/)[0];
+  return first ? first : null;
+}
+
+/** The line a "new" write lands on: its own number when absent/blank (or
+ * already holding this exact text), else the next number above it that is
+ * absent/blank — the server's relocation rule, predicted. */
+function predictNewLine(lines: CellLine[], line: number, text: string): number {
+  const free = (n: number) => {
+    const l = lines.find((x) => x.line === n);
+    return !l || l.text.trim() === "";
+  };
+  const own = lines.find((x) => x.line === line);
+  if (!own || own.text.trim() === "" || own.text === text) return line;
+  for (let n = line + 1; n <= MAX_CELL_LINE; n++) if (free(n)) return n;
+  return line;
+}
+
+/** Apply one write's optimistic effect to a cell (pure). `asPlaced`: put it
+ * on `write.placed` verbatim (re-applying an already-placed unsaved write). */
+function applyWriteToCell(cell: GridCell, write: CellWrite, asPlaced = false): GridCell {
+  if (write.line === 0) return { ...cell, text: write.text };
+  const target = asPlaced
+    ? write.placed
+    : write.intent === "new"
+      ? predictNewLine(cell.lines ?? [], write.line, write.text)
+      : write.line;
+  const lines = [...(cell.lines ?? [])];
+  const flags: Partial<CellLine> =
+    write.kind === "set"
+      ? { athlete_authored: true, entered_by_coach: true }
+      : write.kind === "cue"
+        ? { athlete_authored: false, entered_by_coach: false }
+        : {};
+  const idx = lines.findIndex((l) => l.line === target);
+  if (idx >= 0) {
+    const cur = lines[idx]!;
+    if (cur.text.trim() === "" && write.line !== 0) {
+      // A blank line is free: a write onto it makes it a plain cue again
+      // (unless this is the chip), whoever held it before.
+      const { entered_by_coach: _kept, ...rest } = cur;
+      lines[idx] = { ...rest, text: write.text, athlete_authored: false, ...flags };
+    } else {
+      // A coach write painted onto a line is always a coach line in the view:
+      // never keep an athlete-entered line's flags under coach text.
+      const athleteEntered = !!cur.athlete_authored && !cur.entered_by_coach;
+      lines[idx] = {
+        ...cur,
+        text: write.text,
+        ...(athleteEntered ? { athlete_authored: false } : {}),
+        ...flags,
+      };
+    }
+  } else {
+    lines.push({ line: target, text: write.text, athlete_authored: false, ...flags });
+    lines.sort((a, b) => a.line - b.line);
+  }
+  return { ...cell, lines };
+}
+
+function makeToken(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`.slice(0, 64);
+}
+
+/** Lay unsaved (at their placed line) and queued writes back over a cell
+ * taken from the server. A queued "new" write is re-predicted against the
+ * cell as it now stands, and its `placed` is updated to where it was actually
+ * painted, so a later retry mark follows the line the text is shown on. */
+function reapplyWrites(
+  cell: GridCell,
+  unsaved: CellWrite[],
+  queued: CellWrite[],
+  onRefused: (w: CellWrite) => void = () => {},
+): GridCell {
+  let next = cell;
+  for (const w of unsaved) {
+    if (w.line === 0) continue;
+    // Never paint an unsaved write over a line someone else now holds
+    // (non-blank, different text): a "new" write moves to the next free line;
+    // an edit becomes a refusal row (text kept, Add/Discard).
+    const occ = (next.lines ?? []).find((l) => l.line === w.placed);
+    if (occ && occ.text.trim() !== "" && occ.text !== w.text) {
+      if (w.intent === "new") {
+        w.placed = predictNewLine(next.lines ?? [], w.line, w.text);
+      } else if (occ.athlete_authored && !occ.entered_by_coach) {
+        // An edit only loses its line to the ATHLETE (a coach line differing
+        // from the coach's own earlier text is just the coach's stack).
+        onRefused(w);
+        continue;
+      }
+    }
+    next = applyWriteToCell(next, w, true);
+  }
+  for (const w of queued) {
+    if (w.line === 0) continue;
+    if (w.intent === "new") w.placed = predictNewLine(next.lines ?? [], w.line, w.text);
+    next = applyWriteToCell(next, w);
+  }
+  return next;
+}
+
+function mapCell(
   grid: MesoGrid,
   exerciseSlotId: Id,
   weekId: Id,
-  line: number,
-  text: string,
+  fn: (cell: GridCell) => GridCell,
 ): MesoGrid {
+  const key = String(weekId);
   return {
     ...grid,
     days: grid.days.map((day) => ({
       ...day,
       rows: day.rows.map((row) => {
         if (row.exercise_slot_id !== exerciseSlotId) return row;
-        const key = String(weekId);
         const cell = row.cells[key];
         if (!cell) return row;
-        if (line === 0) {
-          return { ...row, cells: { ...row.cells, [key]: { ...cell, text } } };
-        }
-        const lines = [...(cell.lines ?? [])];
-        const idx = lines.findIndex((l) => l.line === line);
-        if (idx >= 0) {
-          lines[idx] = { ...lines[idx]!, text, athlete_authored: false };
-        } else {
-          lines.push({ line, text, athlete_authored: false });
-          lines.sort((a, b) => a.line - b.line);
-        }
-        return { ...row, cells: { ...row.cells, [key]: { ...cell, lines } } };
+        return { ...row, cells: { ...row.cells, [key]: fn(cell) } };
       }),
     })),
   };
 }
 
+function findCell(grid: MesoGrid | null, exerciseSlotId: Id, weekId: Id): GridCell | undefined {
+  return findRow(grid, exerciseSlotId)?.cells[String(weekId)];
+}
+
 export function useGrid(options: UseGridOptions) {
   const { planId, csrf, initialGrid } = options;
-  const [grid, setGrid] = useState<MesoGrid | null>(initialGrid);
+  const [grid, setGridState] = useState<MesoGrid | null>(initialGrid);
+  // The latest grid, updated synchronously with every set — writeCellLine's
+  // per-cell queue predicts and re-applies against it between renders.
+  const gridRef = useRef<MesoGrid | null>(initialGrid);
+  const setGrid = useCallback(
+    (update: MesoGrid | null | ((prev: MesoGrid | null) => MesoGrid | null)) => {
+      const next = typeof update === "function" ? update(gridRef.current) : update;
+      gridRef.current = next;
+      setGridState(next);
+    },
+    [],
+  );
+
+  // Last unsaved-change failure, shown by DesignerRoot as a banner. Every
+  // optimistic verb sets it (alongside its console.error) so a failed write is
+  // never silent.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const reportFailure = useCallback((label: string, err: unknown) => {
+    console.error(label, err);
+    setSaveError(SAVE_ERROR_MESSAGE);
+  }, []);
+  const dismissSaveError = useCallback(() => setSaveError(null), []);
+
+  // Per-cell UI (notices, refusal drafts, retry marks), keyed by cellUiKey.
+  const [cellUi, setCellUi] = useState<Record<string, CellUiState>>({});
+  const patchCellUi = useCallback((key: string, patch: (cur: CellUiState) => CellUiState) => {
+    setCellUi((prev) => {
+      const next = patch(prev[key] ?? {});
+      const out = { ...prev };
+      if (!next.notice && !(next.refusals && next.refusals.length) && !(next.unsaved && next.unsaved.length)) delete out[key];
+      else out[key] = next;
+      return out;
+    });
+  }, []);
+  const noticeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  useEffect(() => {
+    const timers = noticeTimersRef.current;
+    return () => {
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+    };
+  }, []);
+  // Per-cell write queue: writes to one (slot, week) are chained so their
+  // responses arrive in send order; `queuedRef` holds the not-yet-answered
+  // ones (re-applied on top of each adopted server answer), `unsavedRef` the
+  // ones that failed to reach the server.
+  const chainsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const queuedRef = useRef<Map<string, CellWrite[]>>(new Map());
+  const unsavedRef = useRef<Map<string, CellWrite[]>>(new Map());
+
+  const refusalIdRef = useRef(0);
+  const addRefusal = useCallback(
+    (key: string, r: Omit<CellRefusal, "id">) => {
+      if (r.text.trim() === "") return; // nothing to keep
+      const id = ++refusalIdRef.current;
+      patchCellUi(key, (cur) => ({ ...cur, refusals: [...(cur.refusals ?? []), { ...r, id }] }));
+    },
+    [patchCellUi],
+  );
+
+  // After re-applying unsaved writes over server lines: edits whose line was
+  // taken become refusal rows (text kept, Add/Discard) and leave `unsavedRef`;
+  // the retry marks are re-derived from where each unsaved write is painted.
+  const settleUnsaved = (key: string, refused: CellWrite[]) => {
+    let list = unsavedRef.current.get(key) ?? [];
+    if (refused.length) {
+      list = list.filter((w) => !refused.includes(w));
+      unsavedRef.current.set(key, list);
+      const first = athleteFirstName(gridRef.current) ?? "Your athlete";
+      for (const w of refused) {
+        addRefusal(key, {
+          text: w.text,
+          message: `${first} logged on this line — your unsaved text is below it.`,
+          canAdd: true,
+        });
+      }
+    }
+    patchCellUi(key, (cur) => ({ ...cur, unsaved: list.map((w) => w.placed) }));
+  };
   const [history, setHistory] = useState<GridHistory>(initialGrid?.history ?? EMPTY_GRID_HISTORY);
 
   // One shared in-flight guard across every structural (refetch-driven) verb
@@ -255,7 +484,7 @@ export function useGrid(options: UseGridOptions) {
       // any of these here would silently blank that chrome after the very
       // next structural edit (regression test: useGrid.test.ts "refetchGrid
       // carries the new plan/athlete/phases fields through").
-      setGrid({
+      const fetched: MesoGrid = {
         plan: data.plan,
         athlete: data.athlete,
         phases: data.phases,
@@ -263,31 +492,58 @@ export function useGrid(options: UseGridOptions) {
         weeks: data.weeks,
         days: data.days,
         history: data.history,
+      };
+      // Line writes still in flight (or failed) must stay on screen: lay them
+      // back over the fetched grid, the same way adopting a server answer does.
+      const settleLater: Array<[string, CellWrite[]]> = [];
+      setGrid({
+        ...fetched,
+        days: fetched.days.map((day) => ({
+          ...day,
+          rows: day.rows.map((row) => {
+            let cells = row.cells;
+            for (const [weekId, c] of Object.entries(row.cells)) {
+              const k = cellUiKey(row.exercise_slot_id, weekId);
+              const unsaved = unsavedRef.current.get(k) ?? [];
+              const queued = queuedRef.current.get(k) ?? [];
+              if (!unsaved.length && !queued.length) continue;
+              const refused: CellWrite[] = [];
+              const next = reapplyWrites(c, unsaved, queued, (w) => refused.push(w));
+              if (unsaved.length) settleLater.push([k, refused]);
+              if (cells === row.cells) cells = { ...row.cells };
+              cells[weekId] = next;
+            }
+            return cells === row.cells ? row : { ...row, cells };
+          }),
+        })),
       });
+      for (const [k, refused] of settleLater) settleUnsaved(k, refused);
       setHistory(data.history);
     } catch (err) {
-      console.error("Refetch grid failed", err);
+      reportFailure("Refetch grid failed", err);
     }
-  }, [planId]);
+  }, [planId, setGrid, reportFailure]);
 
   const runStructural = useCallback(async (fn: () => Promise<void>) => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     try {
+      // A just-blurred line write must land before the refetch replaces the grid.
+      if (pendingWritesRef.current.size) await flushPendingWrites();
       await fn();
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-  }, []);
+  }, [flushPendingWrites]);
 
   const patchCell = useCallback(
     (cellId: Id, patch: GridCellPatch) => {
       setGrid((prev) => (prev ? updateCellInGrid(prev, cellId, patch) : prev));
       const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, patch, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
-        .catch((err) => console.error("Cell autosave failed", err));
+        .catch((err) => reportFailure("Cell autosave failed", err));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
@@ -309,7 +565,7 @@ export function useGrid(options: UseGridOptions) {
       setGrid((prev) => (prev ? updateRowInGrid(prev, exerciseSlotId, patch) : prev));
       const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, body, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
-        .catch((err) => console.error("Rename exercise failed", err));
+        .catch((err) => reportFailure("Rename exercise failed", err));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
@@ -334,7 +590,7 @@ export function useGrid(options: UseGridOptions) {
           }
           adoptGridHistory(reply);
         })
-        .catch((err) => console.error("Rename program failed", err));
+        .catch((err) => reportFailure("Rename program failed", err));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
@@ -367,7 +623,7 @@ export function useGrid(options: UseGridOptions) {
           }
           adoptGridHistory(reply);
         })
-        .catch((err) => console.error("Rename block failed", err));
+        .catch((err) => reportFailure("Rename block failed", err));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
@@ -398,36 +654,223 @@ export function useGrid(options: UseGridOptions) {
           }
           adoptGridHistory(reply);
         })
-        .catch((err) => console.error("Rename day failed", err));
+        .catch((err) => reportFailure("Rename day failed", err));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
     [planId, csrf, adoptGridHistory],
   );
 
-  // Phase 2a: write one freeform (week × line) sub-line of a row's stack —
+  // Phase 2a/#709: write one (week × line) sub-line of a row's stack —
   // addressed by (exercise_slot, week, line), not pk, since a sub-line cell
-  // may not exist yet (the server upserts via `cell_line_write`). Same
-  // optimistic fire-and-forget shape as patchCell: local repaint immediately,
-  // POST not awaited, failure console.error'd. Line 0 routes here too when
-  // the caller has no pk handy, though patchCell (by pk) is the normal line-0
-  // path.
-  const writeCellLine = useCallback(
-    (exerciseSlotId: Id, weekId: Id, line: number, text: string) => {
-      setGrid((prev) =>
-        prev ? updateCellLineInGrid(prev, exerciseSlotId, weekId, line, text) : prev,
-      );
-      const write = apiPost(
-        `/meso/api/plan/${planId}/row/${exerciseSlotId}/cell/`,
-        { week_id: weekId, line, text },
-        csrf,
-      )
-        .then((data) => adoptGridHistory(data as GridHistoryCarrier))
-        .catch((err) => console.error("Cell line write failed", err));
-      pendingWritesRef.current.add(write);
-      write.finally(() => pendingWritesRef.current.delete(write));
+  // may not exist yet (the server upserts via `cell_line_write`).
+  //
+  // Optimistic (local repaint now), but unlike the other verbs the server's
+  // ANSWER matters: it can relocate a "new" write, refuse one onto the
+  // athlete's line, or flip a line's kind. So writes to the SAME (slot, week)
+  // are chained (responses arrive in send order), every 200/422 carries the
+  // cell's whole `grid_cell` which replaces our lines/summary (re-applying
+  // the writes still queued behind it), and a failed write keeps its text on
+  // screen with a "Not saved — retry" mark instead of vanishing.
+  const sendCellWrite = useCallback(
+    async (exerciseSlotId: Id, weekId: Id, write: CellWrite) => {
+      const key = cellUiKey(exerciseSlotId, weekId);
+      const dropQueued = () => {
+        const q = queuedRef.current.get(key) ?? [];
+        queuedRef.current.set(
+          key,
+          q.filter((w) => w !== write),
+        );
+      };
+      const markUnsaved = (err: unknown, label: string) => {
+        dropQueued();
+        const list = (unsavedRef.current.get(key) ?? []).filter((w) => w.placed !== write.placed);
+        list.push(write);
+        unsavedRef.current.set(key, list);
+        patchCellUi(key, (cur) => ({ ...cur, unsaved: list.map((w) => w.placed) }));
+        reportFailure(label, err);
+      };
+      const adopt = (gc: Partial<GridCell> | undefined) => {
+        if (!gc || !Array.isArray(gc.lines)) return;
+        const unsaved = unsavedRef.current.get(key) ?? [];
+        const queued = queuedRef.current.get(key) ?? [];
+        const refused: CellWrite[] = [];
+        setGrid((prev) =>
+          prev
+            ? mapCell(prev, exerciseSlotId, weekId, (cell) => {
+                // Never the server's line-0 `text` — patchCell owns it.
+                let next: GridCell = {
+                  ...cell,
+                  lines: gc.lines!,
+                  athlete_summary: "athlete_summary" in gc ? gc.athlete_summary : cell.athlete_summary,
+                  session_started: "session_started" in gc ? gc.session_started : cell.session_started,
+                };
+                return reapplyWrites(next, unsaved, queued, (w) => refused.push(w));
+              })
+            : prev,
+        );
+        settleUnsaved(key, refused);
+      };
+      const body: Record<string, unknown> = { week_id: weekId, line: write.line, text: write.text };
+      if (write.intent) body.intent = write.intent;
+      if (write.kind) body.kind = write.kind;
+      if (write.token) body.token = write.token;
+
+      let result: { ok: boolean; status: number; data: unknown };
+      try {
+        result = await apiPostResult(`/meso/api/plan/${planId}/row/${exerciseSlotId}/cell/`, body, csrf);
+      } catch (err) {
+        markUnsaved(err, "Cell line write failed");
+        return;
+      }
+      const data =
+        result.data && typeof result.data === "object" ? (result.data as Record<string, any>) : null;
+
+      if (result.ok && data) {
+        dropQueued();
+        // This line reached the server: any earlier unsaved mark on it is moot.
+        const rest = (unsavedRef.current.get(key) ?? []).filter((w) => w.placed !== write.placed);
+        unsavedRef.current.set(key, rest);
+        adopt(data.grid_cell);
+        adoptGridHistory(data as GridHistoryCarrier);
+        patchCellUi(key, (cur) => {
+          let next: CellUiState = {
+            ...cur,
+            unsaved: (unsavedRef.current.get(key) ?? rest).map((w) => w.placed),
+          };
+          if (data.relocated_from != null) {
+            const first = athleteFirstName(gridRef.current);
+            next = {
+              ...next,
+              notice: { kind: "moved", message: `Moved below ${first ?? "your athlete"}'s line` },
+            };
+          }
+          return next;
+        });
+        if (data.relocated_from != null) {
+          const timers = noticeTimersRef.current;
+          const prevTimer = timers.get(key);
+          if (prevTimer) clearTimeout(prevTimer);
+          timers.set(
+            key,
+            setTimeout(() => {
+              timers.delete(key);
+              patchCellUi(key, (cur) =>
+                cur.notice?.kind === "moved" ? { ...cur, notice: undefined } : cur,
+              );
+            }, MOVED_NOTICE_MS),
+          );
+        }
+        return;
+      }
+
+      if (result.status === 422 && data) {
+        dropQueued();
+        adopt(data.grid_cell);
+        const code = typeof data.code === "string" ? data.code : "";
+        const serverError = typeof data.error === "string" && data.error ? data.error : "That line couldn't be saved.";
+        if (code === "athlete_line") {
+          const first =
+            (typeof data.athlete_first_name === "string" && data.athlete_first_name) ||
+            athleteFirstName(gridRef.current) ||
+            "Your athlete";
+          addRefusal(key, {
+            text: write.text,
+            message: `${first} just logged on this line — your text is below it.`,
+            canAdd: true,
+          });
+        } else if (code === "no_free_line") {
+          addRefusal(key, { text: write.text, message: serverError, canAdd: false });
+        } else {
+          const message = write.text.trim() ? `${serverError} (“${write.text}”)` : serverError;
+          patchCellUi(key, (cur) => ({ ...cur, notice: { kind: "error", message } }));
+        }
+        return;
+      }
+
+      // 5xx, another non-ok status, or a 200 whose body is unreadable.
+      markUnsaved(new Error("Request failed: " + result.status), "Cell line write failed");
     },
-    [planId, csrf, adoptGridHistory],
+    [planId, csrf, adoptGridHistory, patchCellUi, addRefusal, reportFailure, setGrid],
+  );
+
+  const enqueueCellWrite = useCallback(
+    (exerciseSlotId: Id, weekId: Id, write: CellWrite) => {
+      const key = cellUiKey(exerciseSlotId, weekId);
+      queuedRef.current.set(key, [...(queuedRef.current.get(key) ?? []), write]);
+      // The first write for a cell starts synchronously; later ones wait on it.
+      const prev = chainsRef.current.get(key);
+      const run = prev
+        ? prev.then(() => sendCellWrite(exerciseSlotId, weekId, write))
+        : sendCellWrite(exerciseSlotId, weekId, write);
+      chainsRef.current.set(key, run);
+      pendingWritesRef.current.add(run);
+      run.finally(() => {
+        pendingWritesRef.current.delete(run);
+        if (chainsRef.current.get(key) === run) chainsRef.current.delete(key);
+      });
+    },
+    [sendCellWrite],
+  );
+
+  const writeCellLine = useCallback(
+    (exerciseSlotId: Id, weekId: Id, line: number, text: string, opts?: CellLineWriteOpts) => {
+      const key = cellUiKey(exerciseSlotId, weekId);
+      const cellNow = findCell(gridRef.current, exerciseSlotId, weekId);
+      const placed =
+        line !== 0 && opts?.intent === "new" && cellNow
+          ? predictNewLine(cellNow.lines ?? [], line, text)
+          : line;
+      const write: CellWrite = { line, text, placed, ...opts };
+      if (opts?.intent === "new" && line !== 0) write.token = makeToken();
+      setGrid((prev) =>
+        prev ? mapCell(prev, exerciseSlotId, weekId, (cell) => applyWriteToCell(cell, write)) : prev,
+      );
+      // A fresh write supersedes a retry mark on its line. It never clears a
+      // refusal: only that refusal's own Add or Discard does.
+      const unsaved = (unsavedRef.current.get(key) ?? []).filter((w) => w.placed !== placed);
+      unsavedRef.current.set(key, unsaved);
+      patchCellUi(key, (cur) => ({
+        ...cur,
+        unsaved: unsaved.map((w) => w.placed),
+      }));
+      enqueueCellWrite(exerciseSlotId, weekId, write);
+    },
+    [enqueueCellWrite, patchCellUi, setGrid],
+  );
+
+  /** Re-send a line whose write never reached the server (same write,
+   * no new optimistic repaint — its text is still on screen). */
+  const retryCellLine = useCallback(
+    (exerciseSlotId: Id, weekId: Id, line: number) => {
+      const key = cellUiKey(exerciseSlotId, weekId);
+      const list = unsavedRef.current.get(key) ?? [];
+      const write = list.find((w) => w.placed === line);
+      if (!write) return;
+      const rest = list.filter((w) => w !== write);
+      unsavedRef.current.set(key, rest);
+      patchCellUi(key, (cur) => ({ ...cur, unsaved: rest.map((w) => w.placed) }));
+      enqueueCellWrite(exerciseSlotId, weekId, write);
+    },
+    [enqueueCellWrite, patchCellUi],
+  );
+
+  const dismissCellNotice = useCallback(
+    (exerciseSlotId: Id, weekId: Id) => {
+      patchCellUi(cellUiKey(exerciseSlotId, weekId), (cur) => ({ ...cur, notice: undefined }));
+    },
+    [patchCellUi],
+  );
+
+  /** Remove one refusal (its own Add or Discard). */
+  const discardRefusal = useCallback(
+    (exerciseSlotId: Id, weekId: Id, refusalId: number) => {
+      patchCellUi(cellUiKey(exerciseSlotId, weekId), (cur) => ({
+        ...cur,
+        refusals: (cur.refusals ?? []).filter((r) => r.id !== refusalId),
+      }));
+    },
+    [patchCellUi],
   );
 
   // Phase 2a (D2): the per-exercise Tempo/Rest/instructions columns — row
@@ -438,7 +881,7 @@ export function useGrid(options: UseGridOptions) {
       setGrid((prev) => (prev ? updateRowInGrid(prev, exerciseSlotId, patch) : prev));
       const write = apiPost(`/meso/api/plan/${planId}/row/${exerciseSlotId}/`, patch, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
-        .catch((err) => console.error("Row columns autosave failed", err));
+        .catch((err) => reportFailure("Row columns autosave failed", err));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
@@ -451,7 +894,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/session/${day.session_id}/exercise/`, null, csrf);
         } catch (err) {
-          console.error("Add exercise failed", err);
+          reportFailure("Add exercise failed", err);
           return;
         }
         await refetchGrid();
@@ -468,7 +911,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/delete/`, null, csrf);
         } catch (err) {
-          console.error("Remove exercise failed", err);
+          reportFailure("Remove exercise failed", err);
           return;
         }
         await refetchGrid();
@@ -489,7 +932,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/session/`, { week_id: weekId }, csrf);
         } catch (err) {
-          console.error("Add day failed", err);
+          reportFailure("Add day failed", err);
           return;
         }
         await refetchGrid();
@@ -503,7 +946,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/session/${day.session_id}/delete/`, null, csrf);
         } catch (err) {
-          console.error("Remove day failed", err);
+          reportFailure("Remove day failed", err);
           return;
         }
         await refetchGrid();
@@ -527,7 +970,7 @@ export function useGrid(options: UseGridOptions) {
             csrf,
           );
         } catch (err) {
-          console.error("Add week failed", err);
+          reportFailure("Add week failed", err);
           return;
         }
         await refetchGrid();
@@ -541,7 +984,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/week/${weekId}/delete/`, null, csrf);
         } catch (err) {
-          console.error("Remove week failed", err);
+          reportFailure("Remove week failed", err);
           return;
         }
         await refetchGrid();
@@ -565,7 +1008,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/session/${sessionId}/reorder/`, { order }, csrf);
         } catch (err) {
-          console.error("Reorder exercises failed", err);
+          reportFailure("Reorder exercises failed", err);
           return;
         }
         await refetchGrid();
@@ -579,7 +1022,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/week/${weekId}/reorder/`, { order }, csrf);
         } catch (err) {
-          console.error("Reorder days failed", err);
+          reportFailure("Reorder days failed", err);
           return;
         }
         await refetchGrid();
@@ -604,7 +1047,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/skip/`, { skipped }, csrf);
         } catch (err) {
-          console.error("Skip cell failed", err);
+          reportFailure("Skip cell failed", err);
           return;
         }
         await refetchGrid();
@@ -622,7 +1065,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/fill/`, {}, csrf);
         } catch (err) {
-          console.error("Fill across weeks failed", err);
+          reportFailure("Fill across weeks failed", err);
           return;
         }
         await refetchGrid();
@@ -636,7 +1079,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/session/${day.session_id}/exercise/`, { week_id: weekId }, csrf);
         } catch (err) {
-          console.error("Add exercise this week failed", err);
+          reportFailure("Add exercise this week failed", err);
           return;
         }
         await refetchGrid();
@@ -652,7 +1095,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/undo/`, { week_id: weekId }, csrf);
         } catch (err) {
-          console.error("Undo failed", err);
+          reportFailure("Undo failed", err);
           return;
         }
         await refetchGrid();
@@ -668,7 +1111,7 @@ export function useGrid(options: UseGridOptions) {
         try {
           await apiPost(`/meso/api/plan/${planId}/redo/`, { week_id: weekId }, csrf);
         } catch (err) {
-          console.error("Redo failed", err);
+          reportFailure("Redo failed", err);
           return;
         }
         await refetchGrid();
@@ -686,6 +1129,12 @@ export function useGrid(options: UseGridOptions) {
     renameDay,
     renameExercise,
     writeCellLine,
+    retryCellLine,
+    dismissCellNotice,
+    discardRefusal,
+    cellUi,
+    saveError,
+    dismissSaveError,
     patchRowColumns,
     addExercise,
     removeExercise,

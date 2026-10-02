@@ -3,7 +3,7 @@
 // goes through it). Ported out as its own direct spec now that it's a
 // standalone function instead of a `this`-bound method.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { apiPost } from "./api";
+import { apiPost, apiPostResult } from "./api";
 
 function res({ ok = true, status = 200, body = {} }: { ok?: boolean; status?: number; body?: unknown } = {}) {
   return { ok, status, json: async () => body };
@@ -47,5 +47,40 @@ describe("apiPost", () => {
   it("throws on a non-ok response", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(res({ ok: false, status: 500 })));
     await expect(apiPost("/x/", null, "tok")).rejects.toThrow("Request failed: 500");
+  });
+});
+
+describe("apiPostResult", () => {
+  it("resolves a non-ok status with its parsed body instead of throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(res({ ok: false, status: 422, body: { ok: false, code: "athlete_line" } })),
+    );
+    const out = await apiPostResult("/x/", { a: 1 }, "tok");
+    expect(out).toEqual({ ok: false, status: 422, data: { ok: false, code: "athlete_line" } });
+  });
+
+  it("resolves ok with the body", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(res({ body: { ok: true } })));
+    expect(await apiPostResult("/x/", null, "tok")).toEqual({ ok: true, status: 200, data: { ok: true } });
+  });
+
+  it("tolerates an unparseable body (data null)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: async () => {
+          throw new SyntaxError("bad json");
+        },
+      }),
+    );
+    expect(await apiPostResult("/x/", null, "tok")).toEqual({ ok: false, status: 502, data: null });
+  });
+
+  it("still rejects on a network error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+    await expect(apiPostResult("/x/", null, "tok")).rejects.toThrow("offline");
   });
 });

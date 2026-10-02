@@ -1984,6 +1984,127 @@ def _line_placeholder(prescription):
     return placeholder, ""
 
 
+def _coach_cue_lines(line_cells):
+    """The coach's cues for one exercise (``athlete_authored=False``, line>=1).
+
+    Read-only, so no warn data, and rendered AFTER the athlete's sets (#524).
+    Blank ones are dropped. ``line_cells`` is in line order already.
+    """
+    return [
+        {"line": c.line, "text": c.text}
+        for c in line_cells
+        if not c.athlete_authored and c.text.strip()
+    ]
+
+
+def _performance_sub_lines(line_cells, sets_by_line, elsewhere_by_line):
+    """The row's editable tracking stack, as ``[{line, text, warn, ...}]``.
+
+    The one builder behind the athlete page and the single-exercise cell-write
+    response (``athlete_exercise_lines``), so the two cannot drift.
+    """
+    # The row's editable tracking stack (Phase 4a): its ATHLETE-authored
+    # line>=1 cells for this week as ``[{line, text, warn}]`` (the coach's
+    # cues are ``coach_lines``, #524). Blank cells are dropped from
+    # the display (a cleared sub-line is a blank cell, not a deleted row).
+    # ``warn`` (5a, plan §8) is derived on read, not stored: re-classify
+    # the cell's own text with ``parse_performed``. Text that *looks* like a
+    # fat-fingered set attempt (``225 x``) warns; skip/swap/note/duration
+    # are successful parses and never do.
+    #
+    # A line whose text DOES resolve to a set also warns when no such row
+    # exists. Asking after the row rather than re-deriving "is this row
+    # loggable right now" catches every reason one can be missing — the
+    # coach had skipped the line when it was typed and later unskipped it,
+    # the values were too long to store, the tolerance guard swallowed a
+    # database error — and each of those leaves the same state this warning
+    # exists for: ordinary-looking performed text that quietly counts for
+    # nothing.
+    # #567/#568 P2-C: no ``loggable`` is passed here, so it defaults
+    # ``True`` — hard-wired, unlike ``views._cell_warn_reason_or_blank``, which
+    # passes ``not skipped``. The two answers still agree, but only
+    # because of an INVISIBLE coupling at the call site, not because a
+    # skipped line can't warn: ``_sub_lines`` is only ever called (below)
+    # for ``p in prescriptions``, and ``prescriptions`` comes from
+    # ``session.trainable_cells()`` (this function's own docstring, above,
+    # already records that this exact distinction from ``session.cells()``
+    # drifted once), which excludes every skipped cell before ``_sub_lines``
+    # ever runs. If a future change ever rendered a skipped row's sub-lines
+    # here too — a "show its history" mode, say — this default would warn
+    # a line that cannot accept a set at all, exactly the disagreement
+    # #568 exists to prevent; that caller would need to pass its own
+    # ``loggable=not skipped`` rather than relying on this default.
+    rendered = []
+    for line_cell in line_cells:
+        if not line_cell.athlete_authored or not line_cell.text.strip():
+            continue
+        # #572: the client needs WHY, not just whether — see
+        # `sub_line_warn_reason`. `warn` stays a bool so every template
+        # and the client's own tinting are untouched; `warn_reason` rides
+        # alongside it, and an older client that ignores the new key
+        # simply behaves as it does today.
+        reason = sub_line_warn_reason(
+            line_cell,
+            backing_sets=sets_by_line.get(line_cell.pk, ()),
+            elsewhere_sets=elsewhere_by_line.get(line_cell.pk, ()),
+        )
+        rendered.append(
+            {
+                "line": line_cell.line,
+                "text": line_cell.text,
+                "warn": reason is not None,
+                "warn_reason": reason or "",
+                # Who typed it (#709): a coach set line is performance
+                # the athlete may correct, and correcting it claims it.
+                "entered_by_coach": line_cell.entered_by_coach,
+            }
+        )
+    return rendered
+
+
+def athlete_exercise_lines(session, athlete, line_zero_cell):
+    """One exercise's ``{"sub_lines", "coach_lines"}``, exactly as the page builds them.
+
+    The cell-write response uses this after a relocation so the client can
+    redraw the stack without a reload (#709). Does its own small queries
+    (``athlete_session`` batches the same reads once for the whole page and
+    feeds the same two builders). Same newest-log rule, same warn reasons.
+    """
+    log = newest_session_logs(session, athlete).first()
+    all_sets = (
+        list(log.sets.select_related("source_line", "prescription")) if log else []
+    )
+    line_cells = [
+        c
+        for c in session.line_cells()
+        if c.exercise_slot_id == line_zero_cell.exercise_slot_id
+    ]
+    sets_by_line = defaultdict(list)
+    for row in all_sets:
+        if row.source_line_id is not None:
+            sets_by_line[row.source_line_id].append(row)
+    pending = [
+        c.pk
+        for c in line_cells
+        if parsing.performed_is_set(c.text)
+        and not line_shows_a_set(c, sets_by_line.get(c.pk, ()))
+    ]
+    elsewhere_by_line = defaultdict(list)
+    if pending:
+        for row in (
+            LoggedSet.objects.performance_history(athlete)
+            .filter(source_line_id__in=pending)
+            .exclude(session_log__session_id=session.pk)
+        ):
+            elsewhere_by_line[row.source_line_id].append(row)
+    return {
+        "sub_lines": _performance_sub_lines(
+            line_cells, sets_by_line, elsewhere_by_line
+        ),
+        "coach_lines": _coach_cue_lines(line_cells),
+    }
+
+
 def athlete_session(session, athlete):
     """One session as the athlete's logger page.
 
@@ -2086,70 +2207,12 @@ def athlete_session(session, athlete):
             elsewhere_by_line[row.source_line_id].append(row)
 
     def _coach_lines(slot_id):
-        # The coach's cues (``athlete_authored=False``, line>=1): read-only, so
-        # no warn data, and rendered AFTER the athlete's sets (#524). Blank
-        # ones are dropped. `lines_by_slot` is in line order already.
-        return [
-            {"line": c.line, "text": c.text}
-            for c in lines_by_slot.get(slot_id, ())
-            if not c.athlete_authored and c.text.strip()
-        ]
+        return _coach_cue_lines(lines_by_slot.get(slot_id, ()))
 
     def _sub_lines(slot_id):
-        # The row's editable tracking stack (Phase 4a): its ATHLETE-authored
-        # line>=1 cells for this week as ``[{line, text, warn}]`` (the coach's
-        # cues are ``coach_lines``, #524). Blank cells are dropped from
-        # the display (a cleared sub-line is a blank cell, not a deleted row).
-        # ``warn`` (5a, plan §8) is derived on read, not stored: re-classify
-        # the cell's own text with ``parse_performed``. Text that *looks* like a
-        # fat-fingered set attempt (``225 x``) warns; skip/swap/note/duration
-        # are successful parses and never do.
-        #
-        # A line whose text DOES resolve to a set also warns when no such row
-        # exists. Asking after the row rather than re-deriving "is this row
-        # loggable right now" catches every reason one can be missing — the
-        # coach had skipped the line when it was typed and later unskipped it,
-        # the values were too long to store, the tolerance guard swallowed a
-        # database error — and each of those leaves the same state this warning
-        # exists for: ordinary-looking performed text that quietly counts for
-        # nothing.
-        # #567/#568 P2-C: no ``loggable`` is passed here, so it defaults
-        # ``True`` — hard-wired, unlike ``views._cell_warn_reason_or_blank``, which
-        # passes ``not skipped``. The two answers still agree, but only
-        # because of an INVISIBLE coupling at the call site, not because a
-        # skipped line can't warn: ``_sub_lines`` is only ever called (below)
-        # for ``p in prescriptions``, and ``prescriptions`` comes from
-        # ``session.trainable_cells()`` (this function's own docstring, above,
-        # already records that this exact distinction from ``session.cells()``
-        # drifted once), which excludes every skipped cell before ``_sub_lines``
-        # ever runs. If a future change ever rendered a skipped row's sub-lines
-        # here too — a "show its history" mode, say — this default would warn
-        # a line that cannot accept a set at all, exactly the disagreement
-        # #568 exists to prevent; that caller would need to pass its own
-        # ``loggable=not skipped`` rather than relying on this default.
-        rendered = []
-        for line_cell in lines_by_slot.get(slot_id, ()):
-            if not line_cell.athlete_authored or not line_cell.text.strip():
-                continue
-            # #572: the client needs WHY, not just whether — see
-            # `sub_line_warn_reason`. `warn` stays a bool so every template
-            # and the client's own tinting are untouched; `warn_reason` rides
-            # alongside it, and an older client that ignores the new key
-            # simply behaves as it does today.
-            reason = sub_line_warn_reason(
-                line_cell,
-                backing_sets=sets_by_line.get(line_cell.pk, ()),
-                elsewhere_sets=elsewhere_by_line.get(line_cell.pk, ()),
-            )
-            rendered.append(
-                {
-                    "line": line_cell.line,
-                    "text": line_cell.text,
-                    "warn": reason is not None,
-                    "warn_reason": reason or "",
-                }
-            )
-        return rendered
+        return _performance_sub_lines(
+            lines_by_slot.get(slot_id, ()), sets_by_line, elsewhere_by_line
+        )
 
     # The athlete's persisted, log-derived 1RM per lift (in this plan's unit) — the
     # %1RM logger seeds its suggested bar load from it (no manual estimate needed).

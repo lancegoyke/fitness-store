@@ -469,6 +469,7 @@ class TestDeliverScreenChanges:
                 "line": 1,
                 "text": "155 x 8, RPE 8",
                 "athlete_authored": True,
+                "entered_by_coach": False,
             }
         ]
         assert diff["has_changes"] is False

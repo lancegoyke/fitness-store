@@ -19,7 +19,7 @@ from store_project.meso.history import serialize_plan_snapshot
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
-from store_project.meso.tests.test_parse_at_commit import reclaim
+from store_project.meso.tests.test_parse_at_commit import legacy_reclaim
 from store_project.meso.tests.test_parse_at_commit import seed
 from store_project.meso.tests.test_parse_at_commit import sub_cell
 from store_project.meso.tests.test_parse_at_commit import write_cell
@@ -55,7 +55,7 @@ def typed_then_rewritten(client, s, coach_text="brace harder"):
     client.force_login(s.athlete)
     assert write_cell(client, s.session, s.squat, 1, "225 x 5").status_code == 200
     client.force_login(s.coach)
-    assert reclaim(client, s, text=coach_text).status_code == 200
+    legacy_reclaim(s, text=coach_text)
     cell = sub_cell(s.squat, 1)
     assert cell.athlete_authored is False and cell.text == coach_text
     return cell

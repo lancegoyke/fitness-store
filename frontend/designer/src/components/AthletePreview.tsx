@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { MesoGrid } from "../lib/api";
 import { gridToProgram } from "../lib/grid";
 
@@ -176,13 +176,22 @@ export function AthletePreview({
                   <div className="meso-phone-exercise-log">
                     <div className="meso-phone-exercise-log-label">what you did</div>
                     {athleteLines.map((line, lineIndex) => (
-                      <input
-                        key={line.line}
-                        className="meso-phone-exercise-line"
-                        data-testid={`athlete-line-${exercise.id}-${lineIndex}`}
-                        value={line.text}
-                        readOnly
-                      />
+                      <Fragment key={line.line}>
+                        <input
+                          className="meso-phone-exercise-line"
+                          data-testid={`athlete-line-${exercise.id}-${lineIndex}`}
+                          value={line.text}
+                          readOnly
+                        />
+                        {line.entered_by_coach ? (
+                          <span
+                            className="meso-mono meso-phone-line-mark"
+                            data-testid={`athlete-line-coach-mark-${exercise.id}-${lineIndex}`}
+                          >
+                            logged by coach
+                          </span>
+                        ) : null}
+                      </Fragment>
                     ))}
                     {emptyLines.map((n) => (
                       <input

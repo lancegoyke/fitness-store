@@ -373,6 +373,8 @@ class TestCellLineWrite:
             "week_id": cell.week_id,
             "line": 1,
             "text": "RPE 8",
+            "athlete_authored": False,
+            "entered_by_coach": False,
         }
 
     def test_line_0_rewrites_the_existing_prescription_cell_in_place(self, client):

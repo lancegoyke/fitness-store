@@ -90,8 +90,10 @@ def test_athlete_lines_are_marked_in_designer_and_omitted_from_delivery_diff(
 
     for line in athlete_lines:
         mark = coach_page.get_by_test_id(f"cell-line-athlete-{line.pk}")
-        expect(mark).to_have_text("athlete")
-        expect(mark).to_have_attribute("title", "Logged by your athlete")
+        # #709: athlete lines are read-only in the designer, named by the
+        # athlete's first name.
+        expect(mark).to_have_text(re.compile(r"^logged by \S+$"))
+        expect(mark).to_have_attribute("title", re.compile(r"^Logged by \S+$"))
     expect(
         coach_page.get_by_test_id(f"cell-line-athlete-{coach_line.pk}")
     ).to_have_count(0)

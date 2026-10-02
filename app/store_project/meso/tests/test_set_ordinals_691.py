@@ -10,8 +10,8 @@ import pytest
 from store_project.meso import presenters
 from store_project.meso.models import LoggedSet
 from store_project.meso.serializers import serialize_recent_logs
+from store_project.meso.tests.test_parse_at_commit import legacy_reclaim
 from store_project.meso.tests.test_parse_at_commit import log_post
-from store_project.meso.tests.test_parse_at_commit import reclaim
 from store_project.meso.tests.test_parse_at_commit import seed
 from store_project.meso.tests.test_parse_at_commit import write_cell
 
@@ -26,7 +26,7 @@ def seed_cued_session(client):
     s.rdl.skipped = True
     s.rdl.save(update_fields=["skipped"])
     client.force_login(s.coach)
-    assert reclaim(client, s, text="RPE 7", line=1).status_code == 200
+    legacy_reclaim(s, text="RPE 7", line=1)
     client.force_login(s.athlete)
     for line, text in ((2, "40 x 12"), (3, "40 x 12"), (4, "40 x 9")):
         assert write_cell(client, s.session, s.squat, line, text).status_code == 200
@@ -49,7 +49,7 @@ def test_results_note_names_the_third_set(client):
 def test_athlete_readonly_row_reads_set_three(client):
     s = seed_cued_session(client)
     client.force_login(s.coach)
-    assert reclaim(client, s, text="coach rewrote this", line=4).status_code == 200
+    legacy_reclaim(s, text="coach rewrote this", line=4)
 
     ctx = presenters.athlete_session(s.session, s.athlete)
     row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)

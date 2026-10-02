@@ -875,6 +875,39 @@ inventory is explicit rather than implied to conform:
   whose segment loader holds the coach `User` mutex and is `clear_demo`'s
   documented #590 exception.
 
+## Line kinds and who can write them (#709)
+
+Lance, 2026-10-02: the coach and the athlete log one session together on a
+call, neither can overwrite the other's lines, and nothing either one types is
+lost. A sub-line (`Prescription`, line >= 1) is one of three kinds:
+
+| kind | `athlete_authored` | `entered_by_coach` | counts as performance |
+|---|---|---|---|
+| cue (the coach's plan or note) | False | (ignored) | no |
+| athlete set line | True | False | yes |
+| coach set line (a set the coach logged for the athlete) | True | True | yes |
+
+- **Athlete:** edits any performance line (their edit makes it theirs); never
+  edits a non-empty cue (#524's 422 `coach_line`).
+- **Coach:** edits cues and their own set lines. A changed write onto a
+  non-empty athlete set line is a 422 `athlete_line`, from `cell_line_write`
+  and from `prescription_patch`.
+- **The coach's new line** is a set line only when the athlete has started the
+  session (has a `SessionLog`) and the text is unambiguously one performed set
+  (`parsing.reads_as_one_set`: no %, no bare count of 20 or less before an `x`,
+  no bare load of 10 or less, no range or AMRAP). Otherwise it is a cue; a chip
+  flips it either way. A coach set derives its `LoggedSet` through the same
+  writer as the athlete's line, never changes the log's status, and never fires
+  the athlete's `set_logged` event.
+- **Collisions:** a write the client believes is a NEW line (coach
+  `intent:"new"`, athlete `new:true`) never overwrites different text; it lands
+  on the next free line and says `relocated_from`. Its `token`
+  (`Prescription.client_token`) makes a replay of it safe: the same token is
+  the same line, wherever it landed.
+- **Undo/redo** of the coach's own set lines re-derives their sets; an athlete
+  edit of a coach set line makes it athlete data, which undo never touches.
+  See `history.py`'s module docstring.
+
 ## Decision log
 
 _(Append dated entries here as decisions land.)_
@@ -3267,3 +3300,5 @@ _(Append dated entries here as decisions land.)_
   is touched). The `elsewhere` reads and tests that used the endpoint now
   build the same "slot moved, LoggedSet left behind" state straight in the ORM
   (`_helpers.legacy_move_exercise_to_session`), labelled as legacy data.
+- 2026-10-02 — **Decided (#709):** option 2 plus live co-logging — see *Line kinds and who can
+  write them (#709)* above.

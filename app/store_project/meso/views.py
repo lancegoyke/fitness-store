@@ -64,6 +64,7 @@ from . import parsing
 from . import presenters
 from . import push as meso_push
 from . import sandbox as meso_sandbox
+from . import serializers
 from . import tour as meso_tour
 from .agent import apply as agent_apply
 from .agent import client as agent_client
@@ -2390,11 +2391,12 @@ def athlete_cell_write(request, pk):
     """Upsert one freeform sub-line cell the athlete authored (Phase 4a).
 
     The athlete's editable tracking stack beneath each exercise: body
-    ``{"exercise_id": <int>, "line": <int>, "text": "<str>"}`` upserts the
-    (exercise_slot × week × line) cell the coach's ``cell_line_write`` also
-    addresses — but stamps it ``athlete_authored=True`` so it stays OUT of the
+    ``{"exercise_id": <int>, "line": <int>, "text": "<str>", "new"?: <bool>}``
+    upserts the (exercise_slot × week × line) cell the coach's
+    ``cell_line_write`` also addresses — but stamps it ``athlete_authored=True``
+    and ``entered_by_coach=False`` so it is the athlete's own line, OUT of the
     coach's undo/redo snapshot machinery (a coach undo must never revert or
-    hard-delete an athlete's note; see ``history.py``).
+    hard-delete what the athlete entered; see ``history.py``).
 
     Mirrors ``athlete_log_session``'s discipline: athlete-scoped by
     ``_athlete_session_or_404`` (foreign/archived/unknown → flat 404), NO
@@ -2409,6 +2411,22 @@ def athlete_cell_write(request, pk):
     a post that CHANGES its text is refused with a 422 ``code: "coach_line"``
     and nothing is written; an unchanged post is a 200 no-op, and a blank
     coach line is free for the athlete to claim.
+
+    ``new: true`` says the client believed the line empty. If it holds
+    different text by now — a coach cue or a set the coach logged, either way
+    not the athlete's to overwrite blind — the write lands on the next free
+    line instead and the response carries ``relocated_from`` and the
+    exercise's fresh ``exercise_lines``. The relocation exists so text is never
+    lost; the optional ``token`` (1-64 chars, only with ``new: true``) makes it
+    safe to replay: a repeat of a write that already landed is matched by its
+    token and answered with that cell, writing nothing, rather than relocating
+    again onto a second line. A post without ``new`` (an older page,
+    a queued write) keeps the old meaning: a cue is refused, and a coach SET
+    line is an ordinary edit. That edit claims the line
+    (``entered_by_coach=False``) and re-derives its set from the athlete's
+    text; an unchanged post of a coach set line claims nothing but still runs
+    the writer (the un-skip repair). Every 422 carries ``code`` and
+    ``exercise_lines``.
     """
     # A write queued offline by another account (#527). localStorage outlasts
     # a logout, so a page left open for athlete A can flush A's queued lines
@@ -2456,6 +2474,12 @@ def athlete_cell_write(request, pk):
         return HttpResponseBadRequest("text must be a string.")
     if len(text) > PATCHABLE_FIELDS["text"]:
         return HttpResponseBadRequest("text is too long.")
+    new_line = payload.get("new")
+    if new_line is not None and not isinstance(new_line, bool):
+        return HttpResponseBadRequest("new must be a boolean.")
+    token = payload.get("token")
+    if token is not None and (not isinstance(token, str) or not 1 <= len(token) <= 64):
+        return HttpResponseBadRequest("token must be a string of 1 to 64 characters.")
 
     # #571: whether the connection came out of the block below poisoned — a
     # savepoint's OWN rollback failed (dropped connection, a pgbouncer
@@ -2524,9 +2548,42 @@ def athlete_cell_write(request, pk):
         #
         # A no-op on SQLite (which serializes writers anyway), real on Postgres.
         Session.objects.select_for_update(of=("self",)).filter(pk=session.pk).first()
-        cell, created_cell = Prescription.objects.get_or_create(
-            exercise_slot=slot, week=session.week, line=line
-        )
+        # The token is a handle for the line a new-line write created (#709).
+        # That write may have relocated and committed with its response lost, and
+        # posting it again must not relocate AGAIN and put the same text on two
+        # lines. A later save that changes the text clears the token, so a match
+        # means "this is the line that write made, still holding what it wrote".
+        # Three outcomes, decided before the collision logic:
+        #   (a) same text: a replay, nothing is written (`untouched_coach_line`
+        #       is what turns every write off below);
+        #   (b) new text and the line is still the athlete's own: the page is
+        #       editing the line it just made, so it is an ordinary edit of THAT
+        #       line, with no relocation;
+        #   (c) the line has changed hands since: the normal new-line flow.
+        # A blank write is never a new line (nothing to place), so it never
+        # relocates and carries no token.
+        new_intent = new_line is True and bool(text.strip())
+        prior = None
+        if new_intent and token:
+            prior = Prescription.objects.filter(
+                exercise_slot=slot, week=session.week, client_token=token
+            ).first()
+        replayed = prior if prior is not None and prior.text == text else None
+        edit_prior = prior is not None and replayed is None and prior.is_athlete_entered
+        relocated_from = None
+        # Only a prior this write may use bypasses the collision rules below. A
+        # token found on a line that changed hands (case c) is ignored, so the
+        # write meets the line exactly as a token-less one would.
+        usable_prior = prior is not None and (replayed is not None or edit_prior)
+        if usable_prior:
+            cell, created_cell = prior, False
+            if prior.line != line:
+                relocated_from = line
+            line = prior.line
+        else:
+            cell, created_cell = Prescription.objects.get_or_create(
+                exercise_slot=slot, week=session.week, line=line
+            )
         # A coach's cue is read-only to the athlete (#524): it renders after
         # their sets, and a changed write to it would overwrite the coach's
         # words and flip the line to athlete-authored. Refuse it BEFORE any
@@ -2541,23 +2598,69 @@ def athlete_cell_write(request, pk):
         # the write queued to retry forever; any other non-retryable 4xx is a
         # permanent refusal that drops the outbox entry and says "couldn't
         # save". This is the latter. Do not tidy it to 409.
+        # A new-line write onto a coach CUE that reads the same also relocates:
+        # the athlete's performed set must not be swallowed by a cue that
+        # happens to say the same thing. An identical coach SET line is left
+        # alone — that is one performance logged twice, and one set is right.
+        identical_cue = new_intent and not cell.athlete_authored and cell.text == text
         if (
-            not created_cell
-            and not cell.athlete_authored
+            not usable_prior
+            and not created_cell
             and cell.text.strip()
-            and cell.text != text
+            and (cell.text != text or identical_cue)
         ):
-            return JsonResponse(
-                {
-                    "ok": False,
-                    "error": (
-                        "That line is your coach’s note and can’t be changed. "
-                        "Add your set on a new line."
+            if new_intent:
+                # The page believed this line empty and it is not — the coach
+                # (a cue, or a set they logged) got there first. Never
+                # overwrite; land on the next free line (#709).
+                later = {
+                    c.line: c.text
+                    for c in Prescription.objects.filter(
+                        exercise_slot=slot, week=session.week, line__gt=line
+                    )
+                }
+                free = next(
+                    (
+                        n
+                        for n in range(line + 1, MAX_CELL_LINE + 1)
+                        if not later.get(n, "").strip()
                     ),
-                    "code": "coach_line",
-                },
-                status=422,
-            )
+                    None,
+                )
+                if free is None:
+                    return JsonResponse(
+                        {
+                            "ok": False,
+                            "error": "There is no free line left on this exercise.",
+                            "code": "no_free_line",
+                            "exercise_lines": presenters.athlete_exercise_lines(
+                                session, request.user, line_zero[exercise_id]
+                            ),
+                        },
+                        status=422,
+                    )
+                relocated_from = line
+                line = free
+                cell, created_cell = Prescription.objects.get_or_create(
+                    exercise_slot=slot, week=session.week, line=line
+                )
+            elif not cell.athlete_authored:
+                return JsonResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "That line is your coach’s note and can’t be changed. "
+                            "Add your set on a new line."
+                        ),
+                        "code": "coach_line",
+                        "exercise_lines": presenters.athlete_exercise_lines(
+                            session, request.user, line_zero[exercise_id]
+                        ),
+                    },
+                    status=422,
+                )
+            # else: the athlete's own line, or a set the coach logged for them —
+            # the athlete's edit wins, and claims the line below.
         # The template posts on EVERY blur, so most requests carry text nobody
         # touched — including the coach's own cues, which the athlete can focus
         # and leave. Claiming authorship of those was doing real damage:
@@ -2576,13 +2679,38 @@ def athlete_cell_write(request, pk):
         # tell its own rows — the ones this line was showing — from history
         # left behind when a coach rewrote the line.
         previous_text = "" if created_cell else cell.text
-        untouched_coach_line = (
+        untouched_coach_line = replayed is not None or (
             not created_cell and not cell.athlete_authored and cell.text == text
         )
-        if not untouched_coach_line:
+        # An unchanged post of a set the coach logged is not a claim — the
+        # athlete only focused and left — but the writer still runs below, so
+        # the un-skip repair keeps working without the line changing hands.
+        unchanged_coach_set = (
+            not created_cell and cell.is_coach_set and cell.text == text
+        )
+        if not untouched_coach_line and not unchanged_coach_set:
             cell.text = text
             cell.athlete_authored = True
-            cell.save(update_fields=["text", "athlete_authored"])
+            cell.entered_by_coach = False
+            # Cleared only when the text actually changes, so an unchanged
+            # repair re-post (the un-skip repair) can't strip the handle a
+            # replay still needs.
+            if new_intent and token:
+                cell.client_token = token
+                # A token found on a line that changed hands (case c) stays
+                # with this write, never with both lines.
+                if prior is not None and prior.pk != cell.pk:
+                    Prescription.objects.filter(pk=prior.pk).update(client_token="")
+            elif text != previous_text:
+                cell.client_token = ""
+            cell.save(
+                update_fields=[
+                    "text",
+                    "athlete_authored",
+                    "entered_by_coach",
+                    "client_token",
+                ]
+            )
             # LOCK ORDER — load-bearing, and since #562 satisfied STRUCTURALLY:
             # the Plan row is already held from the top of this block, so this
             # call is only the `modified` bump, not the acquisition.
@@ -2696,15 +2824,27 @@ def athlete_cell_write(request, pk):
     warn_reason = _cell_warn_reason_or_blank(
         cell, line_zero[exercise_id], session=session, athlete=request.user
     )
+    extra = {}
+    if relocated_from is not None:
+        # The line the page typed into is not where the text landed: send the
+        # whole stack so it can redraw without a reload (#709).
+        extra = {
+            "relocated_from": relocated_from,
+            "exercise_lines": presenters.athlete_exercise_lines(
+                session, request.user, line_zero[exercise_id]
+            ),
+        }
     return JsonResponse(
         {
             "ok": True,
+            **extra,
             "cell": {
                 "id": cell.pk,
                 "exercise_slot_id": slot.pk,
                 "week_id": session.week_id,
                 "line": cell.line,
                 "text": cell.text,
+                "entered_by_coach": cell.entered_by_coach,
                 # Derive-on-read warn (5a, plan §8) — re-classified from the
                 # just-committed text so a re-blur that fixes a fat-fingered
                 # set attempt clears the warning without a page reload.
@@ -2780,7 +2920,14 @@ def _line_sets(session, athlete, cell):
 
 
 def _upsert_parsed_set(
-    session, athlete, line_zero_cell, cell, *, previous_text="", unit=None
+    session,
+    athlete,
+    line_zero_cell,
+    cell,
+    *,
+    previous_text="",
+    unit=None,
+    skipped_clears=False,
 ):
     """Parse ``cell``'s just-committed text and upsert its derivative ``LoggedSet``.
 
@@ -2867,12 +3014,23 @@ def _upsert_parsed_set(
             # more blur" into data loss, contradicting `prescription_skip`,
             # which deliberately preserves work the athlete already did. Bail
             # before touching anything; the cell's text is saved either way.
-            if line_zero_cell.skipped:
+            #
+            # ``skipped_clears`` (#709) is the COACH's own entry changing on a
+            # skipped row: the coach set line they typed, blanked, flipped to a
+            # cue or undid. That is not a stale page's blur, so the delete
+            # below still runs for the rows the line was showing, and nothing
+            # new is created. Otherwise the old set would survive and keep
+            # counting once the row is un-skipped.
+            if line_zero_cell.skipped and not skipped_clears:
                 return []
 
             parsed = parse_performed(cell.text)
+            # A cue (``athlete_authored`` False) derives no set (#709): the
+            # coach's plan text can read like a set and still isn't one.
             wants_set = bool(
-                parsed
+                not line_zero_cell.skipped
+                and cell.athlete_authored
+                and parsed
                 and parsed.get("kind") == "set"
                 and (parsed.get("reps") or parsed.get("load"))
             )
@@ -3168,7 +3326,9 @@ def _upsert_parsed_set(
                     session.week.mesocycle.plan.unit,
                 )
 
-        if is_new_set:
+        # Not for a set the coach entered (#709): the event is attributed to
+        # the athlete as actor, and they didn't log this one.
+        if is_new_set and not cell.entered_by_coach:
             track(EventName.SET_LOGGED, actor=athlete, subject=log, via="typed")
 
         # The toast read gets its OWN savepoint, deliberately. Inside the one
@@ -3500,7 +3660,7 @@ def manifest_webmanifest(request):
 #     page loses its Set rows and gains the progress header and the single
 #     "Finish session" button. A cached page would still post `sets`, which the
 #     server now ignores, so installed clients need a fresh cache namespace.
-PWA_CACHE_VERSION = "meso-pwa-v13"
+PWA_CACHE_VERSION = "meso-pwa-v14"
 
 
 @require_GET
@@ -4843,6 +5003,47 @@ def prescription_patch(request, plan_id, pk):
         # other's write, or the later one compares against a stale slot, writes
         # nothing and leaves no undo step.
         Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
+        # Rule B (#709), the same one ``cell_line_write`` enforces: the coach
+        # never overwrites a line the athlete entered. This endpoint takes any
+        # live cell by pk, so without the check a pk-addressed patch was a way
+        # around it. Judged against the row as it is NOW, under the lock.
+        cell.refresh_from_db()
+        if "text" in updates and cell.athlete_authored:
+            if updates["text"] == cell.text:
+                # Unchanged text on a performance line: nothing to write.
+                del updates["text"]
+            elif cell.is_athlete_entered and cell.text.strip():
+                first_name = (
+                    (link_athlete_name(plan.relationship) or "").split() or [""]
+                )[0] or "The athlete"
+                return JsonResponse(
+                    {
+                        "ok": False,
+                        "code": "athlete_line",
+                        "error": (
+                            f"{first_name} logged this line — your text wasn’t "
+                            "saved over it."
+                        ),
+                        "athlete_first_name": first_name,
+                    },
+                    status=422,
+                )
+            elif cell.is_coach_set:
+                # A coach set line's text is only ever changed through
+                # `cell_line_write`: this endpoint would bypass the writer and
+                # leave the old set counting.
+                return JsonResponse(
+                    {
+                        "ok": False,
+                        "code": "coach_set",
+                        "error": "Edit this line in the grid.",
+                    },
+                    status=422,
+                )
+        if "text" in updates and updates["text"] != cell.text:
+            # The text changes, so the new-line token (if any) no longer names
+            # the write that is latest on this cell.
+            updates["client_token"] = ""
         slot = cell.exercise_slot
         slot.refresh_from_db()
         name_edit = new_name if new_name is not None and new_name != slot.name else None
@@ -5773,12 +5974,12 @@ def prescription_skip(request, plan_id, pk):
 @login_required
 @require_POST
 def cell_line_write(request, plan_id, slot_id):
-    """Upsert one freeform (week × line) cell of an exercise row (Phase 2a).
+    """Upsert one freeform (week × line) cell of an exercise row (Phase 2a, #709).
 
     The sub-line write path (plan §2.3/§2.6): a row's per-week stack is
     sparse, so the client addresses a cell by ``(exercise_slot, week, line)``
     rather than pk — the cell may not exist yet. Body
-    ``{"week_id": <int>, "line": <int>, "text": "<str>"}``; the row is
+    ``{"week_id", "line", "text", "intent"?, "kind"?}``; the row is
     ``get_or_create``d and its text set (blank text clears the sub-line in
     place — spreadsheet semantics, never a delete). ``line`` 0 is allowed
     (it's just the prescription line, pre-created by every constructive
@@ -5786,6 +5987,38 @@ def cell_line_write(request, plan_id, slot_id):
 
     Replaces the retired one-week ``prescription_swap`` endpoint: a
     substitution is typed into a sub-line now, not stored as a field.
+
+    A sub-line is one of three kinds (see ``Prescription.athlete_authored``): a
+    cue, an athlete set line, or a coach set line — a set the coach logged for
+    the athlete. This endpoint never overwrites an athlete's line:
+
+    * ``intent: "new"`` says the client believed the line empty. If it holds
+      different text by now (the athlete typed there first), the write lands on
+      the next free line instead and the response says ``relocated_from``.
+      That relocation exists so text is never lost; the optional ``token``
+      (1-64 chars, meaningful only with ``intent: "new"``) makes it safe to
+      REPLAY. A repeat of a write that already landed — its response was lost
+      — is found by its token, answered with the cell it made, and writes
+      nothing, instead of relocating again onto a second line. Two different
+      tokens with identical text are two sets.
+    * Otherwise a CHANGED write to an athlete-entered line is a 422
+      ``code: "athlete_line"`` and nothing is written (the mirror of #524's
+      refusal of an athlete overwriting a coach cue); an unchanged one is a 200
+      no-op with no ``PlanAction``.
+
+    ``kind`` is the designer's cue/set chip. ``"set"`` makes the line a coach
+    set line (422 ``not_a_set`` if the text doesn't read as a set, ``no_athlete``
+    on a template or an unstarted-session-less row, ``skipped`` on a skipped
+    exercise); ``"cue"`` makes it a cue. Without ``kind`` an edit keeps its
+    kind, and a NEW line becomes a coach set line only when the athlete has
+    already started the session and the text unambiguously reads as one set
+    (``parsing.reads_as_one_set``) — otherwise it stays a cue, so ``3x5``
+    never turns into a logged set by accident.
+
+    A coach set line derives its ``LoggedSet`` through ``_upsert_parsed_set``,
+    the same writer the athlete's blur uses, so it counts everywhere the
+    athlete's own sets count. It never changes a log's status, and never fires
+    the athlete's ``set_logged`` event (the coach, not the athlete, entered it).
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -5830,81 +6063,304 @@ def cell_line_write(request, plan_id, slot_id):
         )
     if len(text) > PATCHABLE_FIELDS["text"]:
         return JsonResponse({"ok": False, "error": "text is too long."}, status=400)
+    intent = payload.get("intent")
+    if intent is not None and intent not in ("new", "edit"):
+        return JsonResponse(
+            {"ok": False, "error": 'intent must be "new" or "edit".'}, status=400
+        )
+    kind = payload.get("kind")
+    if kind is not None and kind not in ("set", "cue"):
+        return JsonResponse(
+            {"ok": False, "error": 'kind must be "set" or "cue".'}, status=400
+        )
+    if kind is not None and line == 0:
+        return JsonResponse(
+            {"ok": False, "error": "kind only applies to a sub-line."}, status=400
+        )
+    token = payload.get("token")
+    if token is not None and (not isinstance(token, str) or not 1 <= len(token) <= 64):
+        return JsonResponse(
+            {"ok": False, "error": "token must be a string of 1 to 64 characters."},
+            status=400,
+        )
+    # Only a new-line write is replayable (see the replay check below).
+    # A blank write is never a new line: nothing to place, so it never relocates.
+    new_intent = intent == "new" and bool(text.strip())
+    write_token = token if (new_intent and token) else ""
+
+    athlete = plan.athlete  # None on a template
+    exercise_label = slot.name or "exercise"
+
+    def refuse(code, error, **extra):
+        # 422 bodies always carry the whole cell as the server sees it, so the
+        # designer can show what is really there instead of what it typed.
+        return JsonResponse(
+            {
+                "ok": False,
+                "code": code,
+                "error": error,
+                "grid_cell": serializers.grid_cell_for(slot, week),
+                **extra,
+            },
+            status=422,
+        )
 
     with transaction.atomic():
-        # LOCK ORDER (#562) — the Plan row before any Prescription of it, per
-        # ``docs/meso/decisions.md`` ("Row-lock order"). `record_plan_action`
-        # below takes this same lock (a no-op re-acquire once it's held), so
-        # this line exists purely to move the acquisition AHEAD of any
-        # Prescription write under it. Before #703 a reclaim UPDATEd the cell
-        # (`existing.save(...)`) ahead of `record_plan_action`, and taking that
-        # before the Plan row made this endpoint the one path that ran
-        # Prescription→Plan. Harmless while `athlete_cell_write` also
-        # reached a cell before the Plan row; a deadlock the moment that path
-        # was corrected to take Plan first (#562), because the cell in question
-        # is precisely the athlete-authored one an athlete may be blurring.
-        #
-        # It changes no WRITE order: `record_plan_action` still snapshots
-        # before the cell write below.
+        # LOCK ORDER (#562) — the Plan row, then the Session row, then the
+        # Prescriptions, per ``docs/meso/decisions.md`` ("Row-lock order") and
+        # the same order ``athlete_cell_write`` takes. `record_plan_action`
+        # below takes the Plan lock too (a no-op re-acquire once it's held), so
+        # this line exists to move the acquisition AHEAD of any Prescription
+        # read or write under it.
         Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
+        # The Session lock serializes this write against the athlete's blur on
+        # the same line: both read the line's text, decide what it means, and
+        # write — without it the coach could judge a line blank that the athlete
+        # filled a moment ago. Only a plan with an athlete has sessions that
+        # take logged sets, and a row with no live session has nothing to lock.
+        session = None
+        if athlete is not None:
+            session = (
+                Session.objects.select_for_update(of=("self",))
+                .filter(
+                    week=week,
+                    session_slot=slot.session_slot,
+                    deleted_at__isnull=True,
+                )
+                .first()
+            )
+        line_zero = Prescription.objects.filter(
+            exercise_slot=slot, week=week, line=0
+        ).first()
         existing = Prescription.objects.filter(
             exercise_slot=slot, week=week, line=line
         ).first()
-        # Authorship-preserving reclaim (#703): a coach edit reclaims an
-        # athlete-authored cell into coach history (the flag flips on the write
-        # below), but the cell is NOT flipped before the snapshot. Instead its
-        # pk is handed to `record_plan_action`, which captures it as an
-        # athlete row (`"athlete_authored": True`). A later coach undo then
-        # hands the line BACK to the athlete — text and authorship — rather
-        # than restoring it as a coach cue the athlete can no longer correct
-        # (the earlier design flipped the flag first, so the snapshot held the
-        # athlete's words as a coach cell). Redo takes the
-        # line again only if the athlete hasn't touched it since (see
-        # `history._cell_disposition`).
+        relocated_from = None
+
+        # The token is a handle for the line a new-line write created (#709);
+        # see `athlete_cell_write`. A match means the first post may have
+        # relocated and committed with its response lost; relocating AGAIN
+        # would put the same text on two lines and count its set twice.
+        #   (a) same text: a replay — nothing is written, no PlanAction, the
+        #       writer doesn't run;
+        #   (b) new text and the line is still the coach's own: an EDIT of that
+        #       line, with no relocation;
+        #   (c) the athlete has taken the line since: the normal new-line flow.
+        edit_prior = False
+        if write_token:
+            prior = Prescription.objects.filter(
+                exercise_slot=slot, week=week, client_token=write_token
+            ).first()
+            if prior is not None and prior.text == text:
+                body = {
+                    "ok": True,
+                    "cell": _coach_cell_payload(prior, slot, week),
+                    "grid_cell": serializers.grid_cell_for(slot, week),
+                    "history": serialize_plan_history(plan),
+                }
+                if prior.line != line:
+                    body["relocated_from"] = line
+                return JsonResponse(body)
+            if prior is not None and not prior.is_athlete_entered:
+                edit_prior = True
+                if prior.line != line:
+                    relocated_from = line
+                line, existing = prior.line, prior
+
+        if (
+            not edit_prior
+            and existing is not None
+            and existing.text.strip()
+            and existing.text != text
+        ):
+            if new_intent:
+                # The client believed this line empty and it is not (the
+                # athlete, or another tab, got there first). Never overwrite:
+                # land on the next free line.
+                later = {
+                    c.line: c.text
+                    for c in Prescription.objects.filter(
+                        exercise_slot=slot, week=week, line__gt=line
+                    )
+                }
+                free = next(
+                    (
+                        n
+                        for n in range(line + 1, MAX_CELL_LINE + 1)
+                        if not later.get(n, "").strip()
+                    ),
+                    None,
+                )
+                if free is None:
+                    return refuse(
+                        "no_free_line",
+                        "There is no free line left on this exercise.",
+                    )
+                relocated_from, line = line, free
+                existing = Prescription.objects.filter(
+                    exercise_slot=slot, week=week, line=line
+                ).first()
+            elif existing.is_athlete_entered:
+                first_name = (
+                    (link_athlete_name(plan.relationship) or "").split() or [""]
+                )[0] or "The athlete"
+                return refuse(
+                    "athlete_line",
+                    f"{first_name} logged this line — your text wasn’t saved over it.",
+                    athlete_first_name=first_name,
+                )
+        elif (
+            existing is not None
+            and existing.is_athlete_entered
+            and existing.text.strip()
+        ):
+            # Unchanged text on the athlete's own line: the designer re-posts a
+            # cell it merely focused. Nothing to record, nothing to write.
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "cell": _coach_cell_payload(existing, slot, week),
+                    "grid_cell": serializers.grid_cell_for(slot, week),
+                    "history": serialize_plan_history(plan),
+                }
+            )
+
+        was_coach_set = existing is not None and existing.is_coach_set
+
+        # What kind of line this write leaves behind.
+        if line == 0:
+            new_is_set = False
+        elif kind == "set":
+            if not parsing.performed_set_values(text):
+                return refuse(
+                    "not_a_set",
+                    "That line doesn’t read as a set (e.g. 225 x 5), so it stays a cue.",
+                )
+            if athlete is None or session is None:
+                return refuse("no_athlete", "Only a client’s program can log sets.")
+            if line_zero is not None and line_zero.skipped:
+                return refuse(
+                    "skipped",
+                    "This exercise is skipped this week, so it can’t take a set.",
+                )
+            new_is_set = True
+        elif kind == "cue" or not text.strip():
+            new_is_set = False  # a blank line is free
+        elif (
+            existing is not None
+            and existing.text.strip()
+            and not existing.is_athlete_entered
+        ):
+            new_is_set = was_coach_set  # an edit keeps its kind
+        else:
+            # A new line: absent, blank, or a blank athlete line. A coach's text
+            # is a logged set only once the athlete has started the session and
+            # it unambiguously reads as ONE set; everything else is a cue.
+            started = (
+                athlete is not None
+                and session is not None
+                and newest_session_logs(session, athlete).exists()
+            )
+            new_is_set = bool(
+                started
+                and not (line_zero is not None and line_zero.skipped)
+                and parsing.reads_as_one_set(text)
+            )
+
+        # A blank athlete line being taken over is captured as the athlete's row
+        # so a later undo hands it back (#703). Text on an athlete line is never
+        # overwritten above, so only a blank one can reach here.
         taken_from_athlete = (
-            [existing.pk] if existing is not None and existing.athlete_authored else ()
+            [existing.pk]
+            if existing is not None and existing.is_athlete_entered
+            else ()
         )
-        record_plan_action(
-            plan,
-            f"Edited {slot.name or 'exercise'}",
-            athlete_cell_pks=taken_from_athlete,
-        )
+        if new_is_set and not was_coach_set:
+            label = f"Logged a set on {exercise_label}"
+        elif kind == "cue" and was_coach_set:
+            label = f"Made a cue on {exercise_label}"
+        else:
+            label = f"Edited {exercise_label}"
+        record_plan_action(plan, label, athlete_cell_pks=taken_from_athlete)
+        previous_text = existing.text if existing is not None else ""
         cell, _created = Prescription.objects.get_or_create(
             exercise_slot=slot, week=week, line=line
         )
         cell.text = text
-        # A coach edit reclaims an athlete-authored cell (Phase 4a) back into
-        # coach history — from here on it's snapshotted and undoable again.
-        cell.athlete_authored = False
-        cell.save(update_fields=["text", "athlete_authored"])
-        # Deliberately touches NO LoggedSet. A parse-at-commit set (5a) derived
-        # from this cell is the athlete's performance, and this edit is
-        # undoable — `history.py` keeps SessionLog/LoggedSet/AthleteOneRm out
-        # of the plan snapshot precisely so "undo must never touch ... athlete
-        # data". Deleting it here (an earlier attempt) lost the record with no
-        # way back; detaching it (a later one) made it look like a structured
-        # row, so the old structured logger's own delete then wiped it on the
-        # next save (that logger is retired; the reasoning stands). The set
-        # simply stays as it is: overwriting the text above is enough,
-        # because the no-double-display suppression (`parsed_set_is_hidden`)
-        # asks whether the source line still SHOWS this performance — it
-        # re-parses the cell text, it does NOT read `athlete_authored` — so once
-        # the coach's text no longer matches the set, it starts rendering again
-        # on its own.
+        cell.athlete_authored = new_is_set
+        cell.entered_by_coach = new_is_set
+        # Cleared only when the text actually changes (an unchanged repair
+        # re-post must keep the handle a replay needs).
+        if write_token:
+            cell.client_token = write_token
+            # A token found on a line that changed hands (case c) stays with
+            # this write, never with both lines.
+            if prior is not None and prior.pk != cell.pk:
+                Prescription.objects.filter(pk=prior.pk).update(client_token="")
+        elif text != previous_text:
+            cell.client_token = ""
+        cell.save(
+            update_fields=[
+                "text",
+                "athlete_authored",
+                "entered_by_coach",
+                "client_token",
+            ]
+        )
+        # A coach set line (or one that just stopped being one) derives its
+        # LoggedSet through the SAME writer the athlete's blur uses — this is
+        # the one place the "what set does this text make" rule lives. For a
+        # plain cue edit nothing derives and nothing is touched: a cue never
+        # owned a set, and an athlete-entered line is never reached here.
+        if athlete is not None and session is not None and line >= 1:
+            if was_coach_set or new_is_set:
+                if line_zero is None:
+                    line_zero, _ = Prescription.objects.get_or_create(
+                        exercise_slot=slot, week=week, line=0
+                    )
+                sets_before = _line_sets(session, athlete, cell)
+                _upsert_parsed_set(
+                    session,
+                    athlete,
+                    line_zero,
+                    cell,
+                    previous_text=previous_text,
+                    unit=plan.unit,
+                    skipped_clears=True,
+                )
+                # Someone is working on this log, so settle (5b) shouldn't
+                # finish it from under them. The bump can only delay settle,
+                # never produce a wrong status — this path never sets one.
+                if not connection.needs_rollback and (
+                    text != previous_text
+                    or _line_sets(session, athlete, cell) != sets_before
+                ):
+                    SessionLog.objects.filter(session=session, athlete=athlete).update(
+                        last_activity_at=timezone.now()
+                    )
         _touch_plan(plan)
-    return JsonResponse(
-        {
-            "ok": True,
-            "cell": {
-                "id": cell.pk,
-                "exercise_slot_id": slot.pk,
-                "week_id": week.pk,
-                "line": cell.line,
-                "text": cell.text,
-            },
-            "history": serialize_plan_history(plan),
-        }
-    )
+    body = {
+        "ok": True,
+        "cell": _coach_cell_payload(cell, slot, week),
+        "grid_cell": serializers.grid_cell_for(slot, week),
+        "history": serialize_plan_history(plan),
+    }
+    if relocated_from is not None:
+        body["relocated_from"] = relocated_from
+    return JsonResponse(body)
+
+
+def _coach_cell_payload(cell, slot, week):
+    """The ``cell`` object of a coach sub-line write response."""
+    return {
+        "id": cell.pk,
+        "exercise_slot_id": slot.pk,
+        "week_id": week.pk,
+        "line": cell.line,
+        "text": cell.text,
+        "athlete_authored": cell.athlete_authored,
+        "entered_by_coach": cell.entered_by_coach,
+    }
 
 
 @login_required
@@ -6026,12 +6482,15 @@ def prescription_fill(request, plan_id, pk):
                     continue
                 if target.text != text:
                     target.text = text
-                    target.save(update_fields=["text"])
+                    target.client_token = ""
+                    target.save(update_fields=["text", "client_token"])
             Prescription.objects.filter(
                 exercise_slot_id=cell.exercise_slot_id,
                 week=week,
                 line__gt=max_source_line,
-            ).exclude(athlete_authored=True).exclude(text="").update(text="")
+            ).exclude(athlete_authored=True).exclude(text="").update(
+                text="", client_token=""
+            )
         _touch_plan(plan)
     return JsonResponse(
         {

@@ -36,6 +36,7 @@ from store_project.meso.models import Prescription
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
 from store_project.meso.tests._helpers import sub_line
+from store_project.meso.tests.test_parse_at_commit import legacy_reclaim
 from store_project.meso.views import MAX_CELL_LINE
 from store_project.users.factories import UserFactory
 
@@ -429,21 +430,30 @@ class TestSubLineUndoIsolation:
         s.squat.refresh_from_db()
         assert s.squat.text == "3 x 6, RPE 7, 70"  # line-0 reverted by the undo
 
-    def test_coach_reclaims_cell_via_cell_line_write(self, client):
+    def test_coach_cannot_overwrite_an_athlete_line_via_cell_line_write(self, client):
+        # #709: a coach's CHANGED write to the athlete's non-empty line is
+        # refused (it used to reclaim the line into coach history). Nothing is
+        # written and no undo step is recorded.
         s = seed()
-        # The athlete authors line-1...
         client.force_login(s.athlete)
         post(client, s.session, {"exercise_id": s.squat.pk, "line": 1, "text": "mine"})
         assert sub_cells(s.squat).get().athlete_authored is True
-        # ...then the coach edits the same cell — reclaiming it into coach history.
         client.force_login(s.coach)
-        coach_cell_write(
-            client, s.plan, s.squat.exercise_slot_id, s.session.week_id, 1, "coach"
+        resp = client.post(
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot_id},
+            ),
+            data=json.dumps({"week_id": s.session.week_id, "line": 1, "text": "coach"}),
+            content_type="application/json",
         )
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "athlete_line"
 
         cell = sub_cells(s.squat).get()
-        assert cell.text == "coach"
-        assert cell.athlete_authored is False
+        assert cell.text == "mine"
+        assert cell.athlete_authored is True
+        assert PlanAction.objects.filter(plan=s.plan).count() == 0
 
     def test_coach_undo_after_reclaim_restores_athlete_text(self, client):
         # When a coach edits an EXISTING athlete-authored cell, the athlete's
@@ -455,10 +465,10 @@ class TestSubLineUndoIsolation:
         post(client, s.session, {"exercise_id": s.squat.pk, "line": 1, "text": "mine"})
         assert sub_cells(s.squat).get().athlete_authored is True
         # Coach edits the same cell to "coach" — reclaims it into coach history.
+        # (The endpoint no longer does this since #709; data and snapshots
+        # written before it still look like this, so build it by ORM.)
         client.force_login(s.coach)
-        coach_cell_write(
-            client, s.plan, s.squat.exercise_slot_id, s.session.week_id, 1, "coach"
-        )
+        legacy_reclaim(s, text="coach")
         cell_pk = sub_cells(s.squat).get().pk
 
         # Coach undo restores the athlete's original text (as the athlete's
@@ -488,14 +498,26 @@ class TestSubLinePresenter:
         # "RPE 8" isn't a set attempt (5a §8) — warn is False. `warn_reason`
         # (#572) rides alongside it, "" when there is no warning.
         assert row["sub_lines"] == [
-            {"line": 1, "text": "RPE 8", "warn": False, "warn_reason": ""}
+            {
+                "line": 1,
+                "text": "RPE 8",
+                "warn": False,
+                "warn_reason": "",
+                "entered_by_coach": False,
+            }
         ]
 
         payload = presenters.athlete_log_payload(ctx)
         assert payload["cell_url"] == cell_url(s.session)
         pr = next(e for e in payload["exercises"] if e["id"] == s.squat.pk)
         assert pr["sub_lines"] == [
-            {"line": 1, "text": "RPE 8", "warn": False, "warn_reason": ""}
+            {
+                "line": 1,
+                "text": "RPE 8",
+                "warn": False,
+                "warn_reason": "",
+                "entered_by_coach": False,
+            }
         ]
 
     def test_athlete_session_sub_lines_warn_only_on_unresolved_set(self, client):
@@ -579,7 +601,13 @@ class TestSubLinePresenter:
         # The parsed set shows once, as sub_lines text... (`warn_reason` is
         # #572's companion key; "" whenever `warn` is False.)
         assert row["sub_lines"] == [
-            {"line": 1, "text": "225 x 5", "warn": False, "warn_reason": ""}
+            {
+                "line": 1,
+                "text": "225 x 5",
+                "warn": False,
+                "warn_reason": "",
+                "entered_by_coach": False,
+            }
         ]
         # ...and never a second time as a read-only history row.
         assert row["logged_readonly"] == []

@@ -2218,14 +2218,45 @@ class Prescription(models.Model):
     # em-dash), distinct from the row not existing at all. Applies to the
     # exercise × week, so it is only ever meaningful on line 0.
     skipped = models.BooleanField(_("Skipped"), default=False)
-    # The athlete authored this cell's current text via their own tracking
-    # surface (Phase 4a). It keeps the cell OUT of the coach's undo/redo
-    # snapshot machinery: an athlete's freeform sub-line write records no
-    # ``PlanAction``, and a coach undo/redo must never overwrite or hard-delete
-    # it (``history.py``). A coach edit to the same cell reclaims it (flips this
-    # back to ``False``), folding it into coach history again. Existing cells
-    # are coach-authored, so the default is ``False`` and no backfill is needed.
+    # This line (line >= 1) is a PERFORMANCE record, not a coach cue: the text
+    # is a set somebody logged (Phase 4a, #709). Every reader that treats
+    # athlete data as athlete data (the delivery diff, results targets, fill,
+    # the athlete page's ``sub_lines``) keys on this flag, so a coach-entered
+    # set line is performance to all of them too. It does NOT say who typed it
+    # — ``entered_by_coach`` does. A line is one of three kinds:
+    #
+    #   cue                 athlete_authored=False  (the coach's plan or note)
+    #   athlete set line    athlete_authored=True,  entered_by_coach=False
+    #   coach set line      athlete_authored=True,  entered_by_coach=True
+    #
+    # An athlete-entered line stays OUT of the coach's undo/redo snapshot
+    # machinery: an athlete's freeform sub-line write records no ``PlanAction``,
+    # and a coach undo/redo must never overwrite or hard-delete it
+    # (``history.py``). Existing cells are coach cues, so the default is
+    # ``False`` and no backfill is needed.
     athlete_authored = models.BooleanField(_("Athlete authored"), default=False)
+    # Who typed a performance line: the coach, logging the set for the athlete
+    # (#709). Only meaningful together with ``athlete_authored=True`` — a row
+    # with this set and ``athlete_authored=False`` (an old container in a
+    # rolling deploy can write one) is a plain cue. A coach set line is the
+    # coach's own entry, so undo/redo treats it like any coach edit until the
+    # athlete edits it; the athlete's edit flips this back to ``False`` and the
+    # line becomes theirs. ``db_default`` so an old container inserting a
+    # Prescription without the column doesn't fail.
+    entered_by_coach = models.BooleanField(
+        _("Entered by coach"), default=False, db_default=False
+    )
+    # The client token of the new-line write that last saved this cell (#709),
+    # or "". A new-line write that collides is relocated to the next free line;
+    # if its response is lost the client replays it, and without this the
+    # replay would relocate again and land the same text on a second line.
+    # Both write endpoints look the token up first and, on a match, answer with
+    # this cell and write nothing. Every save sets or clears it, so it names a
+    # cell only while that write is the latest one there. Never matched on
+    # text: three identical sets are normal.
+    client_token = models.CharField(
+        _("Client token"), max_length=64, blank=True, default="", db_default=""
+    )
 
     class Meta:
         ordering = ["exercise_slot__order", "line"]
@@ -2240,6 +2271,16 @@ class Prescription(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def is_athlete_entered(self):
+        """A performance line the athlete typed (the coach may not overwrite it)."""
+        return self.athlete_authored and not self.entered_by_coach
+
+    @property
+    def is_coach_set(self):
+        """A performance line the coach logged on the athlete's behalf (#709)."""
+        return self.athlete_authored and self.entered_by_coach
 
     def parsed(self):
         """Best-effort derived structure for this cell's text (never raises)."""

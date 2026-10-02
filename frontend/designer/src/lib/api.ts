@@ -27,6 +27,12 @@ export interface CellLine {
   line: number;
   text: string;
   athlete_authored?: boolean;
+  /** #709: with `athlete_authored`, marks a set line the COACH entered (a
+   * coach set line). `athlete_authored && !entered_by_coach` = the athlete's
+   * own line. Meaningless on a cue. */
+  entered_by_coach?: boolean;
+  /** #709: the line's text reads as a set (the "log as set" chip's gate). */
+  loggable?: boolean;
 }
 
 /** One exercise row (a Prescription) as the grid renders/edits it.
@@ -153,6 +159,9 @@ export interface GridCell {
   lines: CellLine[];
   /** Roll-up of the athlete-authored lines (null when there are none). */
   athlete_summary?: { sets: number; load: string; unit: string; rpe: string; missed?: number } | null;
+  /** #709: this cell's live session already has a SessionLog for the
+   * plan's athlete. */
+  session_started?: boolean;
 }
 
 export interface GridRow {
@@ -238,4 +247,32 @@ export async function apiPost<T = unknown>(
   });
   if (!res.ok) throw new Error("Request failed: " + res.status);
   return res.json();
+}
+
+/**
+ * Like `apiPost`, but a non-ok HTTP status RESOLVES (`{ok:false, status,
+ * data}`) so the caller can read a structured error body (e.g. a 422
+ * `{code, error, grid_cell}`). Only a network failure rejects. An
+ * unparseable body resolves with `data: null`.
+ */
+export async function apiPostResult(
+  url: string,
+  body: unknown,
+  csrf: string,
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRFToken": csrf,
+    },
+    body: body == null ? null : JSON.stringify(body),
+  });
+  let data: unknown = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  return { ok: res.ok, status: res.status, data };
 }

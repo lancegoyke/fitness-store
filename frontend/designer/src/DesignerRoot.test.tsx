@@ -471,9 +471,56 @@ describe("Phase 2a: sub-line + row-column wiring", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/row/9/cell/", expect.anything()));
     const call = fetchMock.mock.calls.find((c) => c[0] === "/meso/api/plan/7/row/9/cell/")!;
-    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({ week_id: 1, line: 1, text: "RPE 8" });
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toMatchObject({ week_id: 1, line: 1, text: "RPE 8", intent: "new" });
     // The optimistic repaint promotes the ghost's text to a real sub-line input.
     expect(screen.getByTestId("cell-line-100-1")).toHaveValue("RPE 8");
+  });
+
+  it("shows the save-error banner when a cell edit fails to save, and Dismiss hides it (#709)", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = mountIsland();
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+
+    expect(screen.queryByTestId("designer-save-error")).not.toBeInTheDocument();
+    await user.type(screen.getByTestId("row-tempo-9"), "31X1");
+    await user.tab();
+
+    const banner = await screen.findByTestId("designer-save-error");
+    expect(banner).toHaveAttribute("role", "alert");
+    expect(banner).toHaveTextContent(
+      "Couldn't save your last change — it's still on screen but not saved. Check your connection and try again.",
+    );
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("designer-save-error")).not.toBeInTheDocument();
+  });
+
+  it("a refused line write (422 athlete_line) lands as an alert quoting the refused text end-to-end (#709)", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mountIsland();
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        ok: false,
+        code: "athlete_line",
+        error: "logged",
+        grid_cell: {
+          prescription_id: 100,
+          text: "x",
+          skipped: false,
+          lines: [{ id: 5, line: 1, text: "100 x 5", athlete_authored: true }],
+          athlete_summary: null,
+          session_started: true,
+        },
+      }),
+    });
+    await user.type(screen.getByTestId("cell-line-new-100"), "my cue");
+    await user.tab();
+
+    const alert = await screen.findByTestId("cell-refusal-100");
+    expect(alert).toHaveTextContent("just logged on this line — your text is below it.");
+    expect(screen.getByTestId("cell-refusal-text-100-0")).toHaveTextContent("my cue");
   });
 
   it("committing a Tempo edit POSTs the partial patch to row/<slot>/", async () => {

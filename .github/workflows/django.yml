@@ -230,6 +230,9 @@ jobs:
       # #708: test_migration_0063_lift_stamp_backfill runs 0062/0063 for real
       # (the subquery UPDATE must work on Postgres), and test_lift_identity_708
       # pins the stamped-lift reads, settle and the re-blur carry-over there too.
+      # test_coach_athlete_collision_postgres is the #709 new-line race: a coach and an
+      # athlete both adding line 1 queue on the Plan/Session locks, so neither text is
+      # overwritten. test_coach_logs_709 drives the same lock path in `cell_line_write`.
       # Add a new Postgres-only file here in the same commit that creates it.
       - name: Run the PostgreSQL-only tests
         run: |
@@ -255,4 +258,6 @@ jobs:
             app/store_project/meso/tests/test_performance_history.py \
             app/store_project/meso/tests/test_one_sessionlog_postgres.py \
             app/store_project/meso/tests/test_migration_0063_lift_stamp_backfill.py \
-            app/store_project/meso/tests/test_lift_identity_708.py
+            app/store_project/meso/tests/test_lift_identity_708.py \
+            app/store_project/meso/tests/test_coach_athlete_collision_postgres.py \
+            app/store_project/meso/tests/test_coach_logs_709.py
