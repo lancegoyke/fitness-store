@@ -339,7 +339,11 @@ def test_dragging_a_row_while_scrolled_to_the_end(page, live_server, login, bloc
         page,
         "row order to persist",
     )
-    assert _rows(page, day1)[:2] == [second_id, first_id]
+    _wait_for(
+        lambda: _rows(page, day1)[:2] == [second_id, first_id],
+        page,
+        "row order in the DOM",
+    )
     _assert_scroll_kept(page, before_left)
     _assert_aligned(page, "after row drag")
 
@@ -370,10 +374,15 @@ def test_dragging_a_day_while_scrolled_to_the_end(page, live_server, login, bloc
         page,
         "day order to persist",
     )
-    ids = page.locator('[data-testid^="meso-day-table-"]').evaluate_all(
-        "(els) => els.map((e) => e.getAttribute('data-testid'))"
-    )
-    assert ids[:2] == [f"meso-day-table-{second.pk}", f"meso-day-table-{first.pk}"]
+
+    def _day_ids():
+        return page.locator('[data-testid^="meso-day-table-"]').evaluate_all(
+            "(els) => els.map((e) => e.getAttribute('data-testid'))"
+        )
+
+    # The DB lands before the client's refetch re-renders the order.
+    want = [f"meso-day-table-{second.pk}", f"meso-day-table-{first.pk}"]
+    _wait_for(lambda: _day_ids()[:2] == want, page, "day order in the DOM")
     _assert_scroll_kept(page, before_left)
     _assert_aligned(page, "after day drag")
 
