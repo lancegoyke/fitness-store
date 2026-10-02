@@ -76,7 +76,7 @@ function row(overrides: Partial<GridRow> = {}): GridRow {
   return {
     exercise_slot_id: 9,
     name: "Squat",
-    exercise_id: 55,
+    exercise_id: "55",
     order: 0,
     tags: [],
     tempo: "",

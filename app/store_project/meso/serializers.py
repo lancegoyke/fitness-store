@@ -19,6 +19,7 @@ import re
 from collections import Counter
 from collections import defaultdict
 
+from django.db.models import Count
 from django.db.models import Prefetch
 from django.urls import reverse
 
@@ -133,6 +134,47 @@ def _agent_reply_for_batch(batch):
         reverse("meso:review_batch", kwargs={"batch_id": batch.pk}) if changes else None
     )
     return message
+
+
+SUGGEST_MINE_CAP = 400
+
+
+def serialize_exercise_suggestions(user):
+    """Exercise-name suggestions for the designer's row-name combobox.
+
+    ``catalog`` is every ``exercises.Exercise`` by name; ``mine`` is the
+    distinct ``(name, exercise_id)`` pairs on the coach's own live rows (every
+    plan they can edit, templates included), most-used first, so a name they
+    already typed free-text is one keystroke away. One query each.
+    """
+    from store_project.exercises.models import Exercise
+
+    catalog = [
+        {"id": str(pk), "name": name}
+        for pk, name in Exercise.objects.order_by("name", "pk").values_list(
+            "pk", "name"
+        )
+    ]
+    rows = (
+        models.ExerciseSlot.objects.filter(
+            deleted_at__isnull=True,
+            session_slot__deleted_at__isnull=True,
+            session_slot__mesocycle__plan__in=models.Plan.objects.editable_by(user),
+        )
+        .exclude(name__regex=r"^\s*$")
+        .exclude(name="New exercise")
+        .values("name", "exercise_id")
+        .annotate(uses=Count("pk"))
+    )
+    ranked = sorted(rows, key=lambda r: (-r["uses"], r["name"].casefold(), r["name"]))
+    mine = [
+        {
+            "name": r["name"],
+            "exercise_id": str(r["exercise_id"]) if r["exercise_id"] else None,
+        }
+        for r in ranked[:SUGGEST_MINE_CAP]
+    ]
+    return {"catalog": catalog, "mine": mine}
 
 
 def serialize_chat_thread(plan):

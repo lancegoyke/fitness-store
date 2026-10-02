@@ -53,7 +53,8 @@
 // sub-line text, written like any other line). skip/unskip, fill-across-
 // weeks, add-this-week and move-to-day all stay. (The per-cell group
 // adjust badge went with the group subsystem itself.)
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ClipboardEvent, FocusEvent, KeyboardEvent } from "react";
 import {
   DndContext,
@@ -72,6 +73,8 @@ import type { GridCellPatch, GridRowPatch, Id } from "../hooks/useGrid";
 import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { UseTableNavResult } from "../hooks/useTableNav";
 import type { TableDragData, TableDragEndEvent } from "../hooks/useTableReorder";
+import { EMPTY_SUGGESTIONS, mergeMine, suggestExercises } from "../lib/exerciseSuggest";
+import type { ExerciseSuggestions, Suggestion } from "../lib/exerciseSuggest";
 import { TABLE_DAY_DRAG_PREFIX, tableDayDragId, tableRowDragId, tableRowDragPrefix } from "../lib/tableDragIds";
 
 // Fixed column widths (px), the single source for every day's <table> so the
@@ -94,7 +97,7 @@ export interface MesoTableProps {
   // Phase 2a (D2): the per-exercise Tempo/Notes/Rest row columns
   // (useGrid.patchRowColumns). Fire-and-forget, like onPatchCell.
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
-  onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onRenameExercise(exerciseSlotId: Id, name: string, exerciseId?: string | null): void;
   onRenameDay(sessionSlotId: Id, name: string): void;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
@@ -112,6 +115,10 @@ export interface MesoTableProps {
   // MesoTable.test.tsx's existing baseProps() (which never sets it) keeps
   // passing untouched.
   onDragEnd?(event: TableDragEndEvent): void;
+  // #608: the coach's own exercise names + the shared catalog, for the
+  // row-name combobox (DesignerRoot reads `#meso-exercise-suggest`). Optional
+  // so existing callers/tests keep working with no suggestions.
+  exerciseSuggestions?: ExerciseSuggestions;
 }
 
 /** The single arm/confirm slot — mirrors usePlanData's PendingDelete
@@ -610,7 +617,7 @@ function RowColumnInput({ row, field, label, tableNav, onPatchRowColumns }: RowC
 interface RowNameEditorProps {
   row: GridRow;
   tableNav: UseTableNavResult;
-  onRename(exerciseSlotId: Id, name: string): void;
+  onRename(exerciseSlotId: Id, name: string, exerciseId?: string | null): void;
 }
 
 // The server names a freshly added exercise "New exercise" (views.py). The
@@ -621,14 +628,53 @@ interface RowNameEditorProps {
 const DEFAULT_EXERCISE_NAME = "New exercise";
 const displayName = (name: string) => (name === DEFAULT_EXERCISE_NAME ? "" : name);
 
+// #608: the suggestion source, provided once by MesoTable (hydrated lists
+// merged with the grid's own row names) and read by every RowNameEditor — a
+// context rather than a prop so it needn't thread through TableDayBlock/
+// TableRow, which never use it.
+const ExerciseSuggestContext = createContext<ExerciseSuggestions>(EMPTY_SUGGESTIONS);
+
 function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
   const [value, setValue] = useState(displayName(row.name));
+  // Combobox state (#608). `open` flips on only when a KEYSTROKE edits the
+  // value (onChange), never on mere focus; `active` is the highlighted
+  // option (-1 = none: free text always wins, nothing auto-replaces).
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const dirtyRef = useRef(false);
+  const listId = useId();
+  const source = useContext(ExerciseSuggestContext);
+  const suggestions = open ? suggestExercises(value, source) : [];
+  const listVisible = suggestions.length > 0;
+  const optionId = (i: number) => `${listId}-opt-${i}`;
 
   useEffect(() => {
     setValue(displayName(row.name));
     dirtyRef.current = false;
   }, [row.name]);
+
+  // The popup is PORTALED to <body> with position: fixed from the input's
+  // rect. The input lives inside .meso-table-scroll (overflow-x: auto, which
+  // clips any absolutely positioned descendant on both axes) AND a sticky
+  // first column with its own stacking context — an absolute list would be
+  // clipped or sit under the week columns. Fixed + portal escapes both; the
+  // rect is re-measured on scroll/resize (capture, to catch the scroll
+  // container) so the list tracks the input.
+  useLayoutEffect(() => {
+    if (!listVisible) return;
+    const measure = () => {
+      if (inputRef.current) setRect(inputRef.current.getBoundingClientRect());
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [listVisible, value]);
 
   function commitIfDirty() {
     if (!dirtyRef.current) return;
@@ -643,6 +689,22 @@ function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
   function revert(newValue: string) {
     dirtyRef.current = false;
     setValue(newValue);
+    setOpen(false);
+    setActive(-1);
+  }
+
+  // A pick is ONE commit carrying name + link together (one POST, one undo
+  // step). Clearing dirtyRef stops the blur that follows from re-committing
+  // the same text as a plain (unlinking) typed rename; the Escape baseline
+  // moves to the picked name, as Enter's own commit does, so a later Escape
+  // can't roll the UI back past the write.
+  function pick(s: Suggestion) {
+    dirtyRef.current = false;
+    setValue(s.name);
+    setOpen(false);
+    setActive(-1);
+    tableNav.setRevertBaseline(row.exercise_slot_id, null, "name", s.name);
+    onRename(row.exercise_slot_id, s.name, s.exerciseId);
   }
 
   const navProps = tableNav.cellProps(row.exercise_slot_id, null, "name", {
@@ -650,21 +712,101 @@ function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
     onRevert: revert,
   });
 
+  // Compose, don't replace: the combobox consumes a key only when the list is
+  // visible (and, for Enter/Tab, only with a highlighted option); anything
+  // else falls through to the grid-nav handler exactly as before.
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    const plain = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+    if (listVisible && plain) {
+      const n = suggestions.length;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        setActive((a) => (event.key === "ArrowDown" ? (a + 1) % n : a <= 0 ? n - 1 : a - 1));
+        return;
+      }
+      if (event.key === "Escape") {
+        // Closes the list ONLY — the draft stays; the next Escape reverts.
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        setActive(-1);
+        return;
+      }
+      const picked = active >= 0 ? suggestions[active] : undefined;
+      if (picked && event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        pick(picked);
+        return;
+      }
+      if (picked && event.key === "Tab") {
+        // Accept, then let the normal Tab navigation move on.
+        pick(picked);
+      }
+    }
+    navProps.onKeyDown(event);
+  }
+
   return (
-    <input
-      className="meso-cell meso-ex-name-input"
-      data-testid={`row-name-${row.exercise_slot_id}`}
-      data-grid-cell={tableCellDomKey(row.exercise_slot_id, null, "name")}
-      aria-label={tableCellAriaLabel(row.name, null, "name")}
-      placeholder={DEFAULT_EXERCISE_NAME}
-      value={value}
-      onChange={(e) => {
-        dirtyRef.current = true;
-        setValue(e.target.value);
-      }}
-      onBlur={commitIfDirty}
-      {...navProps}
-    />
+    <>
+      <input
+        ref={inputRef}
+        className="meso-cell meso-ex-name-input"
+        data-testid={`row-name-${row.exercise_slot_id}`}
+        data-grid-cell={tableCellDomKey(row.exercise_slot_id, null, "name")}
+        aria-label={tableCellAriaLabel(row.name, null, "name")}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={listVisible}
+        aria-controls={listId}
+        aria-activedescendant={listVisible && active >= 0 ? optionId(active) : undefined}
+        placeholder={DEFAULT_EXERCISE_NAME}
+        value={value}
+        onChange={(e) => {
+          dirtyRef.current = true;
+          setValue(e.target.value);
+          setOpen(true);
+          setActive(-1);
+        }}
+        onBlur={() => {
+          setOpen(false);
+          setActive(-1);
+          commitIfDirty();
+        }}
+        {...navProps}
+        onKeyDown={onKeyDown}
+      />
+      {listVisible &&
+        rect &&
+        createPortal(
+          <ul
+            id={listId}
+            role="listbox"
+            aria-label="Exercise suggestions"
+            className="meso-suggest-list"
+            style={{ top: rect.bottom + 2, left: rect.left, minWidth: rect.width }}
+          >
+            {suggestions.map((s, i) => (
+              <li
+                key={`${s.source}:${s.name}`}
+                id={optionId(i)}
+                role="option"
+                aria-selected={i === active}
+                className={i === active ? "meso-suggest-option is-active" : "meso-suggest-option"}
+                // preventDefault keeps focus in the input: a blur here would
+                // commit the half-typed text as a plain rename before the pick.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pick(s)}
+              >
+                <span className="meso-suggest-name">{s.name}</span>
+                <span className="meso-suggest-hint">{s.source === "mine" ? "yours" : "catalog"}</span>
+              </li>
+            ))}
+          </ul>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -750,7 +892,7 @@ interface TableRowProps {
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
-  onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onRenameExercise(exerciseSlotId: Id, name: string, exerciseId?: string | null): void;
   onSkipCell(cellId: number, skipped: boolean): void;
   onFillAcrossWeeks(cellId: number): void;
 }
@@ -910,7 +1052,7 @@ interface TableDayBlockProps {
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
-  onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onRenameExercise(exerciseSlotId: Id, name: string, exerciseId?: string | null): void;
   onRenameDay(sessionSlotId: Id, name: string): void;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
@@ -1177,6 +1319,7 @@ export function MesoTable(props: MesoTableProps) {
     onFillAcrossWeeks,
     onAddExerciseThisWeek,
     onDragEnd,
+    exerciseSuggestions,
   } = props;
 
   const [armed, setArmed] = useState<Armed>(null);
@@ -1262,9 +1405,22 @@ export function MesoTable(props: MesoTableProps) {
     });
   }
 
+  // #608: hydrated names + whatever the grid already holds (so a name typed
+  // this session suggests before any reload). Hooks stay above the early return.
+  const suggestSource = useMemo<ExerciseSuggestions>(() => {
+    const hydrated = exerciseSuggestions ?? EMPTY_SUGGESTIONS;
+    const gridRows = (grid?.days ?? []).flatMap((d) =>
+      d.rows
+        .filter((r) => r.name !== DEFAULT_EXERCISE_NAME)
+        .map((r) => ({ name: r.name, exercise_id: r.exercise_id })),
+    );
+    return { catalog: hydrated.catalog, mine: mergeMine(hydrated.mine, gridRows) };
+  }, [exerciseSuggestions, grid]);
+
   if (!grid) return null;
 
   return (
+    <ExerciseSuggestContext.Provider value={suggestSource}>
     <div className="meso-table-view" data-testid="meso-table-view">
       <WeekManagerStrip
         weeks={grid.weeks}
@@ -1323,6 +1479,7 @@ export function MesoTable(props: MesoTableProps) {
         + Add day
       </button>
     </div>
+    </ExerciseSuggestContext.Provider>
   );
 }
 

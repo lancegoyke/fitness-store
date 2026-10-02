@@ -295,12 +295,19 @@ export function useGrid(options: UseGridOptions) {
   );
 
   const renameExercise = useCallback(
-    (exerciseSlotId: Id, name: string) => {
+    // `exerciseId` (#608, a suggestion pick): undefined = key absent = a plain
+    // typed rename, where the server unlinks a CHANGED name — mirrored here;
+    // a string/null is sent explicitly and sets (or clears) the link.
+    (exerciseSlotId: Id, name: string, exerciseId?: string | null) => {
       const row = findRow(grid, exerciseSlotId);
       const cellId = rowIdentityCellId(grid?.weeks ?? [], row);
       if (cellId == null) return;
-      setGrid((prev) => (prev ? updateRowInGrid(prev, exerciseSlotId, { name }) : prev));
-      const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, { name }, csrf)
+      const patch: Partial<GridRow> = { name };
+      if (exerciseId !== undefined) patch.exercise_id = exerciseId;
+      else if (row && row.name !== name) patch.exercise_id = null;
+      const body = exerciseId !== undefined ? { name, exercise_id: exerciseId } : { name };
+      setGrid((prev) => (prev ? updateRowInGrid(prev, exerciseSlotId, patch) : prev));
+      const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, body, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
         .catch((err) => console.error("Rename exercise failed", err));
       pendingWritesRef.current.add(write);

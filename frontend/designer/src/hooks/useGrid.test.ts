@@ -35,7 +35,7 @@ function row(overrides: Partial<GridRow> = {}): GridRow {
   return {
     exercise_slot_id: 9,
     name: "Squat",
-    exercise_id: 55,
+    exercise_id: "55",
     order: 0,
     tags: [],
     tempo: "",
@@ -311,6 +311,42 @@ describe("renameExercise", () => {
     expect(url).toBe("/meso/api/plan/7/prescription/100/"); // week[0]'s cell
     expect(JSON.parse(opts.body as string)).toEqual({ name: "Front Squat" });
     await waitFor(() => expect(result.current.history.undo_label).toBe("Renamed Squat"));
+  });
+});
+
+describe("renameExercise link (#608)", () => {
+  const rowOf = (r: { current: ReturnType<typeof setup>["result"]["current"] }) => r.current.grid?.days[0]?.rows[0];
+  const post = () => JSON.parse(((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]![1] as { body: string }).body);
+  beforeEach(() => {
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+  });
+
+  it("a plain typed rename sends {name} only and clears the link when the name changed", () => {
+    const { result } = setup();
+    act(() => result.current.renameExercise(9, "Front Squat"));
+    expect(post()).toEqual({ name: "Front Squat" });
+    expect(rowOf(result)?.exercise_id).toBeNull();
+  });
+
+  it("a typed rename to the SAME name keeps the link", () => {
+    const { result } = setup();
+    act(() => result.current.renameExercise(9, "Squat"));
+    expect(rowOf(result)?.exercise_id).toBe("55");
+  });
+
+  it("a pick sends {name, exercise_id} in one POST and sets the link", () => {
+    const { result } = setup();
+    act(() => result.current.renameExercise(9, "Back Squat", "uuid-1"));
+    expect(post()).toEqual({ name: "Back Squat", exercise_id: "uuid-1" });
+    expect(rowOf(result)?.exercise_id).toBe("uuid-1");
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("a pick with an explicit null link sends null and unlinks", () => {
+    const { result } = setup();
+    act(() => result.current.renameExercise(9, "Box Squat", null));
+    expect(post()).toEqual({ name: "Box Squat", exercise_id: null });
+    expect(rowOf(result)?.exercise_id).toBeNull();
   });
 });
 

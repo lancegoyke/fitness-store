@@ -31,6 +31,8 @@ import type { ChatMessage } from "./hooks/useAgentChat";
 import { useCoachmarks } from "./hooks/useCoachmarks";
 
 import type { MesoGrid } from "./lib/api";
+import { EMPTY_SUGGESTIONS } from "./lib/exerciseSuggest";
+import type { ExerciseSuggestions } from "./lib/exerciseSuggest";
 import { cycleLabelFromGrid } from "./lib/grid";
 import { deliverHref as buildDeliverHref } from "./lib/deliver";
 
@@ -48,6 +50,7 @@ interface Hydrated {
   initialMessages: ChatMessage[];
   initialResumeUrl: string | null;
   flags: DesignerFlags;
+  exerciseSuggestions: ExerciseSuggestions;
 }
 
 // The thread starts with a single orienting greeting. Real agent turns
@@ -120,6 +123,21 @@ function readHydration(): Hydrated | null {
     }
   }
 
+  // #608: exercise-name suggestions — tolerant like the flags element.
+  let exerciseSuggestions = EMPTY_SUGGESTIONS;
+  const suggestEl = document.getElementById("meso-exercise-suggest");
+  if (suggestEl) {
+    try {
+      const raw = JSON.parse(suggestEl.textContent || "") as Partial<ExerciseSuggestions> | null;
+      exerciseSuggestions = {
+        catalog: Array.isArray(raw?.catalog) ? raw.catalog : [],
+        mine: Array.isArray(raw?.mine) ? raw.mine : [],
+      };
+    } catch (err) {
+      console.error("Could not parse exercise suggestions", err);
+    }
+  }
+
   return {
     planId: gridData.mesocycle.plan_id,
     csrf,
@@ -127,6 +145,7 @@ function readHydration(): Hydrated | null {
     initialMessages,
     initialResumeUrl,
     flags,
+    exerciseSuggestions,
   };
 }
 
@@ -265,6 +284,7 @@ export function DesignerRoot() {
                 onFillAcrossWeeks={gridState.fillAcrossWeeks}
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}
                 onDragEnd={tableReorder.onDragEnd}
+                exerciseSuggestions={hydrated.exerciseSuggestions}
               />
             )}
 
