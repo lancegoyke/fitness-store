@@ -34,6 +34,7 @@ from ..models import ProposedChange
 from ..parsing import compose_prescription_text
 from ..parsing import parse_prescription
 from ..serializers import first_live_week
+from .validation import MAX_PERCENT_1RM
 
 
 def _parsed_bits(cell):
@@ -64,8 +65,11 @@ def _parsed_bits(cell):
 
 
 _SETS_HEAD = re.compile(r"^(\s*(?:up\s+to\s+)?)\d+(?=\s*[x×])", re.IGNORECASE)
+# A percent load may carry its basis (``80% 1RM``); that tail is kept verbatim.
 _LOAD_SEGMENT = re.compile(
-    r"^(\s*)(\d+(?:,\d{3})*(?:\.\d+)?)\s*(%|lbs?|kgs?|kilos?)?(\s*)$"
+    r"^(\s*)(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(?:(%)(\s*(?:of\s+)?1\s*RM)?|(lbs?|kgs?|kilos?))?(\s*)$",
+    re.IGNORECASE,
 )
 # A comma is a segment break unless it is a thousands separator (``1,000 lbs``).
 _SEGMENT_SPLIT = re.compile(r"(,(?!\d{3}(?![\d]|\.\d))|@)")
@@ -90,13 +94,28 @@ def _swap_in_place(first_line, component, value):
         else:
             load = _LOAD_SEGMENT.match(segment)
             if load and not _SETS_HEAD.match(segment):
-                lead, _, unit, trail = load.groups()
+                lead, _, pct, basis, weight_unit, trail = load.groups()
+                unit = pct or weight_unit
                 # A bare new number inherits the cell's own unit/percent suffix.
                 bare = re.fullmatch(r"\d+(?:\.\d+)?", str(value))
                 suffix = unit if (unit and bare) else ""
+                # ``80% 1RM`` keeps its basis whenever the new value is a percent.
+                if pct and (bare or str(value).endswith("%")):
+                    suffix = f"{pct if bare else ''}{basis or ''}"
                 pieces[i] = f"{lead}{value}{suffix}{trail}"
                 return "".join(pieces)
     return None
+
+
+def _is_percent(value):
+    """A bare number or ``NN%`` in a sane %1RM band — what a percent cell can take."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*%?", str(value).strip())
+    return bool(match) and 0 < float(match.group(1)) <= MAX_PERCENT_1RM
+
+
+def is_percent_cell(cell):
+    """Is the cell's load a %1RM (``@ 80%``, ``@ 80% 1RM``)?"""
+    return (_parsed_bits(cell) or {}).get("load", "").endswith("%")
 
 
 def recomposed_text(cell, component, value):
@@ -114,6 +133,10 @@ def recomposed_text(cell, component, value):
         return None
     bits = _parsed_bits(cell)
     if bits is None:
+        return None
+    if component == "load" and is_percent_cell(cell) and not _is_percent(value):
+        # A percent cell progresses in percent: a weight is never swapped in or
+        # appended (``3x5 @ 80% 1RM, 230``) — it is refused (#694).
         return None
     lines = cell.text.split("\n")
     swapped = _swap_in_place(lines[0], component, str(value))

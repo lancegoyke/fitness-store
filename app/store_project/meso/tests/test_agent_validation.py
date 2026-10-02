@@ -523,8 +523,9 @@ class TestPercentProgressBound:
             plan,
             mesocycle=plan.mesocycles.first(),
         )
-        assert cleaned is None
-        assert any("percent" in e for e in errors)
+        # A weight for a %1RM cell is a Rejected card, not a silent drop (#694).
+        assert errors == []
+        assert cleaned["status"] == "rejected"
 
     def test_rejects_an_absolute_looking_load(self):
         # 180 is a plausible kg/lb load but an absurd %1RM — the bound catches a
@@ -535,8 +536,8 @@ class TestPercentProgressBound:
             plan,
             mesocycle=plan.mesocycles.first(),
         )
-        assert cleaned is None
-        assert any("out of range" in e for e in errors)
+        assert errors == []
+        assert cleaned["status"] == "rejected"
 
     def test_rejects_a_non_numeric_percent(self):
         plan, _, presc = make_percent_plan()
@@ -588,6 +589,11 @@ class TestPercentAwarePrompt:
         # 605.9c: the proposal is written in the coach's spelling.
         assert "3x5 @ 230" in client.SYSTEM_PROMPT
         assert "never '3 x 5, 230'" in client.SYSTEM_PROMPT
+
+    def test_system_prompt_says_percent_cells_progress_in_percent(self):
+        # #694: '80% 1RM' counts as a percent cell and progresses in percent.
+        assert "80% 1RM" in client.SYSTEM_PROMPT
+        assert "progresses in percent" in client.SYSTEM_PROMPT
 
     def test_new_load_tool_field_mentions_percent(self):
         props = client.PROPOSE_TOOL["input_schema"]["properties"]

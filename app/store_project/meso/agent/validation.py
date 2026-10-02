@@ -161,6 +161,12 @@ def _resolve(model, value, label, errors, **scope):
     return obj
 
 
+_PERCENT_CELL_REASON = (
+    "This set is written as a %1RM; the change gives a weight. "
+    "Nothing would be written."
+)
+
+
 def _percent_load(text):
     """A %1RM progression's value as a float, or ``None`` if it isn't a percent.
 
@@ -208,6 +214,7 @@ def _fill_display(cleaned):
     presc = cleaned["prescription"]
     session = cleaned["session"]
     payload = cleaned["payload"]
+    reject_reason = cleaned.pop("reject_reason", "")
 
     if not cleaned["day_label"] and session is not None:
         cleaned["day_label"] = str(session)[:128]
@@ -238,6 +245,10 @@ def _fill_display(cleaned):
                 applicable = False
         else:
             applicable = False
+            if reject_reason:
+                before = _first_line(presc.text)
+                # The model's own ``after`` would show a write that never happens.
+                authoritative_after = ""
     elif kind == "volume" and session is not None and payload.get("sets"):
         if any(agent_apply._parsed_bits(cell) for cell in session.cells()):
             after = authoritative_after = f"{payload['sets']} sets on every exercise"
@@ -254,6 +265,9 @@ def _fill_display(cleaned):
         cleaned["after"] = authoritative_after[:255]
     elif not cleaned["after"]:
         cleaned["after"] = after[:255]
+    if reject_reason:
+        applicable = False
+        cleaned["rationale"] = f"{reject_reason}\n\n{cleaned['rationale']}".strip()
     if not applicable or not (cleaned["before"] or cleaned["after"]):
         cleaned["status"] = ProposedChange.Status.REJECTED
 
@@ -392,19 +406,23 @@ def clean_change(raw, plan, *, mesocycle, forbidden=None):
     # before.
     load_value = payload.get("load")
     if kind == "progress" and presc is not None and load_value:
-        parsed = presc.parsed() or {}
-        current_load = parsed.get("load") or ""
-        if current_load.endswith("%"):
+        from . import apply as agent_apply
+
+        if agent_apply.is_percent_cell(presc):
             pct = _percent_load(load_value)
-            if pct is None:
+            if pct is None and re.fullmatch(
+                r"\d+(?:\.\d+)?\s*[a-z]+", load_value.strip(), re.IGNORECASE
+            ):
+                # A weight ("100 lb") for a %1RM cell: the model converted the
+                # lift. Kept as a Rejected card (the cell itself never changes).
+                cleaned["reject_reason"] = _PERCENT_CELL_REASON
+            elif pct is None:
                 errors.append(
                     f"a %1RM progression must be a bare percent (got {load_value!r})"
                 )
             elif not 0 < pct <= MAX_PERCENT_1RM:
-                errors.append(
-                    f"%1RM progression {pct:g}% is out of range "
-                    f"(expected 1–{MAX_PERCENT_1RM}%)"
-                )
+                # A bare number far over any sane %1RM is an absolute load ("230").
+                cleaned["reject_reason"] = _PERCENT_CELL_REASON
             else:
                 payload["load"] = f"{_fmt_percent(pct)}%"
 

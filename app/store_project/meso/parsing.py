@@ -52,6 +52,8 @@ _DURATION = re.compile(
 )
 # A load token: bare number (``225``), percent (``85%``), or suffixed weight
 # (``30lbs`` / ``102.5 kg`` / ``45 lb``). ``BW`` (bodyweight) also counts.
+# ``80% 1RM`` / ``82.5 % of 1RM``: a percentage load with its basis spelled out.
+PERCENT_1RM = re.compile(r"^(\d+(?:\.\d+)?)\s*%\s*(?:of\s+)?1\s*RM$", re.IGNORECASE)
 _LOAD = re.compile(r"^(\d+(?:\.\d+)?)\s*(%|lbs?|kgs?|kilos?)?$|^bw$", re.IGNORECASE)
 # A reps token inside the ``x``: number, range, placeholder, unit suffix.
 _REPS = re.compile(
@@ -141,6 +143,11 @@ def _classify_segment(segment, out):
     if sets_x:
         out.setdefault("sets", int(sets_x.group(1)))
         _classify_reps(sets_x.group(2), out)
+        return
+    pct_1rm = PERCENT_1RM.match(segment)
+    if pct_1rm:
+        # ``80% 1RM`` is the coach spelling out what ``80%`` already means.
+        out.setdefault("load", f"{pct_1rm.group(1)}%")
         return
     load = _LOAD.match(segment)
     if load:
