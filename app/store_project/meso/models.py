@@ -1505,7 +1505,7 @@ class Plan(models.Model):
     # The pending invite a template was written for (#643): "write the program
     # now, start it once they accept". A hint for the accept email and the
     # roster's one-click "Start <title>" — the invite holds no program. No DB-
-    # level FK (same call as ``LoggedSet.reclaimed_line``/``Event.actor``): a
+    # level FK (same call as ``Event.actor``): a
     # constraint would take a KEY SHARE lock on the invite row at every
     # template insert's COMMIT, against the accept path that locks the invite
     # (decisions.md § Row-lock order). SET_NULL still runs in Python on delete.
@@ -2571,133 +2571,68 @@ def _line_shows(line, logged_set):
     )
 
 
-def display_line_id(logged_set):
-    """The sub-line that could be displaying this row.
+def line_shows_a_set(line, rows):
+    """Is ``line``'s current text showing any of ``rows``?
 
-    Its own ``source_line``, else the ``reclaimed_line`` the retired structured
-    logger left behind (#541; nothing writes it any more, existing values are
-    still read) — the two ways a row can be standing behind a line's text.
+    A sub-line renders one line of text, so it stands in for one performance;
+    the question is whether some row anchored to it (``source_line``) still
+    matches that text. Two rows CAN sit behind one line (#578 C2's orphan
+    twin: a NULL-prescription row beside its replacement, both with the same
+    ``source_line`` and values), which is why this asks "does any row show"
+    rather than "which row": no caller needs a winner, so there is no
+    tie-break to keep.
     """
-    if logged_set.source_line_id is not None:
-        return logged_set.source_line_id
-    return logged_set.reclaimed_line_id
+    return any(row.source_line_id == line.pk and _line_shows(line, row) for row in rows)
 
 
-def line_displays(line, rows):
-    """Which of ``rows`` ``line``'s text is currently showing, if any.
-
-    A sub-line renders one line of text, so it stands in for ONE performance.
-    A row whose own ``source_line`` is this line outranks a source-less copy
-    that only answers to it through ``reclaimed_line``; between two copies the
-    older row wins. Without the ranking, a line whose text matches both hid
-    both, and a real logger row silently disappeared off the athlete's page.
-    """
-    candidates = [
-        row
-        for row in rows
-        if (
-            row.source_line_id == line.pk
-            or (row.source_line_id is None and row.reclaimed_line_id == line.pk)
-        )
-        and _line_shows(line, row)
-    ]
-    # ``pk or 0`` keeps the order total: ``parsed_set_is_hidden`` appends the
-    # row it was asked about, and an unsaved one has no pk to compare against a
-    # saved sibling's.
-    candidates.sort(key=lambda row: (row.source_line_id is None, row.pk or 0))
-    return candidates[0] if candidates else None
-
-
-def parsed_set_is_hidden(logged_set, *, line_rows=None):
+def parsed_set_is_hidden(logged_set):
     """Is this set already on screen as its own sub-line's text (5a §6)?
 
     Hidden means "already shown by its own line", so ``athlete_session`` leaves
-    it out of an exercise's read-only ``logged_readonly`` history. (Before the
-    structured Set-row logger was retired, #578 stage 4, the same predicate
-    also scoped that logger's replace-delete, which must never touch a row it
-    could not see.)
+    it out of an exercise's read-only ``logged_readonly`` history.
 
     **Define the rule ONCE.** Visibility and any delete scoped by it have to
     agree exactly, and every time they were expressed separately they drifted: keying on
     ``source_line`` alone hid a set whose text the coach had replaced (invisible
-    yet still counting); scoping the delete to ``source_line__isnull=True``
-    first WIPED reclaimed rows and then, once those became visible, let the
-    client repost one and DUPLICATE it; and keying on ``athlete_authored``
-    double-displayed whenever a reclaim kept the same text or an undo restored
-    it. ``_sub_lines`` renders every sub-line regardless of who owns it, so
+    yet still counting); scoping a delete to ``source_line__isnull=True`` wiped
+    rows a coach rewrite had made visible, and then let the client repost one
+    and DUPLICATE it; and keying on ``athlete_authored`` double-displayed
+    whenever a rewrite kept the same text or an undo restored it.
+    ``_sub_lines`` renders every sub-line regardless of who owns it, so
     ownership was never the question — only whether the text still shows this
     performance.
 
     Not a queryset ``Q``: the test re-parses text, which SQL cannot express.
-    Callers filter in Python so all three surfaces share this one predicate.
-
-    ``line_rows`` is only consulted for a copy (``source_line`` is ``None``,
-    ``reclaimed_line`` set): the other rows that could be displayed by the
-    SAME line, so the one-row-per-line ranking (``line_displays``) can be
-    answered without a query. Pass it when the caller already holds the
-    log's sets in memory; otherwise it is looked up.
+    Callers filter in Python so every surface shares this one predicate.
     """
     line = logged_set.source_line
-    if line is not None:
-        # Parsed rows keep main's rule verbatim: no sibling tie-break needed,
-        # because ``_upsert_parsed_set`` declines to mint a same-valued twin
-        # ON ONE LINE, so two LIVE parsed rows can never both match this text.
-        # One exception, and since #578 C1 it is NOT inert: the upsert's reuse
-        # lookups are scoped by ``prescription``, so a row whose
-        # ``prescription`` already went NULL is passed over and a fresh row
-        # minted beside it. Both rows carry this ``source_line`` and are hidden
-        # by the same text — this predicate never filtered on ``prescription``,
-        # and that part of main's rule is unchanged — but before C1 the NULL
-        # row was ALSO invisible to every derivation (each filtered
-        # ``prescription__isnull=False``), so the pair was an inert twin: one
-        # row shown, one row silently uncounted. C1 gave the NULL row its own
-        # ``exercise_slot``, so both rows now COUNT — the artifact is a
-        # double-count, not an inert twin, deferred to C2 (see ``views.py``'s
-        # matching comment in ``_upsert_parsed_set`` and ``presenters.py``).
-        return _line_shows(line, logged_set)
-    # #561: a coach undo restores the reclaimed line's text but never touches
-    # ``LoggedSet`` (undo must not write athlete data, and a GET must not
-    # write either), so the ``reclaimed_line`` link #541 recorded at "Log
-    # session" time is the only thing left that can answer this.
-    line = logged_set.reclaimed_line
     if line is None:
         return False
-    rows = (
-        list(line_rows)
-        if line_rows is not None
-        else list(
-            # No ``select_related``: ``line_displays`` reads the two link ids
-            # and re-parses ``line``'s own text, never a row's related cell.
-            LoggedSet.objects.filter(session_log_id=logged_set.session_log_id).filter(
-                models.Q(source_line=line)
-                | models.Q(source_line__isnull=True, reclaimed_line=line)
-            )
-        )
-    )
-    if all(row.pk != logged_set.pk for row in rows):
-        rows.append(logged_set)
-    displayed = line_displays(line, rows)
-    return displayed is not None and displayed.pk == logged_set.pk
+    # No sibling tie-break needed, because ``_upsert_parsed_set`` declines to
+    # mint a same-valued twin ON ONE LINE, so two LIVE parsed rows can never
+    # both match this text. One exception, and since #578 C1 it is NOT inert:
+    # the upsert's reuse lookups are scoped by ``prescription``, so a row whose
+    # ``prescription`` already went NULL is passed over and a fresh row minted
+    # beside it. Both rows carry this ``source_line`` and are hidden by the
+    # same text — this predicate never filtered on ``prescription`` — but
+    # before C1 the NULL row was ALSO invisible to every derivation (each
+    # filtered ``prescription__isnull=False``), so the pair was an inert twin:
+    # one row shown, one row silently uncounted. C1 gave the NULL row its own
+    # ``exercise_slot``, so both rows now COUNT — the artifact is a
+    # double-count, not an inert twin, deferred to C2 (see ``views.py``'s
+    # matching comment in ``_upsert_parsed_set`` and ``presenters.py``).
+    return _line_shows(line, logged_set)
 
 
 def hidden_parsed_set_pks(rows):
     """Which of ``rows`` a sub-line's own text is currently showing.
 
-    The set-wise form of ``parsed_set_is_hidden``: it groups by the line that
-    could display each row, so the one-row-per-line ranking is answered from
-    memory instead of a query per row. Callers that hold a whole log's sets
-    (``presenters.athlete_session``'s ``logged_readonly``; the typed path's
-    backing-set reads) use this.
+    The set-wise form of ``parsed_set_is_hidden``: each row is judged by its
+    own line, nothing is grouped or ranked. Callers that hold a whole log's
+    sets (``presenters.athlete_session``'s ``logged_readonly``; the typed
+    path's backing-set reads) use this.
     """
-    rows = list(rows)
-    by_line = defaultdict(list)
-    for row in rows:
-        by_line[display_line_id(row)].append(row)
-    return {
-        row.pk
-        for row in rows
-        if parsed_set_is_hidden(row, line_rows=by_line[display_line_id(row)])
-    }
+    return {row.pk for row in rows if parsed_set_is_hidden(row)}
 
 
 def sub_line_warn_reason(
@@ -2736,14 +2671,11 @@ def sub_line_warn_reason(
        this rule exists for.
 
     ``backing_sets`` lets a caller pass rows it already has in memory; without
-    it the row is looked up (also finding a copy through ``reclaimed_line``,
-    #561 — a line the coach put back can be backed by the copy the retired
-    structured logger left behind rather than by a row of its own). Reuses ``parsed_set_is_hidden``
-    via ``line_displays``, so "backed by its own line" means one thing across
-    the slice: the line is backed when its text is showing a row, whether that
-    row is its own parsed one or a reclaim's copy — otherwise a line a coach
-    undo restored was tinted "not logged as a set" while the set it was
-    showing sat right there.
+    it the rows are looked up. Reuses ``_line_shows`` via ``line_shows_a_set``,
+    so "backed by its own line" means one thing across the slice: the line is
+    backed when its text is showing a row anchored to it (``source_line``) —
+    otherwise a line a coach undo restored was tinted "not logged as a set"
+    while the set it was showing sat right there.
 
     **The fallback query (no ``backing_sets``) is a safety net, not the real
     answer.** A ``Prescription`` cell alone names an exercise × week × line —
@@ -2752,9 +2684,8 @@ def sub_line_warn_reason(
     (``athlete_session``, ``_cell_warn_reason_or_blank``) always pass ``backing_sets``
     from the one log they each already read; this branch exists only so a
     future caller that forgets to isn't unboundedly wrong. #568: it used to
-    have NO scope at all (``LoggedSet.objects.filter(Q(source_line=cell) |
-    Q(source_line__isnull=True, reclaimed_line=cell))``), so it could match a
-    row on *any* ``SessionLog`` in the database — another athlete's, a stray
+    have NO scope at all (just ``LoggedSet.objects.filter(source_line=cell)``),
+    so it could match a row on *any* ``SessionLog`` in the database — another athlete's, a stray
     older log for the same (session, athlete) the real callers never see
     (they always read the newest), or, after a coach moves the exercise to
     another day (``prescription_move``), the day it moved FROM. Scoped now to
@@ -2768,8 +2699,7 @@ def sub_line_warn_reason(
 
     Deliberate consequence of the day-scoping (#568): after a move, a line
     whose set was logged on the OLD day now reads as unlogged/tinted on the
-    new one — true for every plain parsed row, not only a
-    ``reclaimed_line`` copy. The cell travels with the ``ExerciseSlot``; the
+    new one — true for every parsed row. The cell travels with the ``ExerciseSlot``; the
     ``LoggedSet`` stays on the old day's log. That is the call this fix takes,
     not an oversight: a set is either backed by THIS day's log or it isn't,
     and "isn't" is what actually happened.
@@ -2783,19 +2713,18 @@ def sub_line_warn_reason(
         backing_sets
         if backing_sets is not None
         else LoggedSet.objects.filter(
-            models.Q(source_line=cell)
-            | models.Q(source_line__isnull=True, reclaimed_line=cell),
+            source_line=cell,
             session_log__session__week=cell.week,
             session_log__session__session_slot_id=cell.exercise_slot.session_slot_id,
         )
     )
-    if line_displays(cell, rows) is not None:
+    if line_shows_a_set(cell, rows):
         return None
-    # Same one-row-per-line ranking, asked of the rows this cell left behind on
-    # another day. Not a bare "does any row exist": the line has to still be
-    # SHOWING that performance for a re-post to be a duplicate of it, which is
-    # exactly what ``line_displays`` tests.
-    if elsewhere_sets and line_displays(cell, list(elsewhere_sets)) is not None:
+    # The same question, asked of the rows this cell left behind on another
+    # day. Not a bare "does any row exist": the line has to still be SHOWING
+    # that performance for a re-post to be a duplicate of it, which is exactly
+    # what ``line_shows_a_set`` tests.
+    if elsewhere_sets and line_shows_a_set(cell, elsewhere_sets):
         return "elsewhere"
     return "unlogged"
 
@@ -2957,9 +2886,7 @@ class LoggedSet(models.Model):
     # collector doesn't know about this FK at all. An admin hard-delete of an
     # ``ExerciseSlot`` with surviving ``LoggedSet`` rows then fails LOUDLY at
     # COMMIT on this deferred constraint, rather than silently corrupting
-    # anything — the opposite of ``reclaimed_line`` just below, which is
-    # deliberately ``db_constraint=False`` so old code CAN write through it
-    # without knowing it exists.
+    # anything.
     #
     # ``null=True`` is transitional, not permanent: it lets the column be added
     # without a table rewrite and lets the backfill migration (0051) *report*
@@ -3013,33 +2940,6 @@ class LoggedSet(models.Model):
         related_name="parsed_sets",
         verbose_name=_("Source line"),
     )
-    # retired in #578 stage 4; dropped in stage 4b
-    # Nothing writes this column any more; existing values are still read.
-    #
-    # #541. Was set only on a structured-logger row (``source_line`` NULL) that
-    # had just replaced a reclaimed, visible parsed row — remembers which
-    # sub-line that row's own ``source_line`` was, so ``_upsert_parsed_set`` can
-    # find and re-link this row (rather than minting a twin) once the ordinary
-    # ``source_line=cell`` search comes up empty. The retired
-    # ``athlete_log_session`` carried it forward across further saves; it is
-    # cleared the moment a restore consumes it.
-    #
-    # No DB-level FK (mirrors ``analytics.Event.actor``, #509): it's a hint for
-    # that restore lookup only, and a real constraint would make a caller's
-    # COMMIT take a lock on the referenced row for the RI check. It also keeps a
-    # code rollback safe: code that doesn't know this column can't SET_NULL it,
-    # so with a constraint its Prescription deletes would fail at COMMIT.
-    # SET_NULL is still applied in Python by Django's collector on a delete.
-    reclaimed_line = models.ForeignKey(
-        Prescription,
-        on_delete=models.SET_NULL,
-        db_constraint=False,
-        null=True,
-        blank=True,
-        related_name="reclaimed_sets",
-        verbose_name=_("Reclaimed line"),
-    )
-
     objects = LoggedSetQuerySet.as_manager()
 
     class Meta:
@@ -3090,10 +2990,9 @@ class LoggedSet(models.Model):
         per row for a bulk insert, so the three ``bulk_create`` sites
         (``demo.py``'s sample-log seeder and ``seed_meso_demo.py``'s two
         sample-log seeders) still set ``exercise_slot_id`` themselves. It DOES cover
-        ``_upsert_parsed_set``'s re-link of a reclaimed row
-        (``existing.save(update_fields=["source_line", "reclaimed_line"])``),
-        so the one extra lightweight query this adds there is an acceptable
-        price for the invariant holding everywhere, not just at creation. It also does NOT
+        every ordinary ``.save()`` of an existing row, so the one extra
+        lightweight query this adds there is an acceptable price for the
+        invariant holding everywhere, not just at creation. It also does NOT
         cover ``save(raw=True)`` — the path ``DeserializedObject.save()`` uses
         for ``loaddata`` — which calls ``Model.save_base(..., raw=True)``
         directly and never reaches this override at all. Latent only: the repo

@@ -9,9 +9,7 @@ committed by a concurrent athlete write, in the gap between the purge's
 qualifying SELECT and its DELETE, was invisible to every one of those checks,
 and the cell was deleted out from under it anyway: for ``prescription``/
 ``source_line`` (real FKs) that surfaced as a COMMIT-time deferred constraint
-violation (a 500 on the coach's undo); for ``reclaimed_line``
-(``db_constraint=False``, #541) nothing stopped it and the hint was left
-dangling.
+violation (a 500 on the coach's undo).
 
 The fix (``history.py``) qualifies the purge's candidates under
 ``select_for_update(of=("self",))`` and re-checks every spare test only after

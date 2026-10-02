@@ -2446,6 +2446,7 @@ _(Append dated entries here as decisions land.)_
   puts the text back, rather than the athlete retyping it, still shows the set
   twice and tints the line "not logged as a set". The coach path never touches
   `LoggedSet`, and the data holds one row (#561, fixed on the read side below).
+  Retired in #578 stage 4b (column removed from the model; DB column dropped in 4c).
 - 2026-09-19 — **Client beacon and push notification ledger (#509, third slice).**
   `POST /meso/api/track/` records the three moments only the browser knows
   (`pwa_installed`, `push_permission`, `push_clicked`) behind login, CSRF, a
@@ -2527,6 +2528,7 @@ _(Append dated entries here as decisions land.)_
   meanings apart, and the real fix is to post each row's id back (#567). The
   warn lookup's own database fallback is also unscoped by log, so a set from
   another session can clear a line's tint (#568).
+  Retired in #578 stage 4b (column removed from the model; DB column dropped in 4c).
 - 2026-09-19 — **Fixed (#567, #568): "Log session" identifies rows by id, not
   by set number.** Both failures were reproduced on `main` first, with an
   ordinary hidden parsed row and no `reclaimed_line` involved. A hidden row
@@ -2624,6 +2626,7 @@ _(Append dated entries here as decisions land.)_
   presenter already tinted those lines on `main`, before #567/#568 touched
   any of this) and are tracked separately, not fixed in this slice.
   No model change, no migration.
+  Retired in #578 stage 4b (column removed from the model; DB column dropped in 4c).
 - 2026-09-20 — **Fixed (#570): the collision-renumbering walk now has a
   ceiling, and refuses honestly when nothing is free.** Found by the
   adversarial review on #567/#568 and declined there as pre-existing. The
@@ -2776,6 +2779,7 @@ _(Append dated entries here as decisions land.)_
   `save()` now records what the status was before it queued, and the flush
   refusal puts it back (only when it knows — an entry from a previous page
   load carries none, and the next load reads the server anyway).
+  Retired in #578 stage 4b (column removed from the model; DB column dropped in 4c).
 - 2026-09-20 — **Fixed (#571): `athlete_cell_write` no longer claims a save
   the database didn't keep.** Found by the same adversarial review as #570.
   `_upsert_parsed_set` wraps its work in a nested savepoint and swallows
@@ -3119,6 +3123,7 @@ _(Append dated entries here as decisions land.)_
   property of `_consume_carried_link` (every carried link names a cell some
   already-committed `LoggedSet` also names). Unverified and untested; noted
   on #578 rather than asserted here.
+  Retired in #578 stage 4b (column removed from the model; DB column dropped in 4c).
 - 2026-09-20 — **Row-lock cleanup #587/#588/#589/#590/#596:** parent mutexes
   now default to `FOR NO KEY UPDATE`; all Plan mutexes and the two coach User
   mutexes in scope were swept to that strength. `athlete_log_session` and

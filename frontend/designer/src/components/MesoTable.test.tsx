@@ -408,7 +408,7 @@ describe("cell sub-lines", () => {
     await user.tab();
 
     expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "105 x 5");
-    const reclaimedGrid = grid({
+    const rewrittenGrid = grid({
       days: [
         day({
           rows: [
@@ -427,7 +427,7 @@ describe("cell sub-lines", () => {
       ],
     });
     view.rerender(
-      <MesoTable {...baseProps({ grid: reclaimedGrid, onWriteCellLine })} />,
+      <MesoTable {...baseProps({ grid: rewrittenGrid, onWriteCellLine })} />,
     );
     expect(screen.queryByTestId("cell-line-athlete-5")).not.toBeInTheDocument();
   });

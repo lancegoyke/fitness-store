@@ -1,16 +1,15 @@
 """A coach undo must not detach the athlete's own performed set (#577).
 
 ``restore_plan_snapshot``'s stray-cell purge spares a cell athlete data points
-at — but for two of the three pointers only: ``parsed_sets``
-(``LoggedSet.source_line``) and ``reclaimed_sets`` (``LoggedSet.reclaimed_line``,
-#541). ``logged_sets`` (``LoggedSet.prescription``, ``SET_NULL``) — the most
-direct of the three, the line-0 cell every logged set is filed under — was left
+at — but for one of its two pointers only: ``parsed_sets``
+(``LoggedSet.source_line``). ``logged_sets`` (``LoggedSet.prescription``,
+``SET_NULL``) — the most direct of the two, the line-0 cell every logged set is filed under — was left
 out, so an undo could hard-delete a cell an ordinary structured row names. The
 row survived with ``prescription = NULL``, and before #578 C1 every
 derivation filtered that out: the set stayed on the athlete's page as text
 while silently ceasing to count toward their estimated 1RM and their
 records. Since C1, that same row keeps counting through its own
-``exercise_slot`` — see ``TestRestoreAfterReclaimSparesANullPrescriptionRow``
+``exercise_slot`` — see ``TestRestoreAfterRewriteSparesANullPrescriptionRow``
 below for what changed and what didn't.
 
 ON REACHING THE PRECONDITION. The purge only fires on a cell absent from the
@@ -116,7 +115,6 @@ def _log_one_set(athlete, session, cell):
         prescription=cell,
         exercise_slot_id=cell.exercise_slot_id,
         source_line=None,
-        reclaimed_line=None,
         set_number=1,
         reps="5",
         load="225",
@@ -181,7 +179,7 @@ class TestUndoSparesACellALoggedSetPointsAt:
         # The other half of sparing it, stated so it can't drift: the cell the
         # undo declined to delete keeps the text the undo meant to erase, so
         # for THIS cell the undo is a visual no-op. That is the same trade the
-        # ``parsed_sets``/``reclaimed_sets`` clauses already make — the
+        # ``parsed_sets`` clause already makes — the
         # athlete's performance outranks reverting a coach's line — and it is
         # deliberate, not a gap. Losing the set is the worse outcome.
         cell.refresh_from_db()
@@ -231,13 +229,12 @@ class TestUndoSparesACellALoggedSetPointsAt:
         )
 
 
-class TestRestoreAfterReclaimSparesANullPrescriptionRow:
-    """Retyping a reclaimed line's original text must not adopt a broken row.
+class TestRestoreAfterRewriteSparesANullPrescriptionRow:
+    """Retyping a rewritten line's original text must not adopt a broken row.
 
-    ``_upsert_parsed_set``'s ``existing`` reuse lookup (the direct
-    restore-after-reclaim case, not the ``reclaimed_line`` fallback #541
-    added) used to match a survivor by ``source_line=cell`` alone: the
-    athlete types a set, the coach reclaims the sub-line (overwriting its
+    ``_upsert_parsed_set``'s ``existing`` reuse lookup used to match a
+    survivor by ``source_line=cell`` alone: the
+    athlete types a set, the coach rewrites the sub-line (overwriting its
     text, but the row keeps its ``source_line`` — see
     ``TestReclaimLeavesAthleteDataAlone`` in test_parse_at_commit.py), then
     the athlete types the identical text back onto the line. ``mine`` is
@@ -248,9 +245,9 @@ class TestRestoreAfterReclaimSparesANullPrescriptionRow:
     But a row #577 already damaged (its line-0 cell purged out from under it,
     ``prescription`` gone ``NULL`` via ``SET_NULL``) still matches
     ``source_line=cell`` too. Scoping ``existing`` by
-    ``prescription=line_zero_cell`` (matching the ``mine`` delete above it
-    and the ``reclaimed_line`` fallback below it) refuses that row, same as
-    it refused before #578 C1: a NULL-prescription row can't satisfy either
+    ``prescription=line_zero_cell`` (matching the ``mine`` delete above it)
+    refuses that row, same as
+    it refused before #578 C1: a NULL-prescription row can't satisfy the
     lookup, so the upsert falls through to CREATE and mints a fresh row.
 
     What C1 changes is *why* that fall-through matters. Reusing the damaged

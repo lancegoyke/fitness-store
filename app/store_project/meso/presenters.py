@@ -57,9 +57,8 @@ from .models import SessionLog
 from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
-from .models import display_line_id
 from .models import hidden_parsed_set_pks
-from .models import line_displays
+from .models import line_shows_a_set
 from .models import newest_session_logs
 from .models import sub_line_warn_reason
 from .names import athlete_name
@@ -83,6 +82,7 @@ from .serializers import serialize_new_record
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_week_snapshot
+from .serializers import set_ordinals
 
 #: Paywall display copy for the flat monthly Pro plan (D14). The authoritative
 #: amount is the Stripe Price the owner configures; this is the marketing string
@@ -1144,7 +1144,7 @@ def _logged_label(logged_sets, unit):
 
 
 def _worst_rep_shortfall(prescription, logged_sets):
-    """The biggest rep miss vs the prescribed reps, as ``(deficit, set_number)``.
+    """The biggest rep miss vs the prescribed reps, as ``(deficit, set ordinal)``.
 
     Only meaningful when the prescribed reps parse to a plain number (not
     "AMRAP" / "8-10" — text-first, the reps come from parsing the freeform
@@ -1156,13 +1156,14 @@ def _worst_rep_shortfall(prescription, logged_sets):
     target_reps = _num(parsed.get("reps"))
     if target_reps is None:
         return None
+    ordinals = set_ordinals(logged_sets)
     worst = None
     for s in logged_sets:
         if not rep_missed(target_reps, s.reps):
             continue
         deficit = target_reps - _num(s.reps)
         if worst is None or deficit > worst[0]:
-            worst = (deficit, s.set_number)
+            worst = (deficit, ordinals[s.pk])
     return worst
 
 
@@ -1235,9 +1236,9 @@ def _exercise_result(prescription, logged_sets, unit, sub_lines_by_slot):
     if prescribed_n and 0 < logged_n < prescribed_n:
         note = f"{logged_n}/{prescribed_n} sets logged"
     elif rep_short is not None:
-        deficit, set_number = rep_short
+        deficit, ordinal = rep_short
         plural = "s" if deficit != 1 else ""
-        note = f"missed {_fmt_num(deficit)} rep{plural} on set {set_number}"
+        note = f"missed {_fmt_num(deficit)} rep{plural} on set {ordinal}"
     elif overshoot is not None and overshoot >= RPE_FLAG_THRESHOLD:
         note = f"RPE {_fmt_num(top_rpe)} over target"
     else:
@@ -1869,7 +1870,7 @@ def athlete_set_progress(session, athlete):
     return {**progress, "as_of": as_of}
 
 
-def _logged_set_label(logged_set, plan_unit):
+def _logged_set_label(logged_set, plan_unit, ordinal):
     """A stored set as one read-only line, e.g. "Set 2 · 70 kg × 6 · RPE 7".
 
     The load carries its unit (the set's own, else the plan's) only when it is
@@ -1887,7 +1888,7 @@ def _logged_set_label(logged_set, plan_unit):
         core = f"{reps} reps"
     else:
         core = ""
-    parts = [f"Set {logged_set.set_number}"]
+    parts = [f"Set {ordinal}"]
     if core:
         parts.append(core)
     if logged_set.rpe:
@@ -1931,9 +1932,7 @@ def athlete_session(session, athlete):
     progress_as_of = _progress_clock()
     log = (
         newest_session_logs(session, athlete)
-        .prefetch_related(
-            "sets__source_line", "sets__reclaimed_line", "sets__prescription"
-        )
+        .prefetch_related("sets__source_line", "sets__prescription")
         .first()
     )
     # A freeform sub-line renders itself (``_sub_lines`` below), so a
@@ -1942,16 +1941,9 @@ def athlete_session(session, athlete):
     # line currently shows, and everything else is history to list.
     #
     # The test is literally whether the source line still SHOWS that text — see
-    # ``models.parsed_set_is_hidden``. Nothing is mutated to make a reclaimed set
-    # reappear, which is what ``history.py`` requires ("undo must never touch
+    # ``models.parsed_set_is_hidden``. Nothing is mutated to make a set whose
+    # line was rewritten reappear, which is what ``history.py`` requires ("undo must never touch
     # ... athlete data") since a coach edit is undoable.
-    #
-    # #561: a coach undo restores a reclaimed line's text without touching
-    # ``LoggedSet``, so the row it now shows can be a source-less copy
-    # answering only through ``reclaimed_line``. Computed once over the whole
-    # log (``hidden_parsed_set_pks``) rather than per row, because that ranking
-    # — a line shows at most one performance — can only be answered by looking
-    # at every row that could be displayed by the same line, not one at a time.
     all_sets = list(log.sets.all()) if log else []
     hidden_pks = hidden_parsed_set_pks(all_sets)
     done = log is not None and log.status == SessionLog.Status.DONE
@@ -1967,15 +1959,10 @@ def athlete_session(session, athlete):
     # Sub-lines whose text is currently backed by a parsed set — i.e. the row
     # exists AND still matches what the line says. Reuses the same predicate the
     # suppression rule uses, so "displayed by its line" means one thing here.
-    #
-    # Keyed on ``display_line_id`` (#561), not the raw ``source_line_id``: a
-    # copy left behind by the retired structured logger answers to its line only through
-    # ``reclaimed_line``, and a cell's ``backing_sets`` has to include it or a
-    # line a coach undo restored gets tinted as unlogged despite the set the
-    # copy carries.
-    sets_by_line = {}
+    sets_by_line = defaultdict(list)
     for row in all_sets:
-        sets_by_line.setdefault(display_line_id(row), []).append(row)
+        if row.source_line_id is not None:
+            sets_by_line[row.source_line_id].append(row)
 
     # The same rows, for the days this exercise is NOT on any more (#572). A
     # coach's cross-day drag re-points the `ExerciseSlot`, so the sub-line cell
@@ -2003,23 +1990,21 @@ def athlete_session(session, athlete):
         for cells in lines_by_slot.values()
         for cell in cells
         if parsing.performed_is_set(cell.text)
-        and line_displays(cell, sets_by_line.get(cell.pk, ())) is None
+        and not line_shows_a_set(cell, sets_by_line.get(cell.pk, ()))
     ]
     elsewhere_by_line = defaultdict(list)
     if line_cell_pks:
         for row in (
             LoggedSet.objects.filter(
-                Q(source_line_id__in=line_cell_pks)
-                | Q(source_line__isnull=True, reclaimed_line_id__in=line_cell_pks),
+                source_line_id__in=line_cell_pks,
                 session_log__athlete=athlete,
             ).exclude(session_log__session_id=session.pk)
             # No `select_related` (F2): every row here only ever reaches
-            # `line_displays` (via `sub_line_warn_reason`), which reads
-            # `source_line_id`/`reclaimed_line_id` and re-parses the CELL's
-            # own text — never a related `source_line`/`reclaimed_line`
-            # object. Joining them in was pure waste.
+            # `line_shows_a_set` (via `sub_line_warn_reason`), which reads
+            # `source_line_id` and re-parses the CELL's own text — never a
+            # related `source_line` object. Joining it in was pure waste.
         ):
-            elsewhere_by_line[display_line_id(row)].append(row)
+            elsewhere_by_line[row.source_line_id].append(row)
 
     def _sub_lines(slot_id):
         # The row's editable tracking stack (Phase 4a): its line>=1 cells for
@@ -2086,6 +2071,10 @@ def athlete_session(session, athlete):
     # no sub-line of the athlete's shows. In practice structured-logger rows
     # (``source_line`` NULL) and a typed set whose line a coach has since
     # overwritten. Shown as plain text, never editable, never posted.
+    #
+    # "Set N" is the ordinal among ALL this log's sets for the slot, hidden
+    # typed rows included, so a rewritten 3rd set still reads "Set 3" (#691).
+    ordinals = set_ordinals(all_sets)
     readonly_by_slot = defaultdict(list)
     for s in sorted(all_sets, key=lambda row: (row.set_number, row.pk)):
         if s.pk not in hidden_pks and s.anchor_slot_id is not None:
@@ -2093,7 +2082,7 @@ def athlete_session(session, athlete):
                 {
                     "id": s.pk,
                     "set_number": s.set_number,
-                    "label": _logged_set_label(s, plan_unit),
+                    "label": _logged_set_label(s, plan_unit, ordinals[s.pk]),
                 }
             )
     return {

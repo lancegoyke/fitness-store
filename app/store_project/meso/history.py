@@ -165,7 +165,7 @@ def serialize_plan_snapshot(plan):
 
 
 def _cells_athlete_data_points_at(pks):
-    """The subset of ``pks`` some ``LoggedSet`` still names, by any of its three pointers AT A CELL.
+    """The subset of ``pks`` some ``LoggedSet`` still names, by either of its two pointers AT A CELL.
 
     Shared by both halves of ``restore_plan_snapshot``'s "never touch a cell
     athlete data points at" rule — the stray-cell purge at the end of this
@@ -173,24 +173,23 @@ def _cells_athlete_data_points_at(pks):
     upsert loop above it (#583). A cell counts as athlete data here when some
     ``LoggedSet`` still names it through ``prescription`` (``logged_sets`` —
     the line-0 cell every logged set is filed under, whatever its origin,
-    #577), ``source_line`` (``parsed_sets`` — the sub-line a typed set was
-    parsed from, 5a), or ``reclaimed_line`` (``reclaimed_sets`` — #541's hint
-    linking a structured copy, left by the retired Set-row logger, back to the sub-line it replaced).
+    #577), or ``source_line`` (``parsed_sets`` — the sub-line a typed set was
+    parsed from, 5a).
     ``athlete_authored`` is deliberately NOT folded in here: it is a plain
     field on the cell itself, cheaper for each caller to read directly off an
     instance it already has (or to re-check separately, alongside this call,
-    under whatever lock that caller holds) than to add as a fourth branch to
+    under whatever lock that caller holds) than to add as a third branch to
     a query that only exists to chase foreign keys.
 
-    Built as three ``Exists`` subqueries OR'd together, deliberately **not**
-    ``.filter(Q(parsed_sets__isnull=False) | Q(reclaimed_sets__isnull=False)
-    | Q(logged_sets__isnull=False))``. That form is a three-way LEFT OUTER
+    Built as two ``Exists`` subqueries OR'd together, deliberately **not**
+    ``.filter(Q(parsed_sets__isnull=False) | Q(logged_sets__isnull=False))``.
+    That form is a two-way LEFT OUTER
     JOIN from ``Prescription`` out to ``LoggedSet``, and a cell with, say, two
     logged sets pointing at it joins to two rows and comes back twice — every
     caller here immediately wraps the result in ``set()``, so the duplicate
     row is harmless in practice, but it is still the wrong shape of query to
     reach for: it does real, avoidable multi-row work (and gets worse the more
-    of the three FKs happen to point at the same cell at once) to answer what
+    of the two FKs happen to point at the same cell at once) to answer what
     is fundamentally a yes/no question per row. An ``Exists`` correlated
     subquery answers that question directly, one clause per pointer, in a
     single ``WHERE``, with no join and nothing to de-duplicate.
@@ -203,7 +202,6 @@ def _cells_athlete_data_points_at(pks):
         .filter(
             Exists(sets.filter(prescription=OuterRef("pk")))
             | Exists(sets.filter(source_line=OuterRef("pk")))
-            | Exists(sets.filter(reclaimed_line=OuterRef("pk")))
         )
         .values_list("pk", flat=True)
     )
@@ -415,7 +413,7 @@ def restore_plan_snapshot(plan, snapshot):
     # anyway. (See the branch that spares them for why taking ``FOR UPDATE``
     # on one would deadlock against ``cell_line_write``.) The purge keeps a
     # third, redundant re-read of the flag; this guard drops it, because the
-    # filter has already answered it. Only the three ``LoggedSet`` pointers
+    # filter has already answered it. Only the two ``LoggedSet`` pointers
     # are re-read under the lock.
     #
     # What that lock does NOT do here: the occupancy read below is unlocked,
@@ -619,7 +617,7 @@ def restore_plan_snapshot(plan, snapshot):
     # the snapshot never accounted for.
     #
     # ``parsed_sets`` joins the same exclusion for a reason the flag misses: a
-    # RECLAIMED sub-line is ``athlete_authored=False``, so undoing back past its
+    # coach-rewritten sub-line is ``athlete_authored=False``, so undoing back past its
     # creation hard-deleted it — and ``LoggedSet.source_line`` is SET_NULL, so
     # the athlete's derived set survived as a source-LESS row. That strips the
     # protection the link carries (the structured logger's replace-delete — since
@@ -629,13 +627,8 @@ def restore_plan_snapshot(plan, snapshot):
     # already refuses to touch athlete data; a cell some athlete data POINTS AT
     # is the same promise one join away.
     #
-    # ``reclaimed_sets`` (#541) is that same promise for a THIRD kind of
-    # pointer: a structured copy the retired Set-row logger left behind still names this
-    # cell via ``reclaimed_line``, with no ``source_line`` of its own — a cell
-    # a structured copy still answers to is athlete data pointing at it too.
-    #
     # ``logged_sets`` (#577) closes the set: ``LoggedSet.prescription`` is the
-    # MOST direct of the three pointers — the line-0 cell every logged set is
+    # MOST direct of the two pointers — the line-0 cell every logged set is
     # filed under, whatever its origin — and was the one left out.
     #
     # #578 C1 changed what's actually at stake here, so the claim this
@@ -651,16 +644,14 @@ def restore_plan_snapshot(plan, snapshot):
     #
     # The guard stays in the OR anyway. Sparing has a real, visible cost (see
     # below), and it is accepted — worth paying rather than free — and the
-    # OTHER two pointers still carry protection the TYPED path actually
+    # OTHER pointer still carries protection the TYPED path actually
     # depends on: losing ``source_line`` breaks how a re-blur of a sub-line
     # finds and replaces its own derived row rather than minting a twin
-    # (a *present* ``source_line`` is what the lookup keys on), and a missing
-    # ``reclaimed_line`` loses #541's hint linking a structured (legacy)
-    # copy back to the sub-line it replaced. Losing either is a live bug in
-    # the write path itself, wholly apart from whether the set still counts —
-    # so this clause is defense in depth for ``logged_sets`` now, not the
-    # load-bearing one it was before C1, but there is no reason to narrow the
-    # OR just because one of its three reasons got weaker.
+    # (a *present* ``source_line`` is what the lookup keys on). That is a live
+    # bug in the write path itself, wholly apart from whether the set still
+    # counts — so this clause is defense in depth for ``logged_sets`` now, not
+    # the load-bearing one it was before C1, but there is no reason to narrow
+    # the OR just because one of its two reasons got weaker.
     #
     # Sparing has a visible cost, and it is accepted: a spared cell keeps the
     # text (and ``skipped``) it had when the snapshot was taken WITHOUT it, so
@@ -674,16 +665,14 @@ def restore_plan_snapshot(plan, snapshot):
     # #584 — qualify under a ROW LOCK, then re-check what's spared AFTER the
     # lock is held, not before. ``QuerySet.delete()`` is SELECT-then-DELETE
     # with no lock of its own: Django's collector runs the qualifying SELECT
-    # (the three ``exclude(..._isnull=False)`` clauses above, as NOT EXISTS —
+    # (the two ``exclude(..._isnull=False)`` clauses above, as NOT EXISTS —
     # see the docstring paragraph above this one) and only then issues
     # ``DELETE ... WHERE id IN (...)``. A ``LoggedSet`` INSERTed and COMMITted
     # in that gap — after the qualifying SELECT, before the DELETE — is
-    # invisible to all three clauses, and the cell is deleted out from under
+    # invisible to both clauses, and the cell is deleted out from under
     # it anyway. For ``prescription``/``source_line`` (real FKs) that surfaces
     # as a COMMIT-time deferred constraint violation — a 500 on the coach's
-    # undo, rolling back the whole attempt; for ``reclaimed_line``
-    # (``db_constraint=False``, #541, deliberately no DB-level FK) nothing
-    # stops it at all, and the hint is left silently dangling.
+    # undo, rolling back the whole attempt.
     #
     # ``select_for_update(of=("self",))``. ``of`` is required because this
     # queryset JOINS through ``week__mesocycle__plan`` to scope itself to the
@@ -736,10 +725,10 @@ def restore_plan_snapshot(plan, snapshot):
     # (the collision guard above, then this purge, last). What DID change is
     # the SIZE of the locked set, and it is worth being exact rather than
     # claiming nothing moved: the ``.delete()`` this replaces carried its
-    # three spare clauses inside its own qualifying SELECT, so it only ever
+    # two spare clauses inside its own qualifying SELECT, so it only ever
     # locked the DOOMED rows, whereas this locks every snapshot-absent,
     # non-athlete-authored stray — including ones a ``LoggedSet`` names, which
-    # are then spared. Those extra rows can include a reclaimed sub-line an
+    # are then spared. Those extra rows can include a coach-rewritten sub-line an
     # athlete is actively blurring.
     #
     # THE CYCLE THAT WIDENING USED TO WIDEN IS CLOSED (#562). This paragraph

@@ -496,6 +496,30 @@ def serialize_new_record(record):
     }
 
 
+def set_ordinals(logged_sets):
+    """``{pk: n}`` — each set's place (1..n) among its exercise's sets in this list.
+
+    A typed set's stored ``set_number`` is its cell LINE number, and a coach
+    sub-line (an RPE cue on line 1) offsets it, so "missed 3 reps on set 4"
+    named the athlete's 3rd set (#691). Every surface that shows "set N" to a
+    person numbers the sets this way instead: grouped by ``anchor_slot_id``
+    and ordered by ``(set_number, pk)``. Display only — the stored
+    ``set_number`` is unchanged, and so is every write path. Lives here, not
+    in ``presenters``, because ``presenters`` imports this module.
+    """
+    by_slot = defaultdict(list)
+    for s in logged_sets:
+        slot_id = s.anchor_slot_id
+        if slot_id is not None:
+            by_slot[slot_id].append(s)
+    ordinals = {}
+    for group in by_slot.values():
+        ranked = sorted(group, key=lambda s: (s.set_number, s.pk or 0))
+        for n, s in enumerate(ranked, start=1):
+            ordinals[s.pk] = n
+    return ordinals
+
+
 def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
     """A compact summary of the athlete's most recent logged sessions on this plan.
 
@@ -527,6 +551,10 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
     )
     summary = []
     for log in logs:
+        # "set" is the ordinal among the log's sets for that exercise, not the
+        # stored line-numbered ``set_number`` (#691) — computed before the cap.
+        all_sets = list(log.sets.all())
+        ordinals = set_ordinals(all_sets)
         summary.append(
             {
                 "date": log.date.isoformat() if log.date else None,
@@ -537,12 +565,12 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
                         "exercise": (
                             s.anchor_slot.name if s.anchor_slot is not None else ""
                         ),
-                        "set": s.set_number,
+                        "set": ordinals.get(s.pk, s.set_number),
                         "reps": s.reps,
                         "load": s.load,
                         "rpe": s.rpe,
                     }
-                    for s in list(log.sets.all())[:sets_cap]
+                    for s in all_sets[:sets_cap]
                 ],
             }
         )
@@ -1011,9 +1039,8 @@ def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
     stripped; only the text fallback (no LoggedSet) lets a suffix decide the
     unit, else the plan's.
 
-    A set stands behind a line by the same rule as ``models.display_line_id``
-    (its ``source_line``, else the ``reclaimed_line`` the retired Set-row logger left,
-    #665), so the line needs ``parsed_sets`` and ``reclaimed_sets`` prefetched.
+    A set stands behind a line through its ``source_line``, so the line needs
+    ``parsed_sets`` prefetched (#665).
     ``log_id`` is the cell session's newest ``SessionLog`` (see
     ``models.newest_session_log_ids``): sets from any older log are ignored.
     With no numeric top set, a "BW" set is the summary.
@@ -1026,11 +1053,7 @@ def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
     rpes = []  # every logged set's numeric RPE
     missed = 0
     for lc in logged:
-        behind = [
-            s
-            for s in (*lc.parsed_sets.all(), *lc.reclaimed_sets.all())
-            if models.display_line_id(s) == lc.pk
-        ]
+        behind = list(lc.parsed_sets.all())
         candidates = []  # (load text, unit, rpe)
         for s in behind:
             if s.session_log_id != log_id:
@@ -1150,7 +1173,7 @@ def serialize_mesocycle_grid(mesocycle):
             exercise_slot_id__in=exercise_slot_ids, week_id__in=week_ids
         )
         .select_related("exercise_slot")
-        .prefetch_related("parsed_sets", "reclaimed_sets")
+        .prefetch_related("parsed_sets")
         .order_by("line")
     ):
         if cell.line == 0:
