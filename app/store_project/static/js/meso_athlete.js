@@ -158,6 +158,7 @@ function createLogger() {
     // Sets logged vs prescribed across the session, as the server counts them
     // (`applyProgress`): shown by `progressLabel`.
     progress: { logged: 0, prescribed: 0 },
+    _progressAsOf: 0, // `as_of` of the last progress applied (see `applyProgress`)
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
     _cellSaves: {}, // per-cell promise chain, so blurs reach the server in order
     _blurSaves: 0, // line saves started by a blur, for `settleLines`
@@ -311,6 +312,13 @@ function createLogger() {
     // The server's count of sets logged vs prescribed (`progress` in the page
     // data, and in every cell-write and log response). Anything that isn't two
     // non-negative integers leaves the current count alone.
+    //
+    // Saves of different lines can be in flight at once, so their responses
+    // can land out of order. The server stamps each count with `as_of`
+    // (microseconds since the epoch, taken just before its reads); a larger
+    // one reflects at least every commit a smaller one saw, so a payload older
+    // than the last one applied is ignored. A payload without `as_of` (an
+    // older server mid-deploy) applies as it always did.
     applyProgress(p) {
       if (
         p &&
@@ -320,7 +328,10 @@ function createLogger() {
         p.logged >= 0 &&
         p.prescribed >= 0
       ) {
+        const stamped = Number.isFinite(p.as_of);
+        if (stamped && p.as_of < this._progressAsOf) return;
         this.progress = { logged: p.logged, prescribed: p.prescribed };
+        if (stamped) this._progressAsOf = p.as_of;
       }
     },
 
@@ -783,25 +794,28 @@ function createLogger() {
         this.error = true;
         return "rejected";
       }
-      this.dropEntry(item);
-      if (item.url !== this.logUrl) return "saved";
+      // Read the body BEFORE taking the entry out: a 200 we can't read is not
+      // proof the write landed (a proxy can answer 200 with HTML or `{}`), and
+      // dropping the entry first would leave nothing to retry it. Keep it, for
+      // this session's log and another's alike.
       let data;
       try {
         data = await res.json();
+        if (!data || !data.log || typeof data.log.status !== "string") {
+          throw new Error("unexpected reply shape");
+        }
       } catch (e) {
-        return "mine"; // synced server-side regardless; UI reconciles on next load
+        return "kept";
       }
+      this.dropEntry(item);
+      if (item.url !== this.logUrl) return "saved";
       // A pass can already be sending this session's older log when finish()
       // starts, so its reply can land mid-finish — checked after the body is
       // read, which can itself outlast the tap. finish's own reply is the one
       // that reports, so leave the reconciling to it.
       if (this.saving) return "mine";
-      try {
-        this.status = data.log.status;
-        this.applyProgress(data.progress);
-      } catch (e) {
-        /* a reply of an unexpected shape: synced server-side regardless */
-      }
+      this.status = data.log.status;
+      this.applyProgress(data.progress);
       return "mine";
     },
 
@@ -1113,8 +1127,8 @@ function createLogger() {
       }
       // The count is session-wide, not this line's, so it applies before the
       // stale-text checks below. Responses from two different cells can land
-      // out of order (rare: it needs overlapping blurs); Finish's response
-      // re-syncs the count.
+      // out of order; that is safe because `applyProgress` drops any payload
+      // whose `as_of` is older than the one already shown.
       this.applyProgress(data.progress);
       // A replay of text another tab queued: if this tab never touched the
       // line, show what the server now holds, or a later blur here would post

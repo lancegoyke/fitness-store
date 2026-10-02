@@ -54,6 +54,11 @@ def type_sets(client, s, n):
         assert resp.status_code == 200
 
 
+def counts(progress):
+    """A progress payload without its ``as_of`` read stamp."""
+    return {k: v for k, v in progress.items() if k != "as_of"}
+
+
 def events(name):
     return list(Event.objects.filter(name=name).order_by("id"))
 
@@ -107,7 +112,10 @@ class TestPage:
         resp = get_page(client, s.session)
 
         assert "3 of 4 sets logged" in resp.content.decode()
-        assert resp.context["log_data"]["progress"] == {"logged": 3, "prescribed": 4}
+        assert counts(resp.context["log_data"]["progress"]) == {
+            "logged": 3,
+            "prescribed": 4,
+        }
 
     def test_log_data_carries_pad_lines(self, client):
         s = seed_four_sets()
@@ -134,7 +142,7 @@ class TestFinish:
         assert resp.status_code == 200
         body = resp.json()
         assert body["ok"] is True
-        assert body["progress"] == {"logged": 3, "prescribed": 4}
+        assert counts(body["progress"]) == {"logged": 3, "prescribed": 4}
         assert "new_records" not in body
         log = the_log(s.session, s.athlete)
         assert log.status == SessionLog.Status.DONE
@@ -368,8 +376,11 @@ class TestCellWriteAndPwa:
         first = write_cell(client, s.session, s.squat, 1, "100 x 5")
         second = write_cell(client, s.session, s.squat, 2, "100 x 5")
 
-        assert first.json()["progress"] == {"logged": 1, "prescribed": 4}
-        assert second.json()["progress"] == {"logged": 2, "prescribed": 4}
+        assert counts(first.json()["progress"]) == {"logged": 1, "prescribed": 4}
+        assert counts(second.json()["progress"]) == {"logged": 2, "prescribed": 4}
+        # A later read carries a later as_of, so the client can drop a
+        # response that lands after a newer one (two lines' saves overlap).
+        assert second.json()["progress"]["as_of"] > first.json()["progress"]["as_of"]
 
     def test_non_set_text_reports_unchanged_progress(self, client):
         s = seed_four_sets()
@@ -381,7 +392,7 @@ class TestCellWriteAndPwa:
             {"exercise_id": s.squat.pk, "line": 1, "text": "felt heavy"},
         )
 
-        assert resp.json()["progress"] == {"logged": 0, "prescribed": 4}
+        assert counts(resp.json()["progress"]) == {"logged": 0, "prescribed": 4}
 
     def test_pwa_cache_version_bumped(self):
         assert views.PWA_CACHE_VERSION == "meso-pwa-v12"

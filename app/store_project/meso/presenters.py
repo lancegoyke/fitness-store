@@ -12,6 +12,7 @@ until those surfaces grow their own slices.
 import datetime
 import math
 import statistics
+import time
 from collections import defaultdict
 
 from django.db.models import CharField
@@ -1832,12 +1833,26 @@ def _sets_by_anchor_slot(sets):
     return grouped
 
 
-def athlete_set_progress(session, athlete):
-    """``set_progress`` for the athlete's newest log of ``session`` (any status).
+def _progress_clock():
+    """Microseconds since the epoch, taken just before a progress count's reads.
 
+    A count whose reads began later reflects every commit an earlier one saw
+    (each READ COMMITTED query sees what had committed when it ran), so the
+    client keeps the count with the newest ``as_of`` and ignores an older one
+    that arrives late: the saves of two different lines can be in flight at
+    once and their responses can land in either order.
+    """
+    return time.time_ns() // 1000
+
+
+def athlete_set_progress(session, athlete):
+    """``set_progress`` for the athlete's newest log of ``session``, plus ``as_of``.
+
+    The newest log of any status; ``as_of`` is ``_progress_clock``'s read stamp.
     What both write endpoints report back so the header can resync with the
     database after a save.
     """
+    as_of = _progress_clock()
     log = (
         newest_session_logs(session, athlete)
         .prefetch_related(
@@ -1846,7 +1861,8 @@ def athlete_set_progress(session, athlete):
         .first()
     )
     sets = log.sets.all() if log else []
-    return set_progress(session.trainable_cells(), _sets_by_anchor_slot(sets))
+    progress = set_progress(session.trainable_cells(), _sets_by_anchor_slot(sets))
+    return {**progress, "as_of": as_of}
 
 
 def _logged_set_label(logged_set, plan_unit):
@@ -1908,6 +1924,7 @@ def athlete_session(session, athlete):
     # Without it, this read and the blur response's
     # (``views._cell_warn_reason_or_blank``) could each pick a different "newest"
     # log for a tied pair and disagree about what backs a line.
+    progress_as_of = _progress_clock()
     log = (
         newest_session_logs(session, athlete)
         .prefetch_related(
@@ -2089,6 +2106,7 @@ def athlete_session(session, athlete):
         # a bar load in this unit (S2 Phase 2b).
         "unit": plan_unit,
         "progress": progress,
+        "progress_as_of": progress_as_of,
         "progress_label": progress_label(progress["logged"], progress["prescribed"]),
         "notes": log.notes if log else "",
         "log_url": reverse("meso:athlete_log_session", kwargs={"pk": session.pk}),
@@ -2151,7 +2169,9 @@ def athlete_log_payload(session_ctx):
         "status": session_ctx["status"],
         # The unit lets the %1RM helper render a suggested bar load (S2 Phase 2b).
         "unit": session_ctx["unit"],
-        "progress": session_ctx["progress"],
+        # The count plus when it was read, so a later line save's response
+        # (newer ``as_of``) wins over this first paint and never the reverse.
+        "progress": {**session_ctx["progress"], "as_of": session_ctx["progress_as_of"]},
         "exercises": [
             {
                 "id": e["id"],

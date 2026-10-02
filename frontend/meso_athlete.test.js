@@ -123,6 +123,54 @@ describe("progress (applyProgress / progressLabel)", () => {
     expect(c.progress).toEqual({ logged: 2, prescribed: 4 });
   });
 
+  it("ignores a progress payload older than the one already applied", () => {
+    const c = makeLogger();
+    c.applyProgress({ logged: 2, prescribed: 2, as_of: 200 });
+    c.applyProgress({ logged: 1, prescribed: 2, as_of: 100 });
+    expect(c.progressLabel).toBe("2 of 2 sets logged");
+  });
+
+  it("applies a payload with an equal as_of", () => {
+    const c = makeLogger();
+    c.applyProgress({ logged: 1, prescribed: 2, as_of: 100 });
+    c.applyProgress({ logged: 2, prescribed: 2, as_of: 100 });
+    expect(c.progressLabel).toBe("2 of 2 sets logged");
+  });
+
+  it("applies a payload with no as_of (an older server), and doesn't reset the stamp", () => {
+    const c = makeLogger();
+    c.applyProgress({ logged: 2, prescribed: 2, as_of: 200 });
+    c.applyProgress({ logged: 1, prescribed: 3 });
+    expect(c.progressLabel).toBe("1 of 3 sets logged");
+    c.applyProgress({ logged: 0, prescribed: 3, as_of: 150 });
+    expect(c.progressLabel).toBe("1 of 3 sets logged"); // 150 < 200 still stale
+  });
+
+  it("ignores a stale cell response after a first paint with a newer as_of", async () => {
+    const c = makeLogger({ cellUrl: "/meso/api/me/session/42/cell/" });
+    c.exercises = [{ id: 1, sub_lines: [{ line: 1, text: "225 x 5", savedText: "" }] }];
+    c.applyProgress({ logged: 2, prescribed: 4, as_of: 150 }); // as init() does
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: { ok: true, cell: { warn: false }, progress: { logged: 1, prescribed: 4, as_of: 120 } },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.progressLabel).toBe("2 of 4 sets logged");
+  });
+
+  it("applies a cell response's progress to the label", async () => {
+    const c = makeLogger({ cellUrl: "/meso/api/me/session/42/cell/" });
+    c.exercises = [{ id: 1, sub_lines: [{ line: 1, text: "225 x 5", savedText: "" }] }];
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: { ok: true, cell: { warn: false }, progress: { logged: 1, prescribed: 4, as_of: 300 } },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.progressLabel).toBe("1 of 4 sets logged");
+  });
+
   it("init() reads progress from the injected page data", () => {
     const el = document.createElement("script");
     el.id = "meso-log-data";
@@ -441,6 +489,41 @@ describe("flushQueue", () => {
     expect(c.readQueue()).toHaveLength(0);
     expect(c.status).toBe("done");
     expect(c.progressLabel).toBe("1 of 3 sets logged");
+  });
+
+  // A 200 we can't read is not proof the write landed, so the entry stays.
+  it.each([
+    ["an unparseable body", { jsonError: true }],
+    ["a JSON body with no log", { body: {} }],
+  ])("keeps this session's log queued when a flushed 200 has %s", async (_n, reply) => {
+    const c = makeLogger();
+    c.enqueue({ status: "done" });
+    c.queued = true;
+    global.fetch = vi.fn().mockResolvedValue(res(reply));
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.status).toBe("pending");
+  });
+
+  it.each([
+    ["an unparseable body", { jsonError: true }],
+    ["a JSON body with no log", { body: {} }],
+  ])("keeps ANOTHER session's log queued when its 200 has %s", async (_n, reply) => {
+    const c = makeLogger();
+    c.writeQueue([c.stamp({ url: "/meso/api/me/session/99/log/", body: { status: "done" } })]);
+    global.fetch = vi.fn().mockResolvedValue(res(reply));
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(1);
+  });
+
+  it("drops another session's log on a valid 200, leaving this page's state alone", async () => {
+    const c = makeLogger();
+    c.writeQueue([c.stamp({ url: "/meso/api/me/session/99/log/", body: { status: "done" } })]);
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.status).toBe("pending");
+    expect(c.progressLabel).toBe("0 sets logged");
   });
 
   it("keeps the item queued when still offline", async () => {

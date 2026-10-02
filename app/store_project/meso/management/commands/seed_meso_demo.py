@@ -1282,6 +1282,10 @@ def log_typed_sets(log, items):
     already holds that number for the prescription, in which case it takes the
     next free one, as the typed path's ``_first_free_set_number`` does.
 
+    Call it on a log that holds no sets for these cells yet — every caller
+    gates on ``log.sets.exists()`` (or deletes them first). Unlike a re-blur,
+    a second call does not replace the rows the first one wrote; it appends.
+
     Query cost is constant in the number of items (one read of the existing
     sub-lines, one bulk write each for new cells / reused cells / sets), so the
     history loop stays cheap. Returns the created ``LoggedSet`` list.
