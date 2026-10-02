@@ -304,6 +304,10 @@ def _coach_latest_logged_session(user):
         SessionLog.objects.filter(
             session__week__mesocycle__plan__in=Plan.objects.for_coach(user),
             status=SessionLog.Status.DONE,
+            # Plan-shaped (the results screen scores the session against the
+            # plan), so a soft-deleted session or week can't be the target (#575).
+            session__deleted_at__isnull=True,
+            session__week__deleted_at__isnull=True,
         )
         .select_related("session")
         .order_by("-date", "-created_at")
@@ -3275,19 +3279,20 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
         # through `source_line` while their `SessionLog`
         # stays on the day they were actually logged.
         #
-        # Deliberately NOT pinned to one log the way `backing_sets` above is
-        # (`-created_at, -pk`, #568): a row stranded on a split/older log, or
-        # on a soft-deleted day, still counts toward the athlete's live 1RM
-        # and PRs — neither `one_rm.derive_one_rm_values` nor
-        # `personal_records._live_logged_sets` filters by log recency or by
-        # `session__deleted_at` — so it is still a genuine double-count risk
-        # and a repost of this line would still duplicate it. A reviewer
-        # proposed adding `session_log__session__deleted_at__isnull=True`
-        # here; that would be WRONG for exactly this reason, so don't.
-        elsewhere_sets = LoggedSet.objects.filter(
-            source_line=cell,
-            session_log__athlete=athlete,
-        ).exclude(session_log__session=session)
+        # Reads the selector, `LoggedSet.objects.performance_history` (#575),
+        # which is exactly what 1RM and PRs count: only the newest log of each
+        # (session, athlete) pair, and a soft-deleted day still counts. So a
+        # row stranded on an older log no longer suppresses the repost (it
+        # counts nowhere, so re-posting duplicates nothing), while a row on a
+        # soft-deleted day still does (it still counts, so a repost would
+        # double it). This site, `presenters.athlete_session`'s
+        # `elsewhere_by_line` and the selector must move together; do NOT add
+        # a `session_log__session__deleted_at` filter here.
+        elsewhere_sets = (
+            LoggedSet.objects.performance_history(athlete)
+            .filter(source_line=cell)
+            .exclude(session_log__session=session)
+        )
         return (
             sub_line_warn_reason(
                 cell,

@@ -304,6 +304,10 @@ def _profile_results(link):
             session__week__mesocycle__plan__relationship=link,
             athlete=link.athlete,
             status=SessionLog.Status.DONE,
+            # Plan-shaped: it scores the session against the plan, so a
+            # soft-deleted session or week has nothing to score (#575).
+            session__deleted_at__isnull=True,
+            session__week__deleted_at__isnull=True,
         )
         .exclude(session__week__mesocycle__plan__status=Plan.Status.ARCHIVED)
         .select_related("session__week__mesocycle__plan__relationship")
@@ -1994,11 +1998,14 @@ def athlete_session(session, athlete):
     ]
     elsewhere_by_line = defaultdict(list)
     if line_cell_pks:
+        # The selector, so this reads exactly what 1RM/PRs count (#575): a row
+        # stranded on an older log counts nowhere, so it can't suppress a
+        # repost, while one on a soft-deleted day still counts and does. Moves
+        # with `views._cell_warn_reason_or_blank`'s `elsewhere_sets`.
         for row in (
-            LoggedSet.objects.filter(
-                source_line_id__in=line_cell_pks,
-                session_log__athlete=athlete,
-            ).exclude(session_log__session_id=session.pk)
+            LoggedSet.objects.performance_history(athlete)
+            .filter(source_line_id__in=line_cell_pks)
+            .exclude(session_log__session_id=session.pk)
             # No `select_related` (F2): every row here only ever reaches
             # `line_shows_a_set` (via `sub_line_warn_reason`), which reads
             # `source_line_id` and re-parses the CELL's own text — never a
@@ -2606,6 +2613,8 @@ def _coach_activity_sources(since, until):
 
 def _athlete_activity_sources(since, until):
     """User-id subqueries for every active-athlete source in ``[since, until]`` (A1-A2)."""
+    # Activity timing, not counting: deliberately not `performance_history` —
+    # a stranded log's `created_at` is still a real write.
     logged_sets = (
         SessionLog.objects.filter(
             created_at__gte=since, created_at__lte=until, sets__isnull=False

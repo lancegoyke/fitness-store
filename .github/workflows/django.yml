@@ -223,6 +223,8 @@ jobs:
       # clear/load serialization, and creator paths.
       # #673/#674/#679 (sandbox cap, reap-vs-load, decline-vs-activate) are the
       # row/advisory-lock serialization class again.
+      # test_performance_history is the correlated newest-log subquery (#575):
+      # the newest-per-pair rule must hold on Postgres, not just SQLite.
       # Add a new Postgres-only file here in the same commit that creates it.
       - name: Run the PostgreSQL-only tests
         run: |
@@ -244,4 +246,5 @@ jobs:
             app/store_project/meso/tests/test_sandbox_cap_postgres.py \
             app/store_project/meso/tests/test_sandbox_reap_race_postgres.py \
             app/store_project/meso/tests/test_decline_race_postgres.py \
-            app/store_project/meso/tests/test_migration_0060_drop_reclaimed_column.py
+            app/store_project/meso/tests/test_migration_0060_drop_reclaimed_column.py \
+            app/store_project/meso/tests/test_performance_history.py

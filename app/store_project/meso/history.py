@@ -198,6 +198,9 @@ def _cells_athlete_data_points_at(pks):
     """
     if not pks:
         return set()
+    # Deliberately every LoggedSet, NOT `performance_history` (#575): this asks
+    # whether any row EXISTS, so a stranded older-log row or one on a deleted
+    # day must still pin its cell through the purge, whatever it counts for.
     sets = models.LoggedSet.objects
     return set(
         models.Prescription.objects.filter(pk__in=pks)

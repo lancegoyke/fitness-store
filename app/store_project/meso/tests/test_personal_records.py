@@ -257,9 +257,11 @@ class TestNewRecordsIn:
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
         )
+        # An earlier performance on ANOTHER day: two logs for one (session,
+        # athlete) pair would make the older one stranded (#575) and uncounted.
         log_session(
             athlete,
-            session,
+            day(session.week, day_number=2, name="Upper"),
             [(squat, 1, "1", "150", "9")],
             date=datetime.date(2026, 1, 1),
         )
@@ -279,9 +281,11 @@ class TestNewRecordsIn:
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
         )
+        # An earlier performance on ANOTHER day: two logs for one (session,
+        # athlete) pair would make the older one stranded (#575) and uncounted.
         log_session(
             athlete,
-            session,
+            day(session.week, day_number=2, name="Upper"),
             [(squat, 1, "1", "150", "9")],
             date=datetime.date(2026, 1, 1),
         )
@@ -298,9 +302,11 @@ class TestNewRecordsIn:
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
         )
+        # An earlier performance on ANOTHER day: two logs for one (session,
+        # athlete) pair would make the older one stranded (#575) and uncounted.
         log_session(
             athlete,
-            session,
+            day(session.week, day_number=2, name="Upper"),
             [(squat, 1, "1", "150", "9")],
             date=datetime.date(2026, 1, 1),
         )

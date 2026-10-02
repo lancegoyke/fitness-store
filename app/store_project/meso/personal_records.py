@@ -112,12 +112,14 @@ def _live_logged_sets(athlete, *, unit):
     set whose ``prescription`` went NULL (a hard-deleted line-0 cell,
     #577/#581) but whose ``exercise_slot`` survives, so a stray hard delete
     no longer silently detaches an otherwise-live set from this scan.
+
+    Reads ``LoggedSet.objects.performance_history`` (#575): only the newest log
+    of each ``(session, athlete)`` pair counts, whatever its status, and a
+    set on a soft-deleted day still does.
     """
     return (
-        models.LoggedSet.objects.filter(
-            session_log__athlete=athlete,
-            session_log__session__week__mesocycle__plan__unit=unit,
-        )
+        models.LoggedSet.objects.performance_history(athlete)
+        .filter(session_log__session__week__mesocycle__plan__unit=unit)
         .anchored()
         .select_related("session_log")
     )

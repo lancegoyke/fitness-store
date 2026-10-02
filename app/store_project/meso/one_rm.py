@@ -88,10 +88,13 @@ def derive_one_rm_values(athlete, *, keys=None, unit=None):
     # whose `prescription` went NULL (a hard-deleted line-0 cell, #577/#581)
     # but whose `exercise_slot` survives — the same identity, resolved
     # through the durable pointer instead of the one that can go stale.
-    logged_sets = models.LoggedSet.objects.filter(
-        session_log__athlete=athlete,
-        session_log__status=models.SessionLog.Status.DONE,
-    ).anchored()
+    # #575: the athlete's logged sets are `LoggedSet.objects.performance_history`
+    # (newest log per pair, deleted days included); DONE is this read's own filter.
+    logged_sets = (
+        models.LoggedSet.objects.performance_history(athlete)
+        .filter(session_log__status=models.SessionLog.Status.DONE)
+        .anchored()
+    )
     if unit is not None:
         logged_sets = logged_sets.filter(
             session_log__session__week__mesocycle__plan__unit=unit
