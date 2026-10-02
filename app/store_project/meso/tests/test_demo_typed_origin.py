@@ -55,6 +55,22 @@ def _fingerprint():
     )
 
 
+def _coach_sub_lines():
+    """Every non-blank coach-authored sub-line, by natural key (pks differ per seed)."""
+    return set(
+        Prescription.objects.filter(line__gte=1, athlete_authored=False)
+        .exclude(text="")
+        .values_list(
+            "exercise_slot__session_slot__mesocycle__plan__title",
+            "week__mesocycle__name",
+            "week__index",
+            "exercise_slot__name",
+            "line",
+            "text",
+        )
+    )
+
+
 def test_cell_line_cap_mirrors_views():
     assert seed_meso_demo.MAX_CELL_LINE == views.MAX_CELL_LINE
 
@@ -111,28 +127,26 @@ class TestSeedCommand:
         _assert_typed_shape(sets)
         assert not LoggedSet.objects.filter(source_line__isnull=True).exists()
 
-    def test_coach_authored_sub_line_is_untouched(self):
+    def test_coach_authored_sub_line_is_untouched(self, monkeypatch):
+        # The baseline is what the generator writes with NO logging at all:
+        # every coach sub-line (the RPE cue on line 1, any hand-authored cue).
+        # Snapshotting after a real seed instead would be blind to the bug —
+        # a cue the logging overwrote is athlete-authored by then, so it
+        # silently drops out of the "coach lines" being compared.
+        monkeypatch.setattr(seed_meso_demo, "log_typed_sets", lambda log, items: [])
         self._seed()
-        # The generator's RPE cue (line 1) sits under logged cells; athlete
-        # lines must route around it, never over it.
-        cues = Prescription.objects.filter(line=1, athlete_authored=False).exclude(
-            text=""
-        )
-        cue_ids = set(
-            cues.filter(
-                exercise_slot__in=LoggedSet.objects.values("exercise_slot")
-            ).values_list("pk", flat=True)
-        )
-        assert cue_ids
-        snapshot = dict(
-            Prescription.objects.filter(pk__in=cue_ids).values_list("pk", "text")
-        )
-        call_command("seed_meso_demo", coach_email=COACH_EMAIL)
-        for cue in Prescription.objects.filter(pk__in=cue_ids):
-            assert cue.text == snapshot[cue.pk]
-            assert cue.athlete_authored is False
-        # ...and no logged set sits on a coach-authored cell.
-        assert not LoggedSet.objects.filter(source_line__pk__in=cue_ids).exists()
+        baseline = _coach_sub_lines()
+        assert baseline
+        call_command("seed_meso_demo", coach_email=COACH_EMAIL, delete=True)
+        monkeypatch.undo()
+
+        self._seed()
+
+        # Athlete lines route around every coach line, never over it.
+        assert _coach_sub_lines() == baseline
+        assert not LoggedSet.objects.filter(
+            source_line__athlete_authored=False
+        ).exists()
 
     def test_rerun_adds_nothing(self):
         self._seed()
