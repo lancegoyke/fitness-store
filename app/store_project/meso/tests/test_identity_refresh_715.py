@@ -138,3 +138,27 @@ def test_a_template_plan_has_no_athlete_and_queues_nothing(
     with django_capture_on_commit_callbacks(execute=False) as callbacks:
         meso_one_rm.refresh_after_identity_change(template, [slot])
     assert callbacks == []
+
+
+def test_undo_back_to_a_catalog_link_matches_its_uuid_history(
+    client, django_capture_on_commit_callbacks
+):
+    """A snapshot restores ``exercise_id`` as a string; it must still match history."""
+    s = seed_708()
+    logged_week1(client, s)
+    ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+    with django_capture_on_commit_callbacks(execute=True):
+        coach_patch(
+            client, s, s.row1_w1, {"name": "Back Squat", "exercise_id": str(ex.pk)}
+        )
+        coach_patch(client, s, s.row1_w1, {"name": "Front Squat"})  # unlinks
+    AthleteOneRm.objects.all().delete()
+    client.force_login(s.coach)
+    with django_capture_on_commit_callbacks(execute=True):
+        resp = client.post(
+            reverse("meso:api_plan_undo", kwargs={"plan_id": s.plan.pk}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200, resp.content
+    got = shown(s, s.row1_w1)
+    assert got is not None and got[0] == pytest.approx(BACK, abs=0.05), got

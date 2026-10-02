@@ -31,6 +31,7 @@ is what eventually promotes a live best into this module's confirmed record.
 
 import logging
 import math
+import uuid
 from collections import defaultdict
 from decimal import Decimal
 
@@ -324,7 +325,13 @@ def refresh_after_identity_change(plan, slots):
     athlete's own number (``refresh_one_rms`` skips it).
     """
     athlete = plan.athlete
-    lifts = [lift_of(slot) for slot in slots]
+    # A restored snapshot assigns ``exercise_id`` as a STRING; history is keyed
+    # by UUID, so an un-normalised id would match nothing and the refresh would
+    # delete a valid stored row. Normalise to a UUID here.
+    lifts = [
+        Lift(uuid.UUID(str(lift.exercise_id)) if lift.exercise_id else None, lift.name)
+        for lift in map(lift_of, slots)
+    ]
     if athlete is None or not lifts:
         return
     unit = plan.unit
