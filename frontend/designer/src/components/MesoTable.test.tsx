@@ -917,6 +917,15 @@ describe("row name suggestions", () => {
     expect(input).toHaveFocus();
   });
 
+  it("Shift+ArrowDown is left to the browser (text selection), not the highlight", async () => {
+    const user = userEvent.setup();
+    const { input } = setup();
+    await user.clear(input);
+    await user.type(input, "sq");
+    await user.keyboard("{Shift>}{ArrowDown}{/Shift}");
+    expect(screen.getAllByRole("option").every((o) => o.getAttribute("aria-selected") === "false")).toBe(true);
+  });
+
   it("with the list closed, ArrowDown still moves the grid", async () => {
     const user = userEvent.setup();
     const { input } = setup({

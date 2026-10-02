@@ -143,6 +143,21 @@ class TestPatchLink:
         assert cell.exercise_slot.name == "Box Squat"
         assert cell.exercise_slot.exercise_id == old.pk
 
+    def test_undo_survives_the_old_catalog_exercise_being_deleted(self, client):
+        old = ExerciseFactory(name="Box Squat")
+        new = ExerciseFactory(name="Back Squat")
+        plan, _, cell = seed(name="Box Squat", exercise=old)
+        client.force_login(plan.relationship.coach)
+        patch(client, plan, cell, {"name": "Back Squat", "exercise_id": str(new.pk)})
+        old.delete()
+        resp = client.post(reverse("meso:api_plan_undo", kwargs={"plan_id": plan.pk}))
+        assert resp.status_code == 200
+        cell.exercise_slot.refresh_from_db()
+        assert cell.exercise_slot.name == "Box Squat"
+        assert (
+            cell.exercise_slot.exercise_id is None
+        )  # target gone: unlinked, not a 500
+
 
 class TestSuggestionsPayload:
     def test_catalog_sorted_by_name(self):

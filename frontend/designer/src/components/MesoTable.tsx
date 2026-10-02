@@ -716,7 +716,7 @@ function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
   // visible (and, for Enter/Tab, only with a highlighted option); anything
   // else falls through to the grid-nav handler exactly as before.
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+    const plain = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
     if (listVisible && plain) {
       const n = suggestions.length;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {

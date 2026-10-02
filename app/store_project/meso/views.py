@@ -4713,20 +4713,17 @@ def prescription_patch(request, plan_id, pk):
     # lineup; the one-week swap fields are gone, Phase 2a — a substitution is
     # sub-line text now). The React client echoes the name on every blur, so
     # treat it as an edit only when it actually differs.
-    name_edit = None
+    new_name = None
     if "name" in payload:
-        value = payload["name"]
-        if not isinstance(value, str):
+        new_name = payload["name"]
+        if not isinstance(new_name, str):
             return HttpResponseBadRequest("name must be a string.")
-        if len(value) > 255:
+        if len(new_name) > 255:
             return HttpResponseBadRequest("name is too long.")
-        if value != cell.name:
-            name_edit = value
 
-    # Catalog link: ``link_edit`` is the new ``exercise_id`` (``None`` = unlink)
-    # once we know it differs from the slot's current link; ``_UNSET`` = leave.
-    slot = cell.exercise_slot
-    link_edit = _UNSET
+    # Catalog link: ``wanted`` is the requested ``exercise_id`` (``None`` =
+    # unlink); ``_UNSET`` = the key was absent.
+    wanted = _UNSET
     if "exercise_id" in payload:
         raw = payload["exercise_id"]
         if raw is None:
@@ -4742,14 +4739,25 @@ def prescription_patch(request, plan_id, pk):
                 return HttpResponseBadRequest("exercise_id is unknown.")
         else:
             return HttpResponseBadRequest("exercise_id must be a UUID string or null.")
-        if wanted != slot.exercise_id:
-            link_edit = wanted
-    elif name_edit is not None and slot.exercise_id is not None:
-        link_edit = None
 
-    if updates or name_edit is not None or link_edit is not _UNSET:
-        with transaction.atomic():
-            record_plan_action(plan, f"Edited {cell.name or 'exercise'}")
+    with transaction.atomic():
+        # Decide against the row's state UNDER the plan lock (the same lock
+        # ``record_plan_action`` takes): two overlapping picks must each see the
+        # other's write, or the later one compares against a stale slot, writes
+        # nothing and leaves no undo step.
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
+        slot = cell.exercise_slot
+        slot.refresh_from_db()
+        name_edit = new_name if new_name is not None and new_name != slot.name else None
+        link_edit = _UNSET
+        if wanted is not _UNSET:
+            if wanted != slot.exercise_id:
+                link_edit = wanted
+        elif name_edit is not None and slot.exercise_id is not None:
+            link_edit = None
+
+        if updates or name_edit is not None or link_edit is not _UNSET:
+            record_plan_action(plan, f"Edited {slot.name or 'exercise'}")
             if updates:
                 for field, value in updates.items():
                     setattr(cell, field, value)

@@ -312,10 +312,27 @@ def restore_plan_snapshot(plan, snapshot):
         slot.deleted_at = _parse_dt(row["deleted_at"])
         slot.save()
 
+    # A catalog Exercise a snapshot points at may have been deleted since (the FK
+    # is SET_NULL): restore the link only where its target still exists, or the
+    # whole undo dies on an IntegrityError.
+    from store_project.exercises.models import Exercise
+
+    live_catalog_ids = {
+        str(pk)
+        for pk in Exercise.objects.filter(
+            pk__in={
+                r["exercise_id"]
+                for r in exercise_slot_rows.values()
+                if r["exercise_id"]
+            }
+        ).values_list("pk", flat=True)
+    }
     for exercise_slot in models.ExerciseSlot.objects.filter(pk__in=exercise_slot_pks):
         row = exercise_slot_rows[exercise_slot.pk]
         exercise_slot.session_slot_id = row["session_slot_id"]
-        exercise_slot.exercise_id = row["exercise_id"]
+        exercise_slot.exercise_id = (
+            row["exercise_id"] if str(row["exercise_id"]) in live_catalog_ids else None
+        )
         exercise_slot.name = row["name"]
         exercise_slot.order = row["order"]
         exercise_slot.tags = list(row["tags"] or [])
