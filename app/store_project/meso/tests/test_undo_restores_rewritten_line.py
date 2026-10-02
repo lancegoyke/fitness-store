@@ -65,7 +65,7 @@ def _rewrite_then_undo(client, s):
 
     cell.refresh_from_db()
     assert cell.text == "225 x 5", "the undo should put the athlete's text back"
-    assert cell.athlete_authored is False, "restored as a coach-owned cell"
+    assert cell.athlete_authored is True, "handed back to the athlete (#703)"
     client.force_login(s.athlete)
     return cell
 
@@ -81,10 +81,10 @@ class TestTheUndoneRewriteShowsTheSetOnce:
         assert rows[0].source_line_id == cell.pk
 
         squat = _squat_view(s)
-        # The restore hands the cell back coach-owned (see `_rewrite_then_undo`),
-        # so since #524 the line shows as a read-only coach cue, once.
-        assert [line["text"] for line in squat["coach_lines"]][:1] == ["225 x 5"]
-        assert squat["sub_lines"] == []
+        # The restore hands the cell back to the athlete (#703), so the line
+        # is their own editable sub-line, once, and not a coach cue.
+        assert [line["text"] for line in squat["sub_lines"]] == ["225 x 5"]
+        assert squat["coach_lines"] == []
         assert squat["logged_readonly"] == [], (
             "the line already shows this performance, so the read-only history "
             f"must not list it too: {squat['logged_readonly']}"
@@ -95,11 +95,12 @@ class TestTheUndoneRewriteShowsTheSetOnce:
         s = seed()
         _rewrite_then_undo(client, s)
 
-        # Coach-owned since the restore (#524), so it is a read-only cue: never
-        # an editable line, and never tinted.
+        # Athlete-owned again since the restore (#703): an editable line that
+        # shows the set, so it is not tinted.
         squat = _squat_view(s)
-        assert squat["sub_lines"] == []
-        assert [line["text"] for line in squat["coach_lines"]] == ["225 x 5"]
+        assert squat["coach_lines"] == []
+        assert [line["text"] for line in squat["sub_lines"]] == ["225 x 5"]
+        assert squat["sub_lines"][0]["warn"] is False
 
     def test_the_cell_write_response_agrees_with_the_reload(self, client):
         """A blur on the restored line reports no tint, as the page reload does."""
