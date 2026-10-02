@@ -335,7 +335,7 @@ class LoggedSetInline(admin.TabularInline):
     # editable box would in fact be the only way to re-attach an identity to
     # such a row. Leaving it readonly here anyway is a deliberate choice,
     # not an oversight — it matches migration 0051's own refusal to guess a
-    # slot for an unrecoverable row from ``source_line``/``reclaimed_line``:
+    # slot for an unrecoverable row from ``source_line``:
     # hand-typing a slot id in the admin would invent an identity the system
     # never actually observed, which is worse than leaving the row
     # unattached and countable as orphaned.
@@ -350,11 +350,7 @@ class LoggedSetInline(admin.TabularInline):
     #
     # ``unit`` is the immutable write-time denomination of this historical set;
     # new inline rows derive it from the session log's plan in the formset.
-    # ``reclaimed_line`` is an internal hint for the restore lookup (#541),
-    # not something to edit either. It has no DB constraint, so it can
-    # outlive its cell; as an editable field that stale id would fail
-    # validation and block saving the whole log.
-    readonly_fields = ("exercise_slot", "unit", "reclaimed_line")
+    readonly_fields = ("exercise_slot", "unit")
 
 
 @admin.register(SessionLog)

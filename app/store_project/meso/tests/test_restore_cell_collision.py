@@ -31,8 +31,8 @@ one join earlier, to a coordinate a REVIVED pk wants rather than only to a
 stray pk the purge would delete on its own:
 
 * an occupant that is athlete data (``athlete_authored``, or a cell some
-  ``LoggedSet`` still points at through ``prescription``/``source_line``/
-  ``reclaimed_line`` — ``history._cells_athlete_data_points_at``) KEEPS the
+  ``LoggedSet`` still points at through ``prescription``/``source_line`` —
+  ``history._cells_athlete_data_points_at``) KEEPS the
   coordinate, and the snapshotted cell that wanted it is skipped entirely for
   this restore. This is the accepted cost, the same trade the ``logged_sets``
   spare clause already makes (#577): a coach's redo of that ONE line

@@ -25,7 +25,6 @@ from django.db import connection
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
-from django.db.models import Q
 from django.http import Http404
 from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
@@ -106,7 +105,6 @@ from .models import SessionSlot
 from .models import Unit
 from .models import Week
 from .models import WeekDelivery
-from .models import display_line_id
 from .models import newest_session_logs
 from .models import sub_line_warn_reason
 from .names import athlete_name
@@ -2474,7 +2472,7 @@ def athlete_cell_write(request, pk):
         #   * a cue that happens to read like a set (`225 x 5`) became
         #     athlete-authored and parsed into a pending LoggedSet and a PR for
         #     a performance the athlete never did;
-        #   * a RECLAIMED line's set went back into hiding, because
+        #   * a REWRITTEN line's set went back into hiding, because
         #     `HIDDEN_PARSED_SET` keys on this flag — invisible everywhere while
         #     still counting, and the delete below would then destroy it.
         #
@@ -2483,7 +2481,7 @@ def athlete_cell_write(request, pk):
         # still claims the line (and re-parses it) as before.
         # What this line was DISPLAYING before this write. The upsert needs it to
         # tell its own rows — the ones this line was showing — from history
-        # left behind by a reclaim (the retired structured logger's rows).
+        # left behind when a coach rewrote the line.
         previous_text = "" if created_cell else cell.text
         untouched_coach_line = (
             not created_cell and not cell.athlete_authored and cell.text == text
@@ -2809,7 +2807,7 @@ def _upsert_parsed_set(
                 )
 
             # Replace only the rows THIS LINE WAS SHOWING. A set the line no
-            # longer displays (a coach reclaimed and rewrote the line) is now
+            # longer displays (a coach rewrote the line) is now
             # read-only history on the athlete's page — editing this line to a
             # note, a blank, or a different set must not erase a performance
             # they already earned. Judged against `previous_text`, not the text
@@ -2888,36 +2886,34 @@ def _upsert_parsed_set(
                     # The sub-line's own position, NOT a constant 1. Every
                     # parsed row landing on set 1 was invisible while they
                     # stayed suppressed, but structured surfaces collapse by
-                    # (prescription, set_number) — so once reclaim made them
+                    # (prescription, set_number) — so once a rewrite made them
                     # visible, two tracking lines showed and reposted as one
                     # set, and results labelled both "set 1".
                     #
                     # ...but the line's number can already be taken, by history
-                    # this same line left behind: a reclaimed set is preserved,
-                    # and a new set typed on that line would otherwise collide
-                    # with it, and collapse the moment a second reclaim made
-                    # both visible. Fall through to the next free number. The
+                    # this same line left behind: a set whose line was rewritten is
+                    # preserved, and a new set typed on that line would otherwise
+                    # collide with it, and collapse the moment a second rewrite
+                    # made both visible. Fall through to the next free number. The
                     # rows being replaced are already deleted above, so an
                     # ordinary re-blur finds its own number free and keeps it
                     # (idempotent).
-                    # Restoring a reclaimed line to what it originally said is
+                    # Restoring a rewritten line to what it originally said is
                     # not a new performance. `mine` is empty in that case — the
-                    # old row survived a reclaim, so `previous_text` (the coach's
-                    # cue) no longer describes it — and creating would leave two
-                    # identical rows on one source line, BOTH hidden by the
-                    # restored text and both counted, overstating the workout
-                    # with nothing on screen to show for it. Reuse the row.
+                    # old row survived the rewrite, so `previous_text` (the
+                    # coach's cue) no longer describes it — and creating would
+                    # leave two identical rows on one source line, BOTH hidden
+                    # by the restored text and both counted, overstating the
+                    # workout with nothing on screen to show for it. Reuse the
+                    # row.
                     #
                     # Scoped by ``prescription`` as well as ``source_line``
-                    # (#577), matching the ``mine`` delete above and the
-                    # ``reclaimed_line`` lookup below — unchanged by #578 C1.
-                    # A row whose ``prescription`` went NULL (a purge
+                    # (#577), matching the ``mine`` delete above — unchanged by
+                    # #578 C1. A row whose ``prescription`` went NULL (a purge
                     # hard-deleted its line-0 cell) still matches
                     # ``source_line=cell``, but this filter refuses to adopt
-                    # it, same as before; the ``reclaimed_line`` lookup below
-                    # filters ``prescription=line_zero_cell`` too, so it
-                    # doesn't repair the row either — it falls through to the
-                    # CREATE branch further down. What C1 changes is the
+                    # it, same as before: it falls through to the CREATE
+                    # branch further down. What C1 changes is the
                     # consequence of that fall-through: the NULL-``prescription``
                     # row is no longer inert. Its own ``exercise_slot``
                     # (untouched by the ``Prescription`` delete) still counts
@@ -2944,47 +2940,6 @@ def _upsert_parsed_set(
                         ),
                         None,
                     )
-                    # #541: before #578 stage 4 retired it, a "Log session"
-                    # between the reclaim and the restore could replace that
-                    # row with a source-less structured copy that
-                    # answers to this line through `reclaimed_line` instead, so
-                    # the lookup above can't see it. Same restore, same reuse:
-                    # re-link the copy rather than mint a twin of it. Nothing
-                    # writes `reclaimed_line` any more, but copies made before
-                    # stage 4 still carry it until stage 4b drops the column.
-                    #
-                    # Only when this line wasn't showing a set of its own
-                    # (`previous is None`). If it was, this blur edits THAT set,
-                    # and landing on the copy's values doesn't make it the same
-                    # performance: re-linking would fold two sets into one, and
-                    # a later clear of the line would delete the survivor. The
-                    # lookup above can't take the same gate: its match already
-                    # sits on this line, so declining it leaves two identical
-                    # rows here, both hidden and both deleted by one clear.
-                    if existing is None and previous is None:
-                        existing = next(
-                            (
-                                row
-                                for row in log.sets.filter(
-                                    source_line__isnull=True,
-                                    reclaimed_line=cell,
-                                    prescription=line_zero_cell,
-                                )
-                                if parsing.same_logged_set(
-                                    (row.reps, row.load, row.rpe),
-                                    (values["reps"], values["load"], values["rpe"]),
-                                )
-                            ),
-                            None,
-                        )
-                        if existing is not None:
-                            # Keeps its pk and set_number; it goes back to being
-                            # this line's parsed row, hidden by the line's text.
-                            existing.source_line = cell
-                            existing.reclaimed_line = None
-                            existing.save(
-                                update_fields=["source_line", "reclaimed_line"]
-                            )
                     if existing is not None:
                         created = existing
                         # It was already logged, so there is nothing to
@@ -3294,7 +3249,7 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
         # The shared newest-log rule — see models.newest_session_logs.
         log = newest_session_logs(session, athlete).first()
         backing_sets = (
-            tuple(row for row in log.sets.all() if display_line_id(row) == cell.pk)
+            tuple(row for row in log.sets.all() if row.source_line_id == cell.pk)
             if log is not None
             else ()
         )
@@ -3311,7 +3266,7 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
         # The cell pk doesn't change when a coach drags the exercise across
         # days: `prescription_move` re-points the `ExerciseSlot` and the cell
         # travels with it, so the rows left behind still name this cell
-        # through `source_line`/`reclaimed_line` while their `SessionLog`
+        # through `source_line` while their `SessionLog`
         # stays on the day they were actually logged.
         #
         # Deliberately NOT pinned to one log the way `backing_sets` above is
@@ -3324,7 +3279,7 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
         # proposed adding `session_log__session__deleted_at__isnull=True`
         # here; that would be WRONG for exactly this reason, so don't.
         elsewhere_sets = LoggedSet.objects.filter(
-            Q(source_line=cell) | Q(source_line__isnull=True, reclaimed_line=cell),
+            source_line=cell,
             session_log__athlete=athlete,
         ).exclude(session_log__session=session)
         return (
@@ -5860,7 +5815,7 @@ def cell_line_write(request, plan_id, slot_id):
             # flip ALONE first, so ``record_plan_action`` snapshots this cell as
             # a coach cell still holding the athlete's original text — a later
             # coach undo then RESTORES that text (as a coach-owned cell) instead
-            # of hard-deleting the reclaimed row (which the snapshot, taken while
+            # of hard-deleting the rewritten row (which the snapshot, taken while
             # the cell was still athlete-authored, would have omitted entirely).
             existing.athlete_authored = False
             existing.save(update_fields=["athlete_authored"])

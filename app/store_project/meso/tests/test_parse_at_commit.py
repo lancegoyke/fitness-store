@@ -244,6 +244,31 @@ class TestLegacyStructuredAndFreeformCoexist:
         assert parsed.reps == "8"
         assert LoggedSet.objects.filter(session_log=log).count() == 2
 
+    def test_a_same_valued_source_less_row_is_not_merged(self, client):
+        """A legacy row and a typed set that share values are two performances."""
+        s = seed()
+        client.force_login(s.athlete)
+        log = SessionLog.objects.create(
+            session=s.session, athlete=s.athlete, status="done"
+        )
+        LoggedSet.objects.create(
+            session_log=log,
+            prescription=s.squat,
+            exercise_slot_id=s.squat.exercise_slot_id,
+            source_line=None,
+            set_number=1,
+            reps="5",
+            load="225",
+            rpe="",
+        )
+
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.status_code == 200
+
+        assert LoggedSet.objects.filter(prescription=s.squat).count() == 2, (
+            "matching by value alone would fold two performances into one"
+        )
+
     def test_a_status_only_log_post_does_not_wipe_parsed_sets(self, client):
         # The log endpoint no longer touches sets at all (#578 stage 4); it used
         # to delete every row it could "see", and a parsed set's ``prescription``
@@ -606,7 +631,7 @@ class TestReclaimLeavesAthleteDataAlone:
         assert resp.status_code == 200
         assert LoggedSet.objects.filter(source_line=cell).exists()
 
-    def test_the_reclaimed_set_becomes_visible_again(self, client):
+    def test_the_rewritten_set_becomes_visible_again(self, client):
         """Its text no longer shows it, so it must render as a read-only history row."""
         s = seed()
         client.force_login(s.athlete)
@@ -1099,7 +1124,7 @@ class TestVisibilityAndDeleteScopeAgree:
         """The invariant, on one exercise with both kinds of row.
 
         Sub-line 2 is still athlete-authored, so it stays hidden and the logger
-        cannot touch it. Sub-line 1 was reclaimed, so it is visible — and this
+        cannot touch it. Sub-line 1 was rewritten, so it is visible — and this
         test used to assert an empty save cleared it, "exactly as it would any
         structured row".
 
@@ -1204,8 +1229,8 @@ class TestTheBlurPathOwnsOnlyAthleteLines:
         assert not LoggedSet.objects.filter(source_line=coach_line).exists()
         assert not SessionLog.objects.filter(session=s.session).exists()
 
-    def test_blurring_a_reclaimed_line_does_not_destroy_its_set(self, client):
-        """A reclaimed set is the logger's history — not the blur path's to drop.
+    def test_blurring_a_rewritten_line_does_not_destroy_its_set(self, client):
+        """A rewritten set is the logger's history — not the blur path's to drop.
 
         Merely tapping the cue the coach left behind would otherwise delete the
         athlete's real performance and refresh away a DONE 1RM with it.
@@ -1218,7 +1243,7 @@ class TestTheBlurPathOwnsOnlyAthleteLines:
         client.force_login(s.coach)
         reclaim(client, s, text="brace harder")
 
-        # The athlete taps the reclaimed line.
+        # The athlete taps the rewritten line.
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "brace harder")
         assert resp.status_code == 200
@@ -1241,7 +1266,7 @@ class TestAnUntouchedCoachLineIsNotClaimed:
         """Blocking the upsert isn't enough — the flag itself must not flip.
 
         The earlier guard prevented the set but the caller had already stamped
-        `athlete_authored=True`, which (a) re-hid a reclaimed line's set via
+        `athlete_authored=True`, which (a) re-hid a rewritten line's set via
         `HIDDEN_PARSED_SET` while the line showed coach text, and (b) made the
         guard one-shot: the NEXT blur saw an athlete-owned line and parsed the
         coach's text anyway.
@@ -1279,7 +1304,7 @@ class TestAnUntouchedCoachLineIsNotClaimed:
         assert not LoggedSet.objects.exists()
         assert not SessionLog.objects.filter(session=s.session).exists()
 
-    def test_a_reclaimed_lines_set_stays_visible_across_blurs(self, client):
+    def test_a_rewritten_lines_set_stays_visible_across_blurs(self, client):
         """Re-hiding it would make a counting set invisible to everyone."""
         s = seed()
         client.force_login(s.athlete)
@@ -1376,7 +1401,7 @@ class TestVisibilityFollowsTheDisplayedText:
         assert LoggedSet.objects.filter(source_line=cell).count() == 1
 
 
-class TestEditingAReclaimedLineKeepsItsHistory:
+class TestEditingARewrittenLineKeepsItsHistory:
     """A reclaim hands the set to the logger; the blur path stops owning it.
 
     Rounds 17-18 stopped an UNCHANGED blur from destroying it. A genuine edit
@@ -1403,11 +1428,11 @@ class TestEditingAReclaimedLineKeepsItsHistory:
             )
         )
         assert "225" in loads, (
-            f"editing the reclaimed line to {new_text!r} erased the athlete's "
+            f"editing the rewritten line to {new_text!r} erased the athlete's "
             "earlier performance"
         )
 
-    def test_a_new_set_on_a_reclaimed_line_is_added_not_swapped(self, client):
+    def test_a_new_set_on_a_rewritten_line_is_added_not_swapped(self, client):
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -1522,7 +1547,7 @@ class TestAnUnstorableSetTellsTheAthlete:
         assert resp.json()["cell"]["warn"] is False
 
 
-class TestRestoringAReclaimedLineDoesNotDuplicate:
+class TestRestoringARewrittenLineDoesNotDuplicate:
     def test_typing_the_original_text_back_reuses_the_row(self, client):
         """Restoring is not a second performance.
 
@@ -1954,7 +1979,7 @@ class TestTwoIdenticalSetsStayTwoSets:
         client.force_login(s.coach)
         reclaim(client, s, text="brace harder", line=1)
 
-        # The athlete's page shows the reclaimed row, so their save carries it.
+        # The athlete's page shows the rewritten row, so their save carries it.
         client.force_login(s.athlete)
         resp = log_post(
             client,
@@ -1981,7 +2006,7 @@ class TestTwoIdenticalSetsStayTwoSets:
 class TestUndoDoesNotOrphanASetsSourceCell:
     """Undo must not strip a logged set of the link that protects it.
 
-    A reclaimed sub-line is coach-owned, so undoing back past its creation
+    A rewritten sub-line is coach-owned, so undoing back past its creation
     hard-deleted it — and ``source_line`` is SET_NULL, so the athlete's derived
     set survived as a source-LESS row. The structured logger spares a parsed row
     it didn't post for, but cannot recognise one whose link is gone, so the next

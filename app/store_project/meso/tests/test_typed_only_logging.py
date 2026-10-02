@@ -339,7 +339,9 @@ class TestLegacyHistory:
         assert len(labels) == 2  # the legacy set once, the overwritten typed set once
         assert [row["set_number"] for row in exercise["logged_readonly"]] == [2, 9]
         assert labels[0].startswith("Set 2 · 225 ") and labels[0].endswith(" × 5")
-        assert labels[1] == f"Set 9 · 70 {legacy.unit} × 6 · RPE 7"
+        # "Set N" is the ordinal among the exercise's logged sets (#691): the
+        # stored numbers 1, 2, 9 read as sets 1, 2, 3.
+        assert labels[1] == f"Set 3 · 70 {legacy.unit} × 6 · RPE 7"
         # The typed set its own line still shows is NOT listed.
         assert not any("100" in label for label in labels)
         # The coach's results still count all three.
@@ -361,8 +363,8 @@ class TestLegacyHistory:
         reps_only = legacy_structured_set(
             s, log, set_number=2, reps="10", load="", rpe=""
         )
-        assert presenters._logged_set_label(bw, "kg") == "Set 1 · BW × 8"
-        assert presenters._logged_set_label(reps_only, "kg") == "Set 2 · 10 reps"
+        assert presenters._logged_set_label(bw, "kg", 1) == "Set 1 · BW × 8"
+        assert presenters._logged_set_label(reps_only, "kg", 2) == "Set 2 · 10 reps"
 
 
 # -- cell write + PWA ---------------------------------------------------------
