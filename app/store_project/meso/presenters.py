@@ -1836,11 +1836,15 @@ def _sets_by_anchor_slot(sets):
 def _progress_clock():
     """Microseconds since the epoch, taken just before a progress count's reads.
 
-    A count whose reads began later reflects every commit an earlier one saw
-    (each READ COMMITTED query sees what had committed when it ran), so the
-    client keeps the count with the newest ``as_of`` and ignores an older one
-    that arrives late: the saves of two different lines can be in flight at
-    once and their responses can land in either order.
+    The saves of two different lines can be in flight at once and their
+    responses can land in either order, so the client keeps the count with the
+    newest ``as_of`` and ignores an older one that arrives late. Each READ
+    COMMITTED query sees what had committed when it ran, and both endpoints
+    count only after their own write committed, so a later stamp almost always
+    means a count at least as fresh. The residual gap is the moment between
+    this stamp and the reads: a request stamped earlier but read later can see
+    a commit the later-stamped one missed. That window is milliseconds, and the
+    next line save or Finish re-syncs the header.
     """
     return time.time_ns() // 1000
 
