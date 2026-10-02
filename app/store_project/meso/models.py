@@ -2277,6 +2277,38 @@ class Prescription(models.Model):
 # ---------------------------------------------------------------------------
 
 
+# The one ordering that answers "which log is THE current one for a
+# (session, athlete) pair" (#567/#568/#579). Shared by ``newest_session_logs``,
+# ``newest_session_log_ids`` and the correlated subquery below so it can't drift.
+NEWEST_LOG_ORDER = ("-created_at", "-pk")
+
+
+def _newest_log_pk_subquery(session_ref, athlete_ref):
+    """A scalar subquery: the pk of the newest ``SessionLog`` for one pair.
+
+    ``session_ref``/``athlete_ref`` are the ``OuterRef``s naming the pair on the
+    outer query. The newest log is chosen over ALL the pair's logs regardless
+    of status; a caller's status filter is applied on top of that choice, never
+    inside it. The rule lives here once, for both ``SessionLogQuerySet.
+    newest_per_pair`` and ``LoggedSetQuerySet.on_newest_log``.
+    """
+    return models.Subquery(
+        SessionLog.objects.filter(session_id=session_ref, athlete_id=athlete_ref)
+        .order_by(*NEWEST_LOG_ORDER)
+        .values("pk")[:1]
+    )
+
+
+class SessionLogQuerySet(models.QuerySet):
+    def newest_per_pair(self):
+        """Only the logs that are the newest for their ``(session, athlete)`` pair."""
+        return self.filter(
+            pk=_newest_log_pk_subquery(
+                models.OuterRef("session_id"), models.OuterRef("athlete_id")
+            )
+        )
+
+
 class SessionLog(models.Model):
     """An athlete's record of having trained a planned session."""
 
@@ -2315,6 +2347,8 @@ class SessionLog(models.Model):
     last_activity_at = models.DateTimeField(
         _("Last activity"), default=timezone.now, db_default=Now()
     )
+
+    objects = SessionLogQuerySet.as_manager()
 
     class Meta:
         ordering = ["-date", "-created_at"]
@@ -2778,19 +2812,19 @@ def newest_session_logs(session, athlete, *, status=None):
     ``views._cell_warn_reason_or_blank``, ``settle.settleable_logs``,
     ``settle.settle_log``.
 
-    Deliberately NOT shared by ``presenters._profile_results``,
-    ``views._coach_latest_logged_session``, ``serializers.serialize_recent_logs``,
-    or ``adherence.link_last_trained``/``adherence.recent_logs``. Those answer
-    a different question — the athlete's newest DONE log ACROSS many
-    sessions, or a plain list of several recent logs — not one pair's rows,
-    so there is no single-pair tie for ``-pk`` to break, and ``-date`` (or, in
-    ``adherence.py``, ``-created_at`` alone — see its module docstring) is the
-    right primary key for THAT question, not a miss of this one.
+    Deliberately NOT shared by ``presenters._profile_results`` or
+    ``views._coach_latest_logged_session``. Those answer a different question
+    — the athlete's newest DONE log ACROSS many sessions — not one pair's
+    rows, so there is no single-pair tie for ``-pk`` to break, and ``-date`` is
+    the right primary key for THAT question. ``serializers.serialize_recent_logs``
+    and ``adherence.*`` list many logs by ``-date``/``-created_at`` but use
+    ``SessionLog.objects.newest_per_pair()`` (the same rule, as a filter) so a
+    pair's older log is never listed or counted beside its newest (#575).
     """
     logs = SessionLog.objects.filter(session=session, athlete=athlete)
     if status is not None:
         logs = logs.filter(status=status)
-    return logs.order_by("-created_at", "-pk")
+    return logs.order_by(*NEWEST_LOG_ORDER)
 
 
 def newest_session_log_ids(session_ids, athlete):
@@ -2806,7 +2840,7 @@ def newest_session_log_ids(session_ids, athlete):
     newest = {}
     rows = (
         SessionLog.objects.filter(session_id__in=list(session_ids), athlete=athlete)
-        .order_by("-created_at", "-pk")
+        .order_by(*NEWEST_LOG_ORDER)
         .values_list("session_id", "pk")
     )
     for session_id, pk in rows:
@@ -2828,6 +2862,34 @@ MAX_LOGGED_SET_NUMBER = 50
 
 
 class LoggedSetQuerySet(models.QuerySet):
+    def on_newest_log(self):
+        """Only the sets on the newest ``SessionLog`` of their ``(session, athlete)`` pair."""
+        return self.filter(
+            session_log_id=_newest_log_pk_subquery(
+                models.OuterRef("session_log__session_id"),
+                models.OuterRef("session_log__athlete_id"),
+            )
+        )
+
+    def performance_history(self, athlete):
+        """THE definition of "the athlete's logged sets" for anything that counts them.
+
+        1RM, PRs, the last-logged labels, the agent's recent logs and the
+        #572 ``elsewhere`` warn reason all read this, so they cannot disagree
+        about what the athlete has done (#575, #578 stage 3). The rule:
+
+        - A set on a session/week/exercise slot the coach later soft-deleted
+          STILL counts (no ``deleted_at`` filter, on purpose).
+        - A set on a log that is not the newest for its ``(session, athlete)``
+          pair never counts (``NEWEST_LOG_ORDER``).
+
+        The newest log is chosen over ALL the pair's logs whatever their
+        status. Status, unit and plan scoping are the caller's filters, applied
+        on top, so a DONE-only read of a pair whose newest log is PENDING sees
+        nothing for that pair.
+        """
+        return self.filter(session_log__athlete=athlete).on_newest_log()
+
     def anchored(self):
         """The rows whose ``anchor_slot`` resolves, with both hops fetched."""
         return self.filter(

@@ -571,9 +571,8 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
     capped (``limit`` sessions, ``sets_cap`` sets each) to keep the context small.
     """
     logs = (
-        models.SessionLog.objects.filter(
-            session__week__mesocycle__plan=plan, athlete=plan.athlete
-        )
+        models.SessionLog.objects.newest_per_pair()
+        .filter(session__week__mesocycle__plan=plan, athlete=plan.athlete)
         .select_related("session")
         # #578 C1: one `Prefetch` joining both hops the anchor can resolve
         # through, so `s.anchor_slot` below never fires an N+1 query either
@@ -710,9 +709,9 @@ def last_logged_labels(plan, prescriptions, unit):
     # admits a set whose `prescription` went NULL (a hard-deleted line-0
     # cell, #577/#581) but whose `exercise_slot` survives.
     logged_sets = (
-        models.LoggedSet.objects.filter(
+        models.LoggedSet.objects.performance_history(plan.athlete)
+        .filter(
             session_log__session__week__mesocycle__plan=plan,
-            session_log__athlete=plan.athlete,
             session_log__status=models.SessionLog.Status.DONE,
         )
         .anchored()

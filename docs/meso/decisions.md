@@ -2915,20 +2915,22 @@ _(Append dated entries here as decisions land.)_
   backed on another day would also refuse a genuine RE-performance of the
   same numbers on the new day, which is real data loss. The residue is filed
   as its own follow-up rather than patched here.
-  **`elsewhere_sets` reads ANY log of the other session, unlike
-  `backing_sets`.** #568 deliberately pinned `backing_sets` to the newest
-  `SessionLog` (`-created_at`, `-pk`); this read deliberately does not, and
-  the asymmetry is not an oversight. A row stranded on a split or older log —
-  or on a day the coach has since soft-deleted — is invisible on every
-  athlete surface, but `one_rm.derive_one_rm_values` and
-  `personal_records._live_logged_sets` filter by neither log recency nor
-  `deleted_at`, so it still counts toward the athlete's 1RM and PRs. A repost
-  would therefore still genuinely double-count it, which makes `"elsewhere"`
-  the true answer. A review round proposed adding
+  **`elsewhere_sets` reads the performance-history selector, not
+  `backing_sets`' single log.** #568 pinned `backing_sets` to the newest
+  `SessionLog` (`-created_at`, `-pk`); `elsewhere_sets` (and the presenter's
+  `elsewhere_by_line`) read `LoggedSet.objects.performance_history(athlete)`
+  (#575, #578 stage 3), which is what 1RM and PRs count: the newest log of
+  each `(session, athlete)` pair, days the coach has since soft-deleted
+  included. So a row stranded on an older log no longer suppresses the repost
+  (it counts nowhere, so re-posting duplicates nothing), while a row on a
+  soft-deleted day still does (it still counts, so a repost would double it).
+  A review round once proposed adding
   `session_log__session__deleted_at__isnull=True` to both reads; that would
-  have turned a correct suppression into the very duplicate this slice
-  exists to prevent. (That those rows count at all is a separate,
-  pre-existing bug, filed on its own.)
+  turn a correct suppression into the very duplicate this slice exists to
+  prevent, so the selector deliberately has no `deleted_at` filter. The two
+  reads and the selector must move together. (The earlier version of this
+  paragraph said `elsewhere_sets` read ANY log because 1RM/PRs did; the
+  selector removed that premise by fixing the counting side.)
   **Part 1 of #572 is explicitly NOT fixed here.** `prescription_move`
   re-points `exercise_slot.session_slot`, and an `ExerciseSlot` is shared
   across every week of the mesocycle, so one cross-day drag still re-tints
@@ -3173,3 +3175,36 @@ _(Append dated entries here as decisions land.)_
   decided unilaterally. Also left alone: any conversion/rounding pass on a
   unit switch (Lance may ask for it later), and the shared-cell logging
   model (#578) — orthogonal, not touched.
+- 2026-10-02 — **#578 stage 3 / #575: one performance-history selector.**
+  "The athlete's logged sets" had several definitions (1RM, live PRs, last-logged
+  labels, the agent's recent logs, adherence, and the #572 `elsewhere` read),
+  and two kinds of stray row fed some and not others. Product decision, now
+  code: **case A counts** — a `LoggedSet` on a session/week/exercise slot the
+  coach later soft-deleted still counts toward every performance-history
+  read; **case B doesn't** — a `LoggedSet` on a `SessionLog` that is not the
+  newest for its `(session, athlete)` pair (`models.NEWEST_LOG_ORDER`,
+  `-created_at, -pk`) counts toward none. The newest log is chosen over ALL
+  the pair's logs regardless of status and the caller's status filter (DONE
+  etc.) applies on top, so a DONE-only read of a pair whose newest log is
+  PENDING sees nothing for that pair; intended. The rule lives once, in
+  `models._newest_log_pk_subquery`, exposed as
+  `LoggedSet.objects.performance_history(athlete)` / `.on_newest_log()` and
+  `SessionLog.objects.newest_per_pair()` (one correlated subquery each).
+  **History consumers (selector, deleted days still count):**
+  `one_rm.derive_one_rm_values`, `personal_records._live_logged_sets`,
+  `serializers.last_logged_labels`, `serializers.serialize_recent_logs`,
+  `adherence.link_last_trained`/`link_session_count`/`recent_logs`, and the
+  #572 `elsewhere` reads in `presenters.athlete_session` and
+  `views._cell_warn_reason_or_blank`. **Plan-shaped consumers** (they score a
+  session against the plan, so a soft-deleted session or week has nothing to
+  score; they gain `session__deleted_at`/`session__week__deleted_at` filters
+  instead): `presenters._profile_results`, `views._coach_latest_logged_session`.
+  **Exceptions, deliberately off the selector:** `history.
+  _cells_athlete_data_points_at` asks whether any row EXISTS, so a stranded or
+  deleted-day row must still pin its cell through the undo purge; the
+  analytics cohorts (`presenters._athlete_activity_sources` and the two
+  `logged_sq` subqueries) measure activity timing, where a stranded log's
+  `created_at` is still a real write. No migration. Measured on prod
+  2026-10-02: 0 duplicate `(session, athlete)` pairs and 0 sets on
+  soft-deleted sessions, so this changes no number today; it fixes the
+  definition before the first stray row exists.

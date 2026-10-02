@@ -194,8 +194,10 @@ def test_recent_logs_are_scoped_to_the_plans_athlete():
 def test_recent_logs_are_capped_and_newest_first():
     plan, session, _ = make_plan()
     for day_num in range(1, 9):
+        # One session per log: two logs of one (session, athlete) pair would
+        # list only the newest (#575).
         SessionLogFactory(
-            session=session,
+            session=day(session.week, day_number=day_num + 1),
             athlete=plan.athlete,
             date=datetime.date(2026, 6, day_num),
         )

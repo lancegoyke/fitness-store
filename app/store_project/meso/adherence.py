@@ -24,6 +24,11 @@ stale — or falling outside the 14-day window entirely — instead of today.
 Closing this would need a separate written-at/completed-at timestamp, which
 is out of scope for the ``created_at``-only design decided in §4a.
 
+These are HISTORY reads, so they keep counting a log on a soft-deleted
+session, but only the newest log of each ``(session, athlete)`` pair
+(``SessionLog.objects.newest_per_pair()``, #575) — an older log of a pair
+whose newest is pending counts as nothing.
+
 Nothing here mutates state; it's a pure read layer the presenter formats.
 """
 
@@ -53,7 +58,8 @@ def link_last_trained(link):
     if link is None:
         return None
     return (
-        SessionLog.objects.filter(
+        SessionLog.objects.newest_per_pair()
+        .filter(
             session__week__mesocycle__plan__relationship=link,
             athlete=link.athlete,
             status=SessionLog.Status.DONE,
@@ -91,7 +97,8 @@ def link_session_count(link, *, days=14):
         return 0
     since = timezone.now() - timedelta(days=days)
     return (
-        SessionLog.objects.filter(
+        SessionLog.objects.newest_per_pair()
+        .filter(
             session__week__mesocycle__plan__relationship=link,
             athlete=link.athlete,
             status=SessionLog.Status.DONE,
@@ -121,7 +128,8 @@ def recent_logs(coach, *, limit=8):
     formats each event without a per-row query.
     """
     return list(
-        SessionLog.objects.filter(
+        SessionLog.objects.newest_per_pair()
+        .filter(
             status=SessionLog.Status.DONE,
             session__week__mesocycle__plan__relationship__coach=coach,
             session__week__mesocycle__plan__relationship__status=(
