@@ -1322,13 +1322,15 @@ class TestAnUntouchedCoachLineIsNotClaimed:
         assert any("225" in r["label"] for r in row["logged_readonly"])
 
     def test_a_real_edit_still_claims_the_line(self, client):
-        # The guard must not freeze a coach line the athlete genuinely writes on.
+        # The guard must not freeze a coach line the athlete genuinely writes
+        # on. Since #524 a coach cue WITH words is read-only (see
+        # test_cues_after_sets_524), so the claimable line is a blank one.
         s = seed()
         Prescription.objects.create(
             exercise_slot=s.squat.exercise_slot,
             week=s.week,
             line=1,
-            text="brace harder",
+            text="",
             athlete_authored=False,
         )
 
@@ -1362,11 +1364,12 @@ class TestVisibilityFollowsTheDisplayedText:
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
         # `warn_reason` (#572) is the companion key to `warn` — "" whenever
         # there is no warning at all.
-        assert row["sub_lines"] == [
-            {"line": 1, "text": "225 x 5", "warn": False, "warn_reason": ""}
-        ]
+        # The reclaim made the line the coach's, so since #524 it shows as a
+        # read-only cue (never an editable, tintable line) — once.
+        assert row["sub_lines"] == []
+        assert row["coach_lines"] == [{"line": 1, "text": "225 x 5"}]
         assert row["logged_readonly"] == [], (
-            "the sub-line still displays this set, so listing it again as "
+            "the line still displays this set, so listing it again as "
             "read-only history double-displays one performance"
         )
 
@@ -1416,7 +1419,7 @@ class TestEditingARewrittenLineKeepsItsHistory:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        reclaim(client, s, text="")
 
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, new_text)
@@ -1438,7 +1441,7 @@ class TestEditingARewrittenLineKeepsItsHistory:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        reclaim(client, s, text="")
 
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "230 x 3")
@@ -1476,7 +1479,7 @@ class TestSetNumbersStayDistinctAcrossReclaims:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        reclaim(client, s, text="")
 
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "230 x 3")
@@ -1490,7 +1493,7 @@ class TestSetNumbersStayDistinctAcrossReclaims:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        reclaim(client, s, text="")
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "230 x 3")
         client.force_login(s.coach)
@@ -1561,7 +1564,7 @@ class TestRestoringARewrittenLineDoesNotDuplicate:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        reclaim(client, s, text="")
 
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -1578,7 +1581,7 @@ class TestRestoringARewrittenLineDoesNotDuplicate:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        reclaim(client, s, text="")
 
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -1591,7 +1594,7 @@ class TestRestoringARewrittenLineDoesNotDuplicate:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        reclaim(client, s, text="")
 
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "230 x 3")
@@ -1684,12 +1687,11 @@ class TestUnskippingDoesNotSilenceTheWarning:
 
 
 class TestTheResponseAgreesWithTheReload:
-    def test_an_unlogged_coach_set_line_warns_in_the_response(self, client):
-        """The response and the presenter must give the same answer.
+    def test_a_coach_cue_reading_like_a_set_is_never_an_editable_line(self, client):
+        """A coach cue reading `225 x 5` is read-only and cannot warn.
 
-        A coach cue reading `225 x 5` has no backing row (nothing parses coach
-        text), so the presenter warns. The response used a different rule and
-        said warn=false, so the tint cleared on blur and reappeared on reload.
+        It has no backing row (nothing parses coach text). Before #524 the presenter tinted it as an unlogged set; now it is
+        a read-only ``coach_lines`` entry and cannot warn at all.
         """
         s = seed()
         Prescription.objects.create(
@@ -1702,11 +1704,12 @@ class TestTheResponseAgreesWithTheReload:
 
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
-        assert resp.json()["cell"]["warn"] is True
+        assert resp.status_code == 200  # the unchanged-text no-op
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert row["sub_lines"][0]["warn"] is True
+        assert row["sub_lines"] == []
+        assert row["coach_lines"] == [{"line": 1, "text": "225 x 5"}]
 
     def test_a_logged_set_agrees_the_other_way(self, client):
         s = seed()

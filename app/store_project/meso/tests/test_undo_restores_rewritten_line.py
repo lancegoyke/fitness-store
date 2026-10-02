@@ -57,7 +57,7 @@ def _rewrite_then_undo(client, s):
 
     client.force_login(s.athlete)
     squat = _squat_view(s)
-    assert [line["text"] for line in squat["sub_lines"]][:1] == ["brace harder"]
+    assert [line["text"] for line in squat["coach_lines"]][:1] == ["brace harder"]
     assert any("225" in r["label"] for r in squat["logged_readonly"])
 
     client.force_login(s.coach)
@@ -81,7 +81,10 @@ class TestTheUndoneRewriteShowsTheSetOnce:
         assert rows[0].source_line_id == cell.pk
 
         squat = _squat_view(s)
-        assert [line["text"] for line in squat["sub_lines"]][:1] == ["225 x 5"]
+        # The restore hands the cell back coach-owned (see `_rewrite_then_undo`),
+        # so since #524 the line shows as a read-only coach cue, once.
+        assert [line["text"] for line in squat["coach_lines"]][:1] == ["225 x 5"]
+        assert squat["sub_lines"] == []
         assert squat["logged_readonly"] == [], (
             "the line already shows this performance, so the read-only history "
             f"must not list it too: {squat['logged_readonly']}"
@@ -92,10 +95,11 @@ class TestTheUndoneRewriteShowsTheSetOnce:
         s = seed()
         _rewrite_then_undo(client, s)
 
+        # Coach-owned since the restore (#524), so it is a read-only cue: never
+        # an editable line, and never tinted.
         squat = _squat_view(s)
-        assert [line["warn"] for line in squat["sub_lines"]][:1] == [False], (
-            "the line IS backed by a logged set, which its text is showing again"
-        )
+        assert squat["sub_lines"] == []
+        assert [line["text"] for line in squat["coach_lines"]] == ["225 x 5"]
 
     def test_the_cell_write_response_agrees_with_the_reload(self, client):
         """A blur on the restored line reports no tint, as the page reload does."""

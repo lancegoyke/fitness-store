@@ -78,7 +78,7 @@
                  is NOT declared inline, so `.meso-phone-input--warn` can set
                  it. Tinting the cell is the whole user-visible payload of the
                  warn flag (plan §8) — declared inline it silently did nothing. {% endcomment %}
-              <input class="meso-phone-input meso-log-input" data-testid="sub-line-input" :class="l.warn && !l.queued ? 'meso-phone-input--warn' : ''" x-model="l.text" @blur="saveCell(ex, l.line)" placeholder="225 x 5, RPE 8 — or a note" inputmode="text"
+              <input class="meso-phone-input meso-log-input" data-testid="sub-line-input" :class="l.warn && !l.queued ? 'meso-phone-input--warn' : ''" x-model="l.text" @blur="saveCell(ex, l.line)" inputmode="text" :placeholder="linePlaceholder(ex)"
                      style="border:1px solid var(--cell-line,var(--line));background:var(--cell-bg,var(--rail));" />
               {% comment %} #527: a line whose write is waiting in the offline queue says so,
                  and says nothing else — its warn/PR state belongs to the text the
@@ -91,10 +91,37 @@
               <span class="meso-row-meta meso-mono" data-testid="sub-line-pr" style="color:var(--accent-deep);white-space:nowrap;font-weight:700;" x-show="l.pr && !l.warn && !l.saveError && !l.queued" x-cloak :title="'A new best for this lift — ' + l.pr + ' estimated 1RM.'">&#127881; PR <span x-text="l.pr"></span></span>
             </div>
           </template>
-          <button type="button" @click="addLine(ex)" :disabled="ex.sub_lines.length >= 20" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:12px;">+ add a line</button>
+          <button type="button" @click="addLine(ex)" :disabled="!nextFreeLine(ex)" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:12px;">+ add a line</button>
         </div>
+        {% comment %} The coach's own cues for this exercise, AFTER the athlete's sets: read-only
+           text, never an input (the cell endpoint refuses a changed write onto a coach
+           line), and never "not logged as a set" — a cue isn't a set. Plain x-text, so
+           whatever the coach typed is escaped. {% endcomment %}
+        <template x-if="ex.coach_lines && ex.coach_lines.length">
+          <div data-testid="coach-cues" style="padding:8px 16px 11px;border-top:1px solid var(--line-2);">
+            <div class="meso-row-meta meso-mono" style="margin-bottom:5px;color:var(--dim);">from your coach</div>
+            <template x-for="c in ex.coach_lines" :key="c.line">
+              <div data-testid="coach-cue" x-text="c.text" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;color:var(--dim);border-left:2px solid var(--line);padding-left:9px;margin-bottom:5px;"></div>
+            </template>
+          </div>
+        </template>
       </div>
     </template>
+
+    {% comment %} One note for the whole session. Deliberately not gated on status: an athlete
+       remembers the sore shoulder after tapping Finish. Saves as they type (see noteInput). {% endcomment %}
+    <div class="meso-card" data-testid="session-note" style="margin-bottom:12px;padding:11px 16px 12px;">
+      <label for="meso-session-note" style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;margin-bottom:6px;">Notes for your coach</label>
+      <textarea id="meso-session-note" data-testid="session-note-input" class="meso-phone-input meso-log-input" rows="3" :maxlength="notesMax"
+                x-model="notes" @input="noteInput()" @blur="noteBlur()"
+                placeholder="Anything your coach should know? Pain, how it felt, what you swapped…"
+                style="width:100%;resize:vertical;border:1px solid var(--line);background:var(--rail);"></textarea>
+      <div data-testid="session-note-status" style="min-height:18px;margin-top:4px;">
+        <span class="meso-row-meta" style="color:var(--ok);" x-show="noteStatus === 'saved'" x-cloak>Saved &#10003;</span>
+        <span class="meso-row-meta" style="color:var(--dim);" x-show="noteStatus === 'queued'" x-cloak>Saved offline — will sync when you&#8217;re back.</span>
+        <span class="meso-row-meta" style="color:var(--warn);" x-show="noteStatus === 'error'" x-cloak>Couldn&#8217;t save — try again.</span>
+      </div>
+    </div>
 
     <div class="meso-log-actions">
       <a class="meso-btn" href="{% url 'meso:athlete_home' %}">&#8592; Back to training</a>

@@ -227,6 +227,11 @@ def _coach_default_unit(user):
 # AI agent is paid-only (``can_use_agent``); and an over-limit coach (post-downgrade,
 # D6) is frozen out of edits/deliver (``can_edit``).
 
+# The athlete's one session-level note cap (``SessionLog.notes``, #524). Lives
+# in ``presenters`` (which can't import this module) so the page's
+# ``notes_max`` and this endpoint's check can never disagree.
+MAX_SESSION_NOTES = presenters.MAX_SESSION_NOTES
+
 #: Flashed when a free coach hits the seat cap — the upgrade CTA the roster shows.
 SEAT_LIMIT_MESSAGE = (
     "You've reached your free athlete limit. Start your free trial or subscribe "
@@ -2162,7 +2167,16 @@ def athlete_log_session(request, pk):
     if not isinstance(payload, dict):
         return HttpResponseBadRequest("Expected a JSON object.")
 
-    status = payload.get("status", SessionLog.Status.DONE)
+    # A bare ``{"notes": ...}`` is the session-note box saving itself (#524),
+    # not "Finish session": with no explicit status it must leave the log as it
+    # was (a new log is PENDING; a DONE one stays DONE via the sticky rule
+    # below). Every other status-less post keeps defaulting to DONE.
+    default_status = (
+        SessionLog.Status.PENDING
+        if "notes" in payload and "status" not in payload
+        else SessionLog.Status.DONE
+    )
+    status = payload.get("status", default_status)
     if status not in (SessionLog.Status.PENDING, SessionLog.Status.DONE):
         return HttpResponseBadRequest("status must be 'pending' or 'done'.")
 
@@ -2186,6 +2200,10 @@ def athlete_log_session(request, pk):
     notes = payload.get("notes")
     if has_notes and not isinstance(notes, str):
         return HttpResponseBadRequest("notes must be a string.")
+    if has_notes and len(notes) > MAX_SESSION_NOTES:
+        return HttpResponseBadRequest(
+            f"Notes can be at most {MAX_SESSION_NOTES} characters."
+        )
 
     has_legacy_sets = "sets" in payload
     legacy_sets = payload.get("sets")
@@ -2220,6 +2238,25 @@ def athlete_log_session(request, pk):
         # list of reads that share it, and the reads that deliberately don't.
         log = newest_session_logs(session, request.user).first()
         if log is None:
+            # A blank note on a session with no log (typed, then erased before
+            # the debounce fired) has nothing to keep: saving it would create a
+            # dated PENDING log with no sets and no notes, which nothing sweeps
+            # and which skews last-trained and recent-log reads.
+            if "notes" in payload and "status" not in payload and not notes.strip():
+                return JsonResponse(
+                    {
+                        "ok": True,
+                        "log": {
+                            "id": None,
+                            "status": SessionLog.Status.PENDING,
+                            "date": None,
+                            "notes": "",
+                        },
+                        "progress": presenters.athlete_set_progress(
+                            session, request.user
+                        ),
+                    }
+                )
             log = SessionLog(session=session, athlete=request.user)
         # session_completed analytics (#509): captured before this save changes
         # anything, so it describes the log's state walking in.
@@ -2358,6 +2395,11 @@ def athlete_cell_write(request, pk):
     records NO ``PlanAction``. ``line`` 0 is rejected (that's the coach's
     prescription line), as is ``line`` > ``MAX_CELL_LINE``; blank text clears
     the sub-line in place.
+
+    A coach's cue (``athlete_authored=False``, non-blank) is read-only (#524):
+    a post that CHANGES its text is refused with a 422 ``code: "coach_line"``
+    and nothing is written; an unchanged post is a 200 no-op, and a blank
+    coach line is free for the athlete to claim.
     """
     # A write queued offline by another account (#527). localStorage outlasts
     # a logout, so a page left open for athlete A can flush A's queued lines
@@ -2475,6 +2517,37 @@ def athlete_cell_write(request, pk):
         cell, created_cell = Prescription.objects.get_or_create(
             exercise_slot=slot, week=session.week, line=line
         )
+        # A coach's cue is read-only to the athlete (#524): it renders after
+        # their sets, and a changed write to it would overwrite the coach's
+        # words and flip the line to athlete-authored. Refuse it BEFORE any
+        # write — `get_or_create` didn't create the row, so nothing has
+        # changed, and `_touch_plan` / the save / the upsert below never run.
+        # An unchanged post is the `untouched_coach_line` no-op further down,
+        # and a BLANK coach line has no words to protect, so it stays free
+        # for the athlete to claim.
+        #
+        # 422, NOT 409, on purpose. The client (the deployed JS and the new
+        # one) reads 403/409 as "wrong account" (`isWrongAccount`) and keeps
+        # the write queued to retry forever; any other non-retryable 4xx is a
+        # permanent refusal that drops the outbox entry and says "couldn't
+        # save". This is the latter. Do not tidy it to 409.
+        if (
+            not created_cell
+            and not cell.athlete_authored
+            and cell.text.strip()
+            and cell.text != text
+        ):
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": (
+                        "That line is your coach’s note and can’t be changed. "
+                        "Add your set on a new line."
+                    ),
+                    "code": "coach_line",
+                },
+                status=422,
+            )
         # The template posts on EVERY blur, so most requests carry text nobody
         # touched — including the coach's own cues, which the athlete can focus
         # and leave. Claiming authorship of those was doing real damage:
@@ -3396,7 +3469,7 @@ def manifest_webmanifest(request):
 #     page loses its Set rows and gains the progress header and the single
 #     "Finish session" button. A cached page would still post `sets`, which the
 #     server now ignores, so installed clients need a fresh cache namespace.
-PWA_CACHE_VERSION = "meso-pwa-v12"
+PWA_CACHE_VERSION = "meso-pwa-v13"
 
 
 @require_GET

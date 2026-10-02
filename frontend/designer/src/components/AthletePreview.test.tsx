@@ -208,13 +208,65 @@ describe("AthletePreview", () => {
     expect(screen.queryByText("Cable Curl")).not.toBeInTheDocument();
   });
 
-  it("shows coach and athlete-authored sub-lines under what you did", () => {
+  it("keeps athlete lines under what you did and coach cues read-only after them", () => {
     render(<AthletePreview {...baseProps()} />);
 
     expect(screen.getAllByText("what you did")).toHaveLength(4);
-    expect(screen.getByTestId("athlete-line-1010-0")).toHaveValue("Pause the first rep");
-    expect(screen.getByTestId("athlete-line-1010-1")).toHaveValue("100 x 6");
+    // Only the athlete's own line is an input under "what you did".
+    expect(screen.getByTestId("athlete-line-1010-0")).toHaveValue("100 x 6");
+    expect(screen.queryByTestId("athlete-line-1010-1")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Pause the first rep")).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue("   ")).not.toBeInTheDocument();
+
+    const cue = screen.getByTestId("athlete-cue-1010-1");
+    expect(cue).toHaveTextContent("Pause the first rep");
+    expect(cue.tagName).not.toBe("INPUT");
+    expect(cue.querySelector("input, textarea")).toBeNull();
+    const cues = screen.getByTestId("athlete-cues-1010");
+    expect(cues).toHaveTextContent("from your coach");
+    // The cue block comes after the "what you did" lines.
+    expect(
+      screen.getByTestId("athlete-line-1010-0").compareDocumentPosition(cues) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Exercises without cues have no coach block.
+    expect(screen.getAllByText("from your coach")).toHaveLength(1);
+  });
+
+  it("gives empty lines free line numbers and the target as placeholder", () => {
+    const g = grid();
+    const cell = g.days[0]!.rows[1]!.cells["10"]!;
+    cell.text = "3x5 @ 225";
+    cell.lines = [{ id: 9, line: 1, text: "Keep elbows in", athlete_authored: false }];
+    const amrap = g.days[0]!.rows[2]!.cells["10"]!;
+    amrap.text = "AMRAP @ 100";
+    const { container } = render(<AthletePreview grid={g} />);
+
+    // 3 sets prescribed; line 1 is a coach cue, so empties use 2, 3, 4.
+    const empties = container.querySelectorAll('[data-testid^="athlete-empty-line-2010-"]');
+    expect([...empties].map((e) => e.getAttribute("data-line"))).toEqual(["2", "3", "4"]);
+    for (const e of empties) expect(e).toHaveAttribute("placeholder", "225 x 5");
+
+    // The athlete's own line (Back Squat line 2) also keeps its number out of play.
+    const squat = container.querySelectorAll('[data-testid^="athlete-empty-line-1010-"]');
+    expect([...squat].map((e) => e.getAttribute("data-line"))).not.toContain("1");
+    expect([...squat].map((e) => e.getAttribute("data-line"))).not.toContain("2");
+    expect(squat[0]).toHaveAttribute("placeholder", "225 x 5, RPE 8 — or a note");
+
+    const generic = container.querySelectorAll('[data-testid^="athlete-empty-line-3010-"]');
+    expect(generic[0]).toHaveAttribute("placeholder", "225 x 5, RPE 8 — or a note");
+    for (const e of container.querySelectorAll("input[data-line]")) expect(e).toHaveAttribute("readonly");
+  });
+
+  it("shows a read-only notes box for the coach above a disabled Finish", () => {
+    render(<AthletePreview {...baseProps()} />);
+    const notes = screen.getByLabelText("Notes for your coach");
+    expect(notes).toBeDisabled();
+    const finish = screen.getByRole("button", { name: "Finish session" });
+    expect(finish).toBeDisabled();
+    expect(
+      notes.compareDocumentPosition(finish) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("falls back to the first live week and day when a selection disappears", async () => {
