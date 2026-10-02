@@ -434,6 +434,7 @@ def restore_plan_snapshot(plan, snapshot):
     }
     for exercise_slot in models.ExerciseSlot.objects.filter(pk__in=exercise_slot_pks):
         row = exercise_slot_rows[exercise_slot.pk]
+        # Only exercised by legacy "Moved X" snapshots now (prescription_move is retired).
         exercise_slot.session_slot_id = row["session_slot_id"]
         exercise_slot.exercise_id = (
             row["exercise_id"] if str(row["exercise_id"]) in live_catalog_ids else None

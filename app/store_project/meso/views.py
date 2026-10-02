@@ -3220,9 +3220,9 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
     ``sub_line_warn_reason`` its ``backing_sets`` scoped to that one log,
     rather than letting it fall back to its own unscoped query — which used
     to match a ``LoggedSet`` for this cell on ANY session log in the
-    database: a stray older log for this same (session, athlete), or, after a
-    coach moves the exercise to another day (``prescription_move``), the day
-    it moved FROM. ``session``/``athlete`` are keyword-only so a future
+    database: a stray older log for this same (session, athlete), or, for
+    legacy data (a slot moved by the retired ``prescription_move`` endpoint),
+    the day it moved FROM. ``session``/``athlete`` are keyword-only so a future
     caller can't pass them positionally and silently swap them with
     ``line_zero_cell``. An empty tuple when there is no log at all — a cell
     can be tinted before the athlete has ever logged anything today, and
@@ -3349,9 +3349,9 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
         # UNEVALUATED on purpose — `sub_line_warn_reason` touches it only on
         # the one branch that needs it (the text resolves to a set and nothing
         # on THIS day backs it), so an ordinary blur pays for no extra query.
-        # The cell pk doesn't change when a coach drags the exercise across
-        # days: `prescription_move` re-points the `ExerciseSlot` and the cell
-        # travels with it, so the rows left behind still name this cell
+        # Legacy data: a slot moved by the retired `prescription_move` endpoint
+        # kept its cell pk (the endpoint re-pointed the `ExerciseSlot` and the cell
+        # travelled with it), so the rows left behind still name this cell
         # through `source_line` while their `SessionLog`
         # stays on the day they were actually logged.
         #
@@ -4739,18 +4739,6 @@ def _cell_or_404(plan, pk):
     )
 
 
-def _session_for_cell(cell):
-    """The live (week × day) ``Session`` a cell belongs to (P0).
-
-    A cell has no ``.session`` of its own anymore — its day is the live
-    ``Session`` joining its own ``.week`` to its ``ExerciseSlot``'s
-    ``SessionSlot``.
-    """
-    return Session.objects.get(
-        week=cell.week, session_slot=cell.exercise_slot.session_slot
-    )
-
-
 _UNSET = object()
 
 
@@ -4941,8 +4929,8 @@ def session_add_exercise(request, plan_id, pk):
     new row to train only that one week: every created cell is
     ``skipped=True`` except ``week_id``'s. ``week_id`` must resolve to a live
     ``Week`` of THIS session's own mesocycle, or it's a 400 (a nonexistent or
-    foreign week is a bad reference, not a 404 — mirrors ``prescription_move``'s
-    ``session_id`` convention) — never silently falling back to the unscoped,
+    foreign week is a bad reference, not a 404 — same bad-reference convention
+    as the other body-referenced ids) — never silently falling back to the unscoped,
     train-everywhere behavior. Omitting ``week_id`` entirely keeps the
     unscoped behavior byte-identical to before P2.
     """
@@ -5658,119 +5646,6 @@ def api_plan_redo(request, plan_id):
     except HistoryUnavailable:
         return JsonResponse({"ok": False, "error": "History unavailable"}, status=409)
     week = _undo_redo_week_response(plan, week_id)
-    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
-
-
-def _live_session_in_plan_or_none(plan, session_id):
-    """A live ``Session`` of ``plan`` by pk, or ``None`` (a bad body reference).
-
-    A body-referenced id that
-    doesn't resolve to a live row of this plan answers 400, not the URL-segment
-    404 used for the endpoint's own ``pk``.
-    """
-    return Session.objects.filter(
-        pk=session_id,
-        week__mesocycle__plan=plan,
-        deleted_at__isnull=True,
-        week__deleted_at__isnull=True,
-    ).first()
-
-
-@login_required
-@require_POST
-def prescription_move(request, plan_id, pk):
-    """Move one exercise row to a different session, within the same week (Phase 4, #403).
-
-    The designer's cross-day drag. P0 fixed-lineup cutover: a row's identity
-    is the ``ExerciseSlot`` (block-wide, shared across every week), so this
-    re-points the cell's ``exercise_slot.session_slot`` to the target day's
-    ``SessionSlot`` — a **block-wide** move, not just this week's — and
-    densely renumbers (0-based) BOTH the source and target slot's live
-    exercise slots, with the moved row landing at the posted ``index``
-    (clamped into ``[0, len(target's live rows)]`` — a drop past either end
-    just lands at that end). A target session equal to the source behaves
-    like a plain within-day reorder (the row never leaves, only the one day's
-    rows are renumbered). Cross-*week* moves — a target session in a
-    different week than the source — are a 400
-    ``{"ok": false, "error": "Move within one week."}``; the designer's grid
-    has no cross-week drag gesture. ``LoggedSet.prescription`` rows are left
-    untouched — a move only ever changes the slot's ``session_slot``/``order``,
-    never touches an athlete's logged history, so it keeps pointing at the
-    same cell pk.
-
-    Body ``{"session_id": <int>, "index": <int>}``; malformed JSON, a non-object
-    body, or a missing/non-int field is a bare 400 (mirrors ``prescription_patch``).
-    A ``session_id`` that doesn't resolve to a live session of THIS plan is also
-    a 400 (``_live_session_in_plan_or_none``'s bad-reference convention) rather
-    than a 404 — only the URL-segment ``pk`` gets the 404 treatment.
-    """
-    plan, forbidden = _editable_plan_or_response(request, plan_id)
-    if forbidden is not None:
-        return forbidden
-    cell = _cell_or_404(plan, pk)
-    try:
-        payload = json.loads(request.body or "{}")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return HttpResponseBadRequest("Malformed JSON.")
-    if not isinstance(payload, dict):
-        return HttpResponseBadRequest("Expected a JSON object.")
-
-    session_id = payload.get("session_id")
-    if not isinstance(session_id, int) or isinstance(session_id, bool):
-        return HttpResponseBadRequest("session_id must be an integer.")
-    index = payload.get("index")
-    if not isinstance(index, int) or isinstance(index, bool):
-        return HttpResponseBadRequest("index must be an integer.")
-
-    target_session = _live_session_in_plan_or_none(plan, session_id)
-    if target_session is None:
-        return HttpResponseBadRequest("session_id must be a live session of this plan.")
-    if target_session.week_id != cell.week_id:
-        return JsonResponse({"ok": False, "error": "Move within one week."}, status=400)
-
-    source_session = _session_for_cell(cell)
-    week = source_session.week
-    source_slot = source_session.session_slot
-    target_slot = target_session.session_slot
-    with transaction.atomic():
-        # Lock ordering: plan first (see session_add).
-        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
-        record_plan_action(plan, f"Moved {cell.name or 'exercise'}")
-        es = cell.exercise_slot
-        if target_slot.pk == source_slot.pk:
-            siblings = list(
-                ExerciseSlot.objects.filter(
-                    session_slot=source_slot, deleted_at__isnull=True
-                )
-                .exclude(pk=es.pk)
-                .order_by("order")
-            )
-            clamped = max(0, min(index, len(siblings)))
-            siblings.insert(clamped, es)
-            for new_order, row in enumerate(siblings):
-                ExerciseSlot.objects.filter(pk=row.pk).update(order=new_order)
-        else:
-            target_rows = list(
-                ExerciseSlot.objects.filter(
-                    session_slot=target_slot, deleted_at__isnull=True
-                ).order_by("order")
-            )
-            clamped = max(0, min(index, len(target_rows)))
-            target_rows.insert(clamped, es)
-            for new_order, row in enumerate(target_rows):
-                ExerciseSlot.objects.filter(pk=row.pk).update(
-                    order=new_order, session_slot_id=target_slot.pk
-                )
-            source_rows = list(
-                ExerciseSlot.objects.filter(
-                    session_slot=source_slot, deleted_at__isnull=True
-                )
-                .exclude(pk=es.pk)
-                .order_by("order")
-            )
-            for new_order, row in enumerate(source_rows):
-                ExerciseSlot.objects.filter(pk=row.pk).update(order=new_order)
-        _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 

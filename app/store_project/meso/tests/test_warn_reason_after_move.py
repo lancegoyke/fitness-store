@@ -31,22 +31,13 @@ from store_project.meso.models import SessionLog
 from store_project.meso.models import sub_line_warn_reason
 from store_project.meso.parsing import cell_warn_reason
 from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import legacy_move_exercise_to_session
 from store_project.meso.tests._helpers import sub_line
 from store_project.meso.tests.test_parse_at_commit import seed
 from store_project.meso.tests.test_parse_at_commit import sub_cell
 from store_project.meso.tests.test_parse_at_commit import write_cell
 
 pytestmark = pytest.mark.django_db
-
-
-def move_cell(client, plan, cell, *, session_id, index=0):
-    return client.post(
-        reverse(
-            "meso:api_prescription_move", kwargs={"plan_id": plan.pk, "pk": cell.pk}
-        ),
-        data=json.dumps({"session_id": session_id, "index": index}),
-        content_type="application/json",
-    )
 
 
 def skip_cell(client, plan, cell, *, skipped):
@@ -83,9 +74,9 @@ class TestElsewhereSuppressesTheMoveRepostHazard:
         assert resp.status_code == 200
         assert LoggedSet.objects.count() == 1
 
-        client.force_login(s.coach)
-        resp = move_cell(client, s.plan, s.squat, session_id=day2.pk)
-        assert resp.status_code == 200
+        # Legacy data: a slot moved by the retired prescription_move endpoint,
+        # rebuilt straight in the ORM.
+        legacy_move_exercise_to_session(s.squat, day2)
 
         # Belt-and-braces: a page RENDER alone (the presenter, read-only) must
         # never itself create or duplicate a `LoggedSet`. The actual

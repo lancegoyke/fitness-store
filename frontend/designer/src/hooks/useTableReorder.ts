@@ -8,8 +8,8 @@
 // their POST behind useGrid's shared `busyRef` guard (see useGrid.ts's
 // header) — so there is no concurrency guard to duplicate here.
 //
-// Cross-day row moves are explicitly OUT of scope for A2 (own follow-up;
-// the backend's `prescription_move` needs zero changes for it later) —
+// Cross-day row moves are explicitly OUT of scope for A2 (the backend's
+// move endpoint is retired; a move is delete + re-add) —
 // enforced here as a second, independent guard even though MesoTable's own
 // collision filter (`filterTableDragCandidates`) already keeps a row drag
 // from colliding with another day's rows in the first place.

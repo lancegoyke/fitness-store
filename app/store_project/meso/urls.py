@@ -309,13 +309,6 @@ urlpatterns = [
         views.coach_set_one_rm,
         name="api_coach_set_one_rm",
     ),
-    # Move an exercise row to a different session, within the same week
-    # (dnd-kit designer cross-day drag, Phase 4, #403).
-    path(
-        "api/plan/<int:plan_id>/prescription/<int:pk>/move/",
-        views.prescription_move,
-        name="api_prescription_move",
-    ),
     # Freeform cell writes (Phase 2a): a sub-line upsert addressed by
     # (exercise_slot, week, line) — the stack is sparse, so no pk — and the
     # per-exercise Tempo/Rest/instructions columns on the row itself (D2).

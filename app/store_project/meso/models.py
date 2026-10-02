@@ -2763,7 +2763,7 @@ def sub_line_warn_reason(
     have NO scope at all (just ``LoggedSet.objects.filter(source_line=cell)``),
     so it could match a row on *any* ``SessionLog`` in the database — another athlete's, a
     legacy older log for the same (session, athlete) (impossible since #699),
-    or, after a coach moves the exercise to another day (``prescription_move``), the day it moved FROM. Scoped now to
+    or, for legacy data: a slot moved by the retired ``prescription_move`` endpoint, the day it moved FROM. Scoped now to
     the cell's own day — the ``Session`` where ``week=cell.week`` and
     ``session_slot=cell.exercise_slot.session_slot`` — via
     ``session_log__session__week``/``session_log__session__session_slot_id``,
@@ -2968,10 +2968,10 @@ class LoggedSet(models.Model):
     # CASCADE is deliberate, not an oversight: ``Prescription.exercise_slot``
     # is already CASCADE, and deleting an ``ExerciseSlot`` means the whole
     # exercise row is gone from every week — there is no partial state to
-    # preserve, EXCEPT: ``prescription_move`` re-points ``ExerciseSlot.
-    # session_slot`` to a different day, block-wide, while leaving every
-    # ``LoggedSet`` row alone — a move only changes the slot's placement,
-    # never an athlete's logged history. So after a move, a slot that gets
+    # preserve, EXCEPT legacy data: a slot moved by the retired ``prescription_move``
+    # endpoint (it re-pointed ``ExerciseSlot.session_slot`` to a different
+    # day, block-wide, leaving every ``LoggedSet`` row alone). A move is now
+    # delete + re-add, but for such old rows a slot that gets
     # deleted can carry ``LoggedSet`` rows whose ``session_log`` belongs to a
     # *different* day's still-live ``SessionLog`` than the day the slot now
     # sits on — CASCADE then removes those sets along with the slot, which is
