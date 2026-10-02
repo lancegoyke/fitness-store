@@ -33,6 +33,7 @@ import math
 from decimal import Decimal
 
 from . import models
+from .lift_identity import Lift
 from .lift_identity import LiftIndex
 from .lift_identity import lift_of
 from .lift_identity import representatives
@@ -170,6 +171,13 @@ def refresh_one_rms(athlete, lifts, unit):
     ``id:<pk>`` the first time the linked lift refreshes, while the old
     ``name:back squat`` row stays a correct answer for any free-text Back Squat
     target.
+
+    Because a set counts toward EVERY target it matches, a change to one can
+    move a stored row nobody named in ``lifts`` — a free-text Back Squat set
+    feeds the ``id:<pk>`` row of a catalog Back Squat on another block. So the
+    athlete's other stored LOGGED rows in ``unit`` are re-derived too, and each
+    is written (or cleared) only when its value no longer matches what the logs
+    support.
     """
     lifts = list(lifts)
     # One representative (exercise_id, name) per identity — a later lift's
@@ -179,6 +187,17 @@ def refresh_one_rms(athlete, lifts, unit):
         reps_by_key[key_str(p.exercise_id, p.name)] = (p.exercise_id, p.name)
     if not reps_by_key:
         return
+    # The other stored rows (#708, see the docstring). A row whose key no
+    # longer agrees with its own (exercise_id, name) — its catalog exercise was
+    # deleted out from under it — isn't a target any lookup can reach, so it
+    # is left alone rather than re-derived under a different key.
+    others = {
+        row.key: row
+        for row in models.AthleteOneRm.objects.filter(
+            athlete=athlete, unit=unit, source=models.AthleteOneRm.Source.LOGGED
+        ).exclude(key__in=reps_by_key)
+        if row.key == key_str(row.exercise_id, row.name)
+    }
     # A manually-entered estimate (Phase 2) is the athlete's own number — logs
     # never touch it (before, logs only ever *raised* the derived value). Skip
     # those lifts entirely so neither the upsert nor the stale-clear below runs.
@@ -196,17 +215,29 @@ def refresh_one_rms(athlete, lifts, unit):
     )
     # Derive from same-unit logs only, so the stored value is unambiguously in
     # ``unit`` (the unit it's written with).
-    derived = derive_one_rm_values(athlete, lifts=lifts, unit=unit)
+    derived = derive_one_rm_values(
+        athlete,
+        lifts=[*lifts, *(Lift(row.exercise_id, row.name) for row in others.values())],
+        unit=unit,
+    )
+    targets = {
+        **{key: (row.exercise_id, row.name) for key, row in others.items()},
+        **reps_by_key,
+    }
     # Sorted, so every caller locks this athlete's rows in ONE order.
     # `update_or_create` holds each row it touches until the caller's
     # transaction ends, and two concurrent refreshes over the same lifts in
     # opposite session order — the 5b settle sweep finishing one session while
     # the athlete saves another — would otherwise deadlock on Postgres.
-    for key, (exercise_id, name) in sorted(reps_by_key.items()):
+    for key, (exercise_id, name) in sorted(targets.items()):
         if key in manual_keys:
             continue
         value = derived.get(key)
         quantized = _quantize(value) if value is not None else None
+        stored = others.get(key)
+        if stored is not None and quantized is not None and quantized == stored.value:
+            # Another row, still what its logs support: no write, no lock.
+            continue
         if quantized is None or not (Decimal("0") < quantized <= _MAX_VALUE):
             # No usable same-unit estimate remains (the set was blanked / made
             # free-text, or the value won't fit the column): clear any stale row in

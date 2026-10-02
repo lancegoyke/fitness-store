@@ -185,7 +185,10 @@ def _best_per_lift(performed, targets=None):
             if current is None or ps.e1rm > current.e1rm:
                 best[key] = PersonalRecord(
                     key=key,
-                    name=target.name,
+                    # The winning set's own name, as the athlete logged it:
+                    # deterministic, unlike "first name seen" for an FK known
+                    # under several names.
+                    name=ps.name,
                     unit=ps.unit,
                     e1rm=ps.e1rm,
                     reps=ps.reps,
@@ -275,7 +278,8 @@ def new_records_in(session_log):
         .anchored()
         .select_related("session_log")
     )
-    this_best = _best_per_lift(_performed_sets(this_sets, unit=unit))
+    this_performed = list(_performed_sets(this_sets, unit=unit))
+    this_best = _best_per_lift(this_performed)
     if not this_best:
         return []
 
@@ -295,9 +299,18 @@ def new_records_in(session_log):
         prior_qs = prior_qs.filter(
             session_log__status=models.SessionLog.Status.DONE
         ).filter(_logged_before(session_log))
+    # The baseline is matched by the same targets, plus every catalog lift this
+    # session carries under each of its names here: an FK target is matched
+    # under the names its own index knows (``LiftIndex.matching``), and a name
+    # it carries only in THIS session would otherwise be missing from the
+    # prior index, under-counting the baseline into a false PR. Same key, so
+    # ``_best_per_lift`` keeps the larger best.
     prior_best = _best_per_lift(
         _performed_sets(prior_qs, unit=unit),
-        targets=[r.lift for r in this_best.values()],
+        targets=[
+            *(r.lift for r in this_best.values()),
+            *(ps.lift for ps in this_performed if ps.lift.exercise_id is not None),
+        ],
     )
 
     records = []

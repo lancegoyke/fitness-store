@@ -3036,7 +3036,11 @@ class LoggedSet(models.Model):
     # ``exercise_name`` NULL means UNSTAMPED: a row old code wrote during a
     # rolling deploy (it doesn't know these columns). ``lift`` falls back to
     # the anchor slot's live identity for it — exactly the pre-#708 reading —
-    # and that fallback is permanent, not transitional.
+    # and that fallback is permanent, not transitional. One loud edge, as with
+    # ``exercise_slot`` after 0050: old code serving against this schema (the
+    # deploy window, or a rollback) doesn't know this FK, so an admin delete of
+    # a catalog ``Exercise`` some stamp points at fails at COMMIT on the
+    # deferred constraint instead of nulling it.
     exercise = models.ForeignKey(
         "exercises.Exercise",
         on_delete=models.SET_NULL,
@@ -3145,15 +3149,24 @@ class LoggedSet(models.Model):
         silently derive the anchor from a different database than the one
         being written to.
 
-        #708: the lift stamp (``exercise`` / ``exercise_name``) is written on
-        INSERT when unset, and again only when this save RE-POINTED an existing
-        row to a different ``exercise_slot`` (that re-files the set to another
-        row, so to that row's lift). An ordinary re-save never re-stamps — the
-        stamp is write-once, which is the point. ``bulk_create`` sites stamp
+        #708: the lift stamp (``exercise`` / ``exercise_name``) is written
+        whenever a save finds the row unstamped and its anchor resolves (an
+        insert, or an old-code row this code saves later), and again only when
+        this save RE-POINTED the row to a different ``exercise_slot`` (that
+        re-files the set to another row, so to that row's lift). A re-point is
+        judged against the anchor the row was LOADED with (``from_db``), not
+        the in-memory value at the top of this method, so a caller that
+        assigns ``exercise_slot`` itself is caught too; a row loaded with no
+        ``exercise_slot`` re-points when its ``prescription`` changes to
+        another slot's cell. An ordinary re-save never re-stamps — the stamp is
+        write-once, which is the point. ``bulk_create`` sites stamp
         themselves, as they do ``exercise_slot_id``.
         """
         update_fields = kwargs.get("update_fields")
         original_slot_id = self.exercise_slot_id
+        loaded_slot_id, loaded_prescription_id = getattr(
+            self, "_loaded_anchor", (original_slot_id, self.prescription_id)
+        )
         db_alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         if self.prescription_id is not None and (
             update_fields is None or update_fields
@@ -3174,12 +3187,14 @@ class LoggedSet(models.Model):
         if update_fields is None or update_fields:
             repointed = (
                 not self._state.adding
-                and original_slot_id is not None
-                and self.exercise_slot_id != original_slot_id
+                and self.exercise_slot_id is not None
+                and self.exercise_slot_id != loaded_slot_id
+                and (
+                    loaded_slot_id is not None
+                    or self.prescription_id != loaded_prescription_id
+                )
             )
-            wants_stamp = (
-                self._state.adding and self.exercise_name is None
-            ) or repointed
+            wants_stamp = self.exercise_name is None or repointed
             if wants_stamp and self.exercise_slot_id is not None:
                 stamp = (
                     ExerciseSlot.objects.using(db_alias)
@@ -3195,6 +3210,25 @@ class LoggedSet(models.Model):
                             "exercise_name",
                         }
         super().save(*args, **kwargs)
+        self._loaded_anchor = (self.exercise_slot_id, self.prescription_id)
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        """Remember the anchor the row was loaded with (#708, see ``save``)."""
+        instance = super().from_db(db, field_names, values)
+        if "exercise_slot_id" in instance.__dict__ and "prescription_id" in (
+            instance.__dict__
+        ):
+            instance._loaded_anchor = (
+                instance.exercise_slot_id,
+                instance.prescription_id,
+            )
+        return instance
+
+    def refresh_from_db(self, *args, **kwargs):
+        """Reload, and re-baseline the anchor ``save`` compares a re-point to."""
+        super().refresh_from_db(*args, **kwargs)
+        self._loaded_anchor = (self.exercise_slot_id, self.prescription_id)
 
     @property
     def anchor_slot_id(self):

@@ -19,6 +19,14 @@ who typed "Back Squat" and later picks catalog "Back Squat" (#696) keeps the
 athlete's free-text history under the linked lift. It is symmetric, so
 unlinking a row doesn't orphan its catalog-stamped history either.
 
+**One catalog lift, several names.** An FK can be stamped under more than one
+name (a staff rename of the catalog entry between two picks, an admin edit).
+It is still one lift, keyed ``id:<pk>`` alone, so an FK target is matched under
+EVERY name its FK carries in the history being searched, as well as its own:
+a free-text "Squat" set counts toward catalog lift X once X has been stamped
+"Squat" anywhere in that history, whichever of X's names the target shows. That
+keeps the ``id:`` estimate from depending on which row asked.
+
 The rule isn't transitive (a name-only set matches two different FKs that share
 its name), so it can't be a dict key. Targets are matched against an index
 (:class:`LiftIndex`), and an untargeted grouping (the records panel) uses
@@ -46,7 +54,7 @@ class Lift(NamedTuple):
 
 def norm_name(name):
     """The comparison form of a lift name: stripped and case-folded."""
-    return (name or "").strip().lower()
+    return (name or "").strip().casefold()
 
 
 def lift_of(obj):
@@ -80,44 +88,57 @@ class LiftIndex:
                 self._by_fk[item_lift.exercise_id].append(entry)
             self._by_name[norm_name(item_lift.name)].append(entry)
 
+    def names_of(self, exercise_id):
+        """Every normalized name catalog lift ``exercise_id`` carries here."""
+        return {norm_name(entry[1].name) for entry in self._by_fk.get(exercise_id, [])}
+
     def matching(self, target):
         """Items whose lift is :func:`same_lift` as ``target``, in input order.
 
-        The buckets only narrow the search (every match shares the target's FK
-        or its name); :func:`same_lift` decides, so the rule lives in one place.
+        An FK target is tried under each of its names in this index too (see
+        the module docstring). The buckets only narrow the search (every match
+        shares the target's FK or one of those names); :func:`same_lift`
+        decides, so the rule lives in one place.
         """
+        names = {norm_name(target.name)}
+        if target.exercise_id is not None:
+            names |= self.names_of(target.exercise_id)
+        aliases = [Lift(target.exercise_id, name) for name in names]
         candidates = {}
-        for entry in self._by_name.get(norm_name(target.name), []):
-            candidates[entry[0]] = entry
+        for name in names:
+            for entry in self._by_name.get(name, []):
+                candidates[entry[0]] = entry
         if target.exercise_id is not None:
             for entry in self._by_fk.get(target.exercise_id, []):
                 candidates[entry[0]] = entry
         return [
             item
-            for position, item_lift, item in sorted(candidates.values())
-            if same_lift(item_lift, target)
+            for _, item_lift, item in sorted(candidates.values(), key=lambda e: e[0])
+            if any(same_lift(item_lift, alias) for alias in aliases)
         ]
 
 
 def representatives(lifts):
     """The distinct lifts in a history, one per row of a records-style list.
 
-    Every catalog FK present is one lift. A name-only lift stands alone only
-    when no FK-stamped lift shares its name; otherwise it is folded into each
-    such FK (it matches every one of them under :func:`same_lift`). Returned
-    in first-seen order. An FK's name is the first one seen for it.
+    Every catalog FK present is one lift, under the first name seen for it. A
+    name-only lift stands alone only when no FK in the history carries its
+    name; otherwise it is folded into each such FK (which matches it under
+    that name, see :meth:`LiftIndex.matching`). Returned in first-seen order.
     """
-    by_fk = {}
-    fk_names = set()
-    name_only = {}
+    lifts = [item for item in lifts if item is not None]
+    fk_names = {norm_name(item.name) for item in lifts if item.exercise_id is not None}
+    seen_fks = set()
+    seen_names = set()
+    result = []
     for item in lifts:
-        if item is None:
-            continue
         if item.exercise_id is not None:
-            by_fk.setdefault(item.exercise_id, item)
-            fk_names.add(norm_name(item.name))
-        else:
-            name_only.setdefault(norm_name(item.name), item)
-    return list(by_fk.values()) + [
-        item for name, item in name_only.items() if name not in fk_names
-    ]
+            if item.exercise_id not in seen_fks:
+                seen_fks.add(item.exercise_id)
+                result.append(item)
+            continue
+        name = norm_name(item.name)
+        if name not in fk_names and name not in seen_names:
+            seen_names.add(name)
+            result.append(item)
+    return result
