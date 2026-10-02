@@ -987,3 +987,48 @@ class TestRepointNeedsAnchorWrite:
         # A later full save writes the anchor, so it re-points then.
         row.save()
         assert self._db(row) == (sb, target.pk, ex.pk, "Deadlift")
+
+
+class TestRecentLogsOrdinalsFollowTheLift:
+    """#716: the agent saw "Front Squat, set 3" for the first front-squat set."""
+
+    def test_sets_are_numbered_within_the_stamped_lift(self):
+        s = seed_708()
+        log = SessionLogFactory(session=s.d1w1, athlete=s.athlete)
+        for n in (1, 2):
+            LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=n)
+        swap(s)  # mid-session: the same row is now Front Squat
+        LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=3)
+        sets = serializers.serialize_recent_logs(s.plan)[0]["sets"]
+        assert [(x["exercise"], x["set"]) for x in sets] == [
+            ("Back Squat", 1),
+            ("Back Squat", 2),
+            ("Front Squat", 1),
+        ]
+
+    def test_set_ordinals_default_stays_per_row(self):
+        """The athlete and results surfaces keep numbering per row (not red on main)."""
+        s = seed_708()
+        log = SessionLogFactory(session=s.d1w1, athlete=s.athlete)
+        a = LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=1)
+        swap(s)
+        b = LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=2)
+        assert serializers.set_ordinals([a, b]) == {a.pk: 1, b.pk: 2}
+
+    def test_linking_to_the_catalog_keeps_one_count_under_one_label(self):
+        """Free-text "Back Squat" linked to the catalog's mid-session is one lift."""
+        s = seed_708()
+        ex = ExerciseFactory(name="Back Squat", slug="back-squat")
+        log = SessionLogFactory(session=s.d1w1, athlete=s.athlete)
+        for n in (1, 2):
+            LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=n)
+        slot = s.row1_w1.exercise_slot
+        slot.exercise = ex
+        slot.save(update_fields=["exercise"])
+        LoggedSetFactory(session_log=log, prescription=s.row1_w1, set_number=3)
+        sets = serializers.serialize_recent_logs(s.plan)[0]["sets"]
+        assert [(x["exercise"], x["set"]) for x in sets] == [
+            ("Back Squat", 1),
+            ("Back Squat", 2),
+            ("Back Squat", 3),
+        ]
