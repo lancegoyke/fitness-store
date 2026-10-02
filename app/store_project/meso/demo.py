@@ -36,12 +36,13 @@ from .management.commands.seed_meso_demo import SAMPLE_PLAN
 from .management.commands.seed_meso_demo import _months_before
 from .management.commands.seed_meso_demo import _years_before
 from .management.commands.seed_meso_demo import build_block
+from .management.commands.seed_meso_demo import log_typed_sets
+from .management.commands.seed_meso_demo import sample_log_items
 from .models import AgentProposalBatch
 from .models import AthleteProfile
 from .models import CoachAthlete
 from .models import CoachProfile
 from .models import Contraindication
-from .models import LoggedSet
 from .models import Mesocycle
 from .models import Plan
 from .models import Session
@@ -703,7 +704,11 @@ def _ensure_demo_delivery(plan):
 def _ensure_demo_log(athlete, plan, today):
     """Log Maya's current-week session + refresh her derived 1RM (no notify).
 
-    Idempotent: the log rows are created only when absent. Assumes the week is
+    Idempotent: the log rows are created only when absent. The sets are
+    typed-origin (``seed_meso_demo.log_typed_sets``): athlete-authored sub-line
+    cells plus the ``LoggedSet`` each derives, the shape ``athlete_cell_write``
+    produces — the athlete logs by typing a line (#578 stage 4), so the demo
+    must look like that. Assumes the week is
     already delivered — the ``log`` segment loader ensures that itself via
     ``load_delivery`` before calling this; logging against an undelivered week
     doesn't error, it just wouldn't reflect the demo's real step order.
@@ -725,28 +730,7 @@ def _ensure_demo_log(athlete, plan, today):
     prescriptions = {p.name: p for p in session.cells()}
     if not (not created and log.sets.exists()):
         log.sets.all().delete()
-        rows = []
-        for name, sets in SAMPLE_LOG["sets"].items():
-            prescription = prescriptions.get(name)
-            if prescription is None:
-                continue
-            for set_number, (reps, load, rpe) in enumerate(sets, start=1):
-                rows.append(
-                    LoggedSet(
-                        session_log=log,
-                        prescription=prescription,
-                        # #578 C1: written alongside `prescription`, not
-                        # instead of it — see `LoggedSet.exercise_slot`'s
-                        # model comment.
-                        exercise_slot_id=prescription.exercise_slot_id,
-                        set_number=set_number,
-                        reps=reps,
-                        load=load,
-                        unit=plan.unit,
-                        rpe=rpe,
-                    )
-                )
-        LoggedSet.objects.bulk_create(rows)
+        log_typed_sets(log, sample_log_items(prescriptions))
 
     refresh_one_rms(athlete, list(prescriptions.values()), plan.unit)
     return log

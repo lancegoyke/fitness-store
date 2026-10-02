@@ -23,11 +23,10 @@ import pytest
 from django.contrib.auth.hashers import make_password
 from django.core.management import call_command
 
-from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.management.commands.seed_meso_demo import _ease_rpe
 from store_project.meso.management.commands.seed_meso_demo import (
-    _logged_sets_from_cells,
+    _typed_set_texts_from_cells,
 )
 from store_project.meso.management.commands.seed_meso_demo import _week_cell
 from store_project.meso.models import AthleteProfile
@@ -126,13 +125,14 @@ class TestWeekCellSplitsRpeOntoItsOwnLine:
         assert _week_cell({}, week_index=1) == {}
 
 
-class TestLoggedSetsFromCellsRecoversRpeFromSubLine:
-    """The RPE split's fallout: ``_logged_sets_from_cells`` must not lose it.
+class TestTypedTextsFromCellsRecoverRpeFromSubLine:
+    """The RPE split's fallout: ``_typed_set_texts_from_cells`` must not lose it.
 
     ``parse_prescription`` only classifies a cell's line 0 — so once
     ``_week_cell`` moved a generated cell's RPE onto its own line-1 sub-line
     (the class above), parsing line 0 alone stopped finding any RPE at all.
-    ``_logged_sets_from_cells`` has to fall back to the cell's sub-lines when
+    ``_typed_set_texts_from_cells`` (the typed lines the history loop has the
+    athlete "type", #578 stage 4) has to fall back to the cell's sub-lines when
     line 0 doesn't carry one, without regressing hand-authored cells that
     still pack RPE inline on line 0.
     """
@@ -144,12 +144,11 @@ class TestLoggedSetsFromCellsRecoversRpeFromSubLine:
         session = day(week, day_number=1, name="Lower")
         cell = presc(session, text="3 x 12, 85.6")
         sub_line(cell, "RPE 6.5")
-        log = SessionLogFactory(session=session)
 
-        rows = _logged_sets_from_cells(log, [cell])
+        ((got_cell, texts),) = _typed_set_texts_from_cells([cell])
 
-        assert len(rows) == 3
-        assert all(row.rpe == "6.5" for row in rows)
+        assert got_cell == cell
+        assert texts == ["85.6 x 12, RPE 6.5"] * 3
 
     def test_line_0_inline_rpe_still_wins_over_a_sub_line(self):
         # A hand-authored cell (e.g. Maya's logged-through-week fixture)
@@ -160,22 +159,33 @@ class TestLoggedSetsFromCellsRecoversRpeFromSubLine:
         cell = presc(session, text="3 x 10, RPE 7, 60")
         sub_line(cell, "RPE 9")
 
-        log = SessionLogFactory(session=session)
+        ((_, texts),) = _typed_set_texts_from_cells([cell])
 
-        rows = _logged_sets_from_cells(log, [cell])
+        assert texts == ["60 x 10, RPE 7"] * 3
 
-        assert all(row.rpe == "7" for row in rows)
-
-    def test_no_rpe_anywhere_yields_blank_and_does_not_raise(self):
+    def test_no_rpe_anywhere_yields_no_rpe_and_does_not_raise(self):
         week = WeekFactory()
         session = day(week, day_number=1, name="Lower")
         cell = presc(session, text="4 x 15, 60")  # accessory row, no RPE at all
-        log = SessionLogFactory(session=session)
 
-        rows = _logged_sets_from_cells(log, [cell])
+        ((_, texts),) = _typed_set_texts_from_cells([cell])
 
-        assert rows  # didn't raise, still logged sets
-        assert all(row.rpe == "" for row in rows)
+        assert texts == ["60 x 15"] * 4
+
+    def test_percent_load_and_rep_range_are_kept_not_blanked(self):
+        # A %1RM load is typed as-is ("72% x 8"); a rep range types its lower
+        # bound; a cell with neither reps nor load yields nothing.
+        week = WeekFactory()
+        session = day(week, day_number=1, name="Lower")
+        pct = presc(session, text="2 x 8, 72%")
+        ranged = presc(session, text="2 x 10-12, 40")
+        empty = presc(session, text="Rest 90s")
+
+        got = dict(_typed_set_texts_from_cells([pct, ranged, empty]))
+
+        assert got[pct] == ["72% x 8"] * 2
+        assert got[ranged] == ["40 x 10"] * 2
+        assert empty not in got
 
     def test_sub_line_lookup_is_one_query_not_one_per_cell(
         self, django_assert_num_queries
@@ -190,13 +200,12 @@ class TestLoggedSetsFromCellsRecoversRpeFromSubLine:
             cell = presc(session, text=f"3 x 10, {60 + i}")
             sub_line(cell, "RPE 7")
             cells.append(cell)
-        log = SessionLogFactory(session=session)
 
         with django_assert_num_queries(1):
-            rows = _logged_sets_from_cells(log, cells)
+            got = _typed_set_texts_from_cells(cells)
 
-        assert len(rows) == 18  # 6 cells x 3 sets
-        assert all(row.rpe == "7" for row in rows)
+        assert sum(len(texts) for _, texts in got) == 18  # 6 cells x 3 sets
+        assert all("RPE 7" in t for _, texts in got for t in texts)
 
 
 class TestSeedCreatesDemo:
@@ -335,9 +344,14 @@ class TestSeedCreatesDemo:
             assert week.sessions.count() == 3
             assert week.cells.filter(line=0).count() == expected_cells
         # The logged-through week's one freeform sub-line: the Hanging Knee
-        # Raise substitution typed as text (§2.6), not a swap field.
+        # Raise substitution typed as text (§2.6), not a swap field. Scoped to
+        # coach-authored lines: this week is logged, and the seed now logs it as
+        # an athlete's typed lines (#578 stage 4) — athlete_authored sub-lines
+        # that this fixture-shape check is not about.
         assert list(
-            logged_through.cells.filter(line__gte=1).values_list("text", flat=True)
+            logged_through.cells.filter(
+                line__gte=1, athlete_authored=False
+            ).values_list("text", flat=True)
         ) == ["Cable Crunch"]
 
     def test_generated_weeks_carry_rpe_as_a_line_1_sub_line(self):
@@ -362,14 +376,19 @@ class TestSeedCreatesDemo:
         assert line1.text == "RPE 7"
 
         # "Standing Calf Raise" is seeded with ``rpe=None`` (an accessory row)
-        # — it must not gain a blank/absent sub-line row at all.
+        # — it must not gain a blank/absent COACH-authored sub-line row at all
+        # (week 1 is logged history, so it does carry the seed's athlete-typed
+        # lines; those are asserted in test_demo_typed_origin).
         calf_raise = by_name["Standing Calf Raise"]
         calf_line0 = Prescription.objects.get(
             exercise_slot=calf_raise, week=week1, line=0
         )
         assert "RPE" not in calf_line0.text
         assert not Prescription.objects.filter(
-            exercise_slot=calf_raise, week=week1, line__gte=1
+            exercise_slot=calf_raise,
+            week=week1,
+            line__gte=1,
+            athlete_authored=False,
         ).exists()
 
 
@@ -592,7 +611,7 @@ class TestDevonAndPriyaPrograms:
         # built entirely from generator cells (``_client_block``/``_week_cell``)
         # — the RPE split (docs/meso/spreadsheet-parity-plan §2.1/§2.6) moved
         # their RPE onto a line-1 sub-line, which is exactly what
-        # ``_logged_sets_from_cells`` has to recover from. Without the fix,
+        # ``_typed_set_texts_from_cells`` has to recover from. Without the fix,
         # every one of these ``LoggedSet`` rows would carry ``rpe == ""``.
         seed()
         coach = User.objects.get(email=COACH_EMAIL)

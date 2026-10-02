@@ -951,51 +951,6 @@ button.meso-row:hover {
   outline: none;
   color: var(--ink);
 }
-/* One set: label, load × reps, rpe, the %1RM hint when there is one, and the
-   check-off circle. A grid, so the inputs share whatever width the phone has
-   instead of overflowing it. */
-.meso-set-row {
-  display: grid;
-  /* label | load | × | reps | rpe | %1RM hint | check-off circle. The ×
-     track is a fixed width, not auto: on a phone the hint spans load..rpe on
-     a second line, and an auto track in that span would absorb the hint's
-     whole width and squeeze the load box. */
-  grid-template-columns:
-    auto minmax(0, 72px) 10px minmax(0, 60px) minmax(0, 60px)
-    minmax(0, 1fr) 44px;
-  align-items: center;
-  column-gap: 9px;
-  padding: 4px 6px 4px 16px;
-  border-bottom: 1px solid var(--line-2);
-}
-.meso-set-row .meso-log-input {
-  text-align: center;
-  padding-left: 4px;
-  padding-right: 4px;
-}
-.meso-set-row-label {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--dim);
-  white-space: nowrap;
-}
-.meso-set-row-hint {
-  grid-column: 6;
-  white-space: nowrap;
-}
-.meso-set-toggle {
-  grid-column: 7;
-  appearance: none;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  padding: 0;
-  width: 44px;
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 /* A typed sub-line; its status note wraps under the input when both don't fit. */
 .meso-sub-line-row {
   display: flex;
@@ -1071,18 +1026,8 @@ button.meso-row:hover {
   .meso-athlete .meso-block-stack-only {
     display: inline;
   }
-  .meso-set-row {
-    column-gap: 6px;
-    padding-right: 2px;
-  }
-  /* No spare column on a phone: the %1RM hint takes its own line. */
-  .meso-set-row-hint {
-    grid-column: 2 / 6;
-    grid-row: 2;
-    padding-bottom: 4px;
-  }
-  /* Save progress and Log session split the full width, last on the page,
-     where the thumb already is. */
+  /* The Finish session button takes the full width, last on the page, where
+     the thumb already is. */
   .meso-log-actions-buttons {
     flex: 1 1 100%;
     gap: 10px;

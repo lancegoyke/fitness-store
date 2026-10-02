@@ -107,7 +107,6 @@ from .models import Unit
 from .models import Week
 from .models import WeekDelivery
 from .models import display_line_id
-from .models import hidden_parsed_set_pks
 from .models import newest_session_logs
 from .models import sub_line_warn_reason
 from .names import athlete_name
@@ -128,7 +127,6 @@ from .serializers import serialize_plan_history
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_session
-from .serializers import serialize_session_log
 from .serializers import serialize_week_snapshot
 from .stale_form import classify
 from .stale_form import conflict_message
@@ -1898,7 +1896,7 @@ def tour_config(request):
     """Read-only snapshot of the coach's authoritative tour config (issue #451).
 
     The self-variant deliver/results steps take their data-producing action via
-    ``fetch`` (delivering the coach's own block / logging their own session) —
+    ``fetch`` (delivering the coach's own block / finishing their own session) —
     no page reload — so the server advances ``tour_state`` (via
     ``advance_self_step_if_complete`` in ``plan_deliver``/``athlete_log_session``)
     but the already-mounted ``meso_tour.js`` card can't see it until the coach
@@ -1977,9 +1975,9 @@ def _athlete_has_completed_log(user):
 
     Drives the one-time first-log coachmark: it's a *first*-log nudge, so once
     they've finished a real session (in any plan) they know how — the hint hides.
-    Gated on a ``done`` log specifically (not any row): a "Save progress" draft
-    writes a ``pending`` log while the session still reads "To do", and the hint
-    teaches that final "Log session" step, so a draft must not suppress it.
+    Gated on a ``done`` log specifically (not any row): typing a line writes a
+    ``pending`` log while the session still reads "To do", and the hint teaches
+    the final "Finish session" step, so a draft must not suppress it.
     Server-driven, so the nudge is naturally one-time + cross-device with no
     per-device flag or migration; it vanishes the moment the first log lands.
     """
@@ -1999,9 +1997,8 @@ def _athlete_session_or_404(user, pk):
     Soft delete (designer framework Phase 0): a session the coach removed —
     or one under a removed week — is gone from the athlete's surface too.
     Cells are read live via ``session.cells()``
-    (P0 fixed-lineup cutover), so every downstream call (the logger grid,
-    ``_clean_logged_sets``'s allowed ids, ``athlete_set_one_rm``) sees only
-    live rows. Already-logged history is untouched — those reads go through
+    (P0 fixed-lineup cutover), so every downstream call (the logger page,
+    ``athlete_cell_write``, ``athlete_set_one_rm``) sees only live rows. Already-logged history is untouched — those reads go through
     ``SessionLog``/``LoggedSet``, never this lookup.
     """
     session = (
@@ -2088,11 +2085,12 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
 
 
 class AthleteSessionView(LoginRequiredMixin, TemplateView):
-    """One session — the athlete's interactive logger (Phase 2).
+    """One session — the athlete's logger.
 
-    Renders the prescribed grid as set-input rows pre-filled from the athlete's
-    own existing log, and injects ``log_data`` for the Alpine logger to hydrate
-    from and POST back to ``athlete_log_session``.
+    Renders the prescribed lineup with each exercise's typed "what you did"
+    lines (the athlete's own sub-lines) and injects ``log_data`` for the Alpine
+    page: blurs save through ``athlete_cell_write``, and "Finish session" posts
+    to ``athlete_log_session``.
     """
 
     template_name = "meso/athlete_session.html"
@@ -2115,37 +2113,38 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         ctx["log_data"]["owner"] = str(self.request.user.pk)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
-        # First-log coachmark (Phase 4): teach the logger only to a first-ever
-        # logger — any prior log means they already know how.
-        ctx["show_first_log_hint"] = not _athlete_has_completed_log(self.request.user)
         ctx.update(_pwa_context())
         return ctx
-
-
-# Free-form text cells per logged set, mapped to their model ``max_length``.
-LOG_SET_FIELDS = {"reps": 32, "load": 32, "rpe": 32}
-# A client-minted ``client_id`` (#567) is never stored — it only round-trips
-# through one request/response pair — so this just bounds the noise a bad
-# client can put in a 400 error message and, transitively, in the payload
-# itself; there's no column length to mirror.
-MAX_CLIENT_ID_LENGTH = 64
 
 
 @login_required
 @require_POST
 def athlete_log_session(request, pk):
-    """Upsert the athlete's log for a session they own (Phase 2).
+    """Finish (or annotate) the athlete's log for a session they own.
 
-    Replaces the athlete's own ``SessionLog`` + ``LoggedSet`` rows for this
-    session with the posted state, flips the session done (unless an explicit
-    ``status`` says otherwise; a DONE log is never downgraded, see below), and
-    stamps the date (today when none is given).
-    Scoped by ``_athlete_session_or_404`` — a foreign, archived, or
-    unknown session is a flat 404, never a silent write. The body is fully
-    validated *before* any write, so a bad request is a 400 that persists
-    nothing; the write itself is idempotent (re-logging updates the one log,
-    replacing its set rows rather than appending). These are the first real rows
-    ``serialize_recent_logs`` grounds the agent on.
+    Writes the log's ``status``, ``date`` and ``notes`` and nothing else. The
+    athlete's sets are typed lines saved on blur by ``athlete_cell_write``; this
+    endpoint is what the "Finish session" button posts, and it flips the log
+    done (unless an explicit ``status`` says otherwise; a DONE log is never
+    downgraded, see below) and stamps the date (today when none is given).
+
+    ``notes`` is saved only when the key is present — a post that omits it
+    (the offline queue's status-only replay, say) leaves the existing notes
+    alone rather than blanking them.
+
+    ``sets`` is IGNORED, whatever its shape: the structured Set-row logger that
+    posted it was retired (#578 stage 4), and nothing here writes a
+    ``LoggedSet`` any more. It is ignored rather than refused because the
+    URL stays: an installed PWA can still be running the previous page's JS,
+    or replaying an offline-queued save made before the deploy, and a 400
+    would make that client drop the status and notes it posted alongside. The
+    event ``LEGACY_SETS_IGNORED`` records how often that happens, so the
+    tolerance can be removed when it stops.
+
+    Scoped by ``_athlete_session_or_404`` — a foreign, archived, or unknown
+    session is a flat 404, never a silent write. The body is fully validated
+    *before* any write, so a bad request is a 400 that persists nothing; the
+    write itself is idempotent (finishing twice updates the one log).
     """
     session = _athlete_session_or_404(request.user, pk)
     try:
@@ -2161,9 +2160,9 @@ def athlete_log_session(request, pk):
 
     # An explicit date is honored; a missing one defaults to today only when
     # *creating* the log — re-saving an existing log without a date keeps its
-    # original date so editing a set days later doesn't move the workout (which
-    # would reorder recent-log grounding). ``explicit_date`` is None when none
-    # was sent.
+    # original date so finishing a session days later doesn't move the workout
+    # (which would reorder recent-log grounding). ``explicit_date`` is None when
+    # none was sent.
     raw_date = payload.get("date")
     explicit_date = None
     if raw_date not in (None, ""):
@@ -2174,27 +2173,15 @@ def athlete_log_session(request, pk):
         except ValueError:
             return HttpResponseBadRequest("date must be an ISO date (YYYY-MM-DD).")
 
-    notes = payload.get("notes", "")
-    if not isinstance(notes, str):
+    # Present => must be a string and is saved; absent => left untouched.
+    has_notes = "notes" in payload
+    notes = payload.get("notes")
+    if has_notes and not isinstance(notes, str):
         return HttpResponseBadRequest("notes must be a string.")
 
-    cleaned_sets, error = _clean_logged_sets(payload.get("sets", []), session)
-    if error is not None:
-        return error
-    # #567: row identity. A payload is IDENTIFIED when every set names the row
-    # it means — its own ``id`` (rendered by a previous save) or a fresh
-    # ``client_id`` (a grid row with no server row yet) — rather than leaving
-    # the server to infer it from ``(prescription, set_number)``, which is
-    # evidence about a render that can be several saves old once a row is
-    # hidden. Whole-payload, not per-row: a real client tags every set it
-    # knows how to (it always knows, once it's on this contract), so a mixed
-    # payload can only mean a legacy/stale-tab client that tags none of them —
-    # there is no partial-trust story here, only "trust the ids" or "fall back
-    # to the old guess for everything". Vacuously ``True`` for an empty list:
-    # nothing differs between the two modes when there's nothing to match.
-    identified = all(
-        cs["id"] is not None or cs["client_id"] is not None for cs in cleaned_sets
-    )
+    has_legacy_sets = "sets" in payload
+    legacy_sets = payload.get("sets")
+    legacy_count = len(legacy_sets) if isinstance(legacy_sets, list) else 0
     plan = session.week.mesocycle.plan
 
     with transaction.atomic():
@@ -2208,10 +2195,11 @@ def athlete_log_session(request, pk):
             return HttpResponseNotFound("Unknown session")
         # Same lock `_upsert_parsed_set` takes, and it has to be BOTH sides to
         # work: `(session, athlete)` has no uniqueness, so an athlete who types
-        # into a cell and immediately taps Save can have the blur POST and this
-        # one both find no log and each create one. Locking only the blur path
-        # leaves that race wide open. One workout split across two logs loses
-        # the older one's sets from every later read, which takes the newest.
+        # into a cell and immediately taps Finish can have the blur POST and
+        # this one both find no log and each create one. Locking only the blur
+        # path leaves that race wide open. One workout split across two logs
+        # loses the older one's sets from every later read, which takes the
+        # newest.
         locked_session = (
             Session.objects.select_for_update(of=("self",))
             .filter(pk=session.pk)
@@ -2225,24 +2213,19 @@ def athlete_log_session(request, pk):
         log = newest_session_logs(session, request.user).first()
         if log is None:
             log = SessionLog(session=session, athlete=request.user)
-        # set_logged / session_completed analytics (#509): captured right here,
-        # before this save changes anything, so they describe the log's state
-        # walking in.
-        sets_before = log.sets.count() if log.pk else 0
+        # session_completed analytics (#509): captured before this save changes
+        # anything, so it describes the log's state walking in.
         was_done = log.status == SessionLog.Status.DONE
         # Status is STICKY once DONE (5b, settle.py): a posted "pending" never
-        # downgrades a DONE log. The client already intends this — "Save
-        # progress" posts `markDone ? "done" : this.status`, the status the page
-        # last saw — but once the settle sweep can finish a log server-side, a
-        # tab left open across the settle (or an offline-queued save replayed
-        # later) would post its stale "pending" and silently undo the settle.
-        # Mirrors 5a's rule that a blur never downgrades a DONE log
-        # (`_upsert_parsed_set`).
+        # downgrades a DONE log. A tab left open across the settle sweep (or an
+        # offline-queued post replayed later) would otherwise post its stale
+        # "pending" and silently undo the settle. Mirrors 5a's rule that a blur
+        # never downgrades a DONE log (`_upsert_parsed_set`).
         if not (
             status == SessionLog.Status.PENDING and log.status == SessionLog.Status.DONE
         ):
             log.status = status
-        # Bump on every save, regardless of status — this endpoint is always a
+        # Bump on every post, regardless of status — this endpoint is always a
         # real athlete action (unlike a cell blur, which fires on every focus
         # change whether or not anything changed), so there is no "untouched"
         # case to filter out here.
@@ -2252,514 +2235,45 @@ def athlete_log_session(request, pk):
         elif log.date is None:  # first save (or a log never dated) → stamp today
             log.date = timezone.localdate()
         # else: a re-save with no date keeps the existing workout date.
-        log.notes = notes
+        if has_notes:
+            log.notes = notes
         log.save()
-        # Replace only the rows the logger can re-post: sets whose prescription
-        # cell is TRAINABLE in this session (``session.trainable_cells()`` — live
-        # and non-skipped, the exact set the logger renders). A set logged against
-        # a since-deleted/hidden/skipped cell — or one orphaned by an old hard
-        # delete — is history, not draft state; wiping it here would silently
-        # destroy the athlete's record on their next save (e.g. a row the coach
-        # marked skipped after the athlete already logged it).
-        #
-        # ``parsed_set_is_hidden`` scopes the delete to rows the logger can
-        # actually see, which is exactly the set it can repost — see that
-        # predicate for why the two must share one definition. A parsed set's
-        # ``prescription`` is also a trainable line-0 cell, so an unscoped
-        # delete would wipe every freeform-parsed set, while sparing them by
-        # ``source_line__isnull=True`` would leave a reclaimed row undeleted and
-        # let the client duplicate it (5a, plan §5, §6). Filtered in Python
-        # because the test re-parses cell text, which SQL can't express.
-        #
-        # A VISIBLE parsed row is only replaceable when this request posted its
-        # slot. Visibility is judged from the CURRENT cell text, but the payload
-        # was composed from what the page rendered — and a coach rewriting the
-        # source line in between flips a row from hidden to visible without the
-        # athlete's open page ever learning it exists. Deleting on visibility
-        # alone therefore let an ordinary "Save progress" destroy an earned set
-        # nobody had asked to change: the replace covered a row the client never
-        # held, so nothing reposted it. Posting the slot is the client's proof it
-        # was actually looking at that row.
-        #
-        # The cost is the mirror case — a reclaimed set the athlete clears from
-        # the logger now survives, because a cleared row and a row the client
-        # never saw are the same empty payload. Keeping unasked-for work beats
-        # destroying it (the same call ``prescription_skip`` makes), and the
-        # athlete's own sub-line is unaffected either way.
-        posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
-        replaceable = []
-        # #541: a row about to be replaced can be the near end of a reclaim
-        # link that is still open — either a held VISIBLE parsed row (its own
-        # `source_line` names the sub-line it stands for) or a structured row
-        # that already carries one forward from an earlier save
-        # (`reclaimed_line`, set by the bulk_create below). Remembered here,
-        # before the delete destroys the row, so whichever cleaned set replaces
-        # it can carry the SAME link on to the next save instead of losing it —
-        # otherwise a second "Log session" before the athlete gets around to
-        # retyping the sub-line would sever the link `_upsert_parsed_set` needs
-        # to reuse the row instead of minting a twin.
-        carried_links = []
-        # Hidden is computed over the WHOLE log (#561), not filtered-then-per-row:
-        # a copy left behind by an earlier "Log session" only answers to its line
-        # through `reclaimed_line`, and the one-row-per-line ranking that decides
-        # whether it's the one showing needs every row that could be displayed by
-        # that same line — a query already scoped to this session's trainable
-        # cells can't see them all.
-        rows = list(log.sets.select_related("source_line", "reclaimed_line"))
-        # #567/#568 P1-B: the PRE-DELETE snapshot of every pk this log holds
-        # right now, before anything below deletes or renumbers a row. An id
-        # naming one of these pks is "anchored" — real evidence about a row
-        # this save is looking at, even the row it's about to replace,
-        # because the payload that names it is exactly the payload doing the
-        # replacing. An id naming no pk here is "stale": it belonged to a row
-        # that is ALREADY gone (a write-ahead body replaying after its first
-        # delivery already committed and moved on, say), and a stale id
-        # carries no information at all — see `_client_held` and
-        # `_consume_carried_link`, which both fall back to today's positional
-        # match for a stale id rather than treating it as "no match".
-        #
-        # #567/#568 P1-G: a MAPPING (pk -> prescription_id), not a bare set of
-        # pks. "Anchored" used to mean "this id names a live pk" alone, with
-        # the prescription agreement checked separately at each of the three
-        # call sites — so an id that named a real, live row under the WRONG
-        # prescription (a crafted payload, or a genuine bug) was classified
-        # anchored, failed that separate check, and every site simply
-        # `continue`d without ever trying the positional fallback — degrading
-        # to "no match at all" instead of "stale id, try position", exactly
-        # the failure the stale-id rule exists to avoid. `_names_live_row`
-        # folds the agreement into the anchoring test itself so there is
-        # EXACTLY ONE place that decides it: an id anchors only when it names
-        # a live row AND that row's own prescription is the one the payload
-        # claims.
-        live_rows = {row.pk: row.prescription_id for row in rows}
-        hidden_pks = hidden_parsed_set_pks(rows)
-        # Materialized once so the anchor map built for `bulk_create` below
-        # (#578 C1) can reuse this same read instead of re-querying
-        # `trainable_cells()` a second time.
-        trainable_cells = list(session.trainable_cells())
-        trainable_pks = {p.pk for p in trainable_cells}
-        # #578 C1: `LoggedSet.exercise_slot_id` for a posted set, keyed by the
-        # line-0 cell (`Prescription`) pk the payload names as
-        # `prescription_id`. `_clean_logged_sets` validates against
-        # `trainable_cells()` up front, at ~1520, BEFORE the lock this
-        # function takes above — but `trainable_cells` here is read AGAIN
-        # inside the transaction, and a coach's `prescription_skip` or
-        # `prescription_delete` can commit in that gap and make a validated
-        # cell non-trainable by the time we get here. So this map can be
-        # missing a `cs["prescription_id"]` that was perfectly valid at
-        # validation time — the `.get()` fallback below is not a "never
-        # expected to fire" belt, it is a real, if narrow, race window.
-        slot_id_by_cell_pk = {p.pk: p.exercise_slot_id for p in trainable_cells}
-        # Close that gap directly: fetch the slot for any posted cell this
-        # in-transaction read no longer counts as trainable, straight from
-        # the cell itself rather than from `trainable_cells()`. A cell that
-        # stopped being trainable didn't stop existing, and its
-        # `exercise_slot_id` doesn't change just because it was skipped or
-        # deleted — that's the whole anchor invariant this PR exists to
-        # guarantee. Guarded by `if missing` so the ordinary (no race) path
-        # costs no extra query.
-        posted_prescription_ids = {cs["prescription_id"] for cs in cleaned_sets}
-        missing = posted_prescription_ids - slot_id_by_cell_pk.keys()
-        if missing:
-            # Unscoped on purpose — do NOT filter this by `week=`/
-            # `exercise_slot__session_slot=`. The cell's own `exercise_slot_id`
-            # is the right answer regardless of which day its slot sits on
-            # *right now*; that is the whole point of anchoring to the slot
-            # instead of the cell. `_clean_logged_sets`, called at ~1520
-            # (above this block), has already restricted every posted
-            # `prescription_id` to this session's `trainable_cells()` — so
-            # scoping this fallback query too doesn't add safety, it
-            # reintroduces the bug this map exists to close: a coach's
-            # `prescription_move` can commit between that validation and this
-            # in-transaction read and re-home the slot onto another day's
-            # `session_slot` (via a plain `ExerciseSlot.objects.filter(...)
-            # .update(...)`, no lock shared with this session), which makes a
-            # day/week-scoped query return nothing for a cell that is still
-            # exactly the right cell. A zero-row result here leaves the
-            # `.get()` fallback below to write `exercise_slot_id=None` — the
-            # very NULL anchor this fallback was added to prevent — and
-            # nothing ever repairs it afterward.
-            slot_id_by_cell_pk.update(
-                Prescription.objects.filter(pk__in=missing).values_list(
-                    "pk", "exercise_slot_id"
-                )
-            )
-        for row in rows:
-            if row.prescription_id not in trainable_pks:
-                continue
-            if row.pk in hidden_pks:
-                continue
-            # #570: a row the logger cannot RENDER is one the client cannot
-            # repost, so it is history rather than draft state — the same
-            # reasoning the two skips above make. `presenters._set_rows` now
-            # stops at MAX_LOGGED_SET_NUMBER, so a row left above it by the old
-            # unbounded walk (or by `_upsert_parsed_set`'s own walk before it
-            # was bounded) is absent from every payload, and without this skip
-            # the replace below would delete it silently and nothing would
-            # bring it back. Before the cap such a row rendered, the client
-            # posted it, and the save 400'd with the row intact — a lockout,
-            # which is bad, but not a silent deletion of a set the athlete
-            # performed.
-            #
-            # Sparing it is not the same as repairing it. A row past the
-            # ceiling whose `source_line` still names a live sub-line USUALLY
-            # comes back into range the next time that line is edited —
-            # `_upsert_parsed_set` re-picks its number from the bottom — but
-            # not always: not when the legal range is already full (it then
-            # keeps the number it just freed, deliberately, rather than be
-            # deleted), and not when the edit lands on one of that function's
-            # `existing` reuse branches, which keep the row and its number as
-            # they are. A SOURCE-LESS row (a `reclaimed_line` copy) has no
-            # such path at all — the renumbering loop below can never see it
-            # either, since its slot can never appear in `posted`, which
-            # `_clean_logged_sets` bounds to the legal range. Such a row stays
-            # where it is, invisible on the page and still counting toward 1RM
-            # and PRs. This skip preserves that state rather than fixing it,
-            # which is the right way round: the alternative is deleting a set
-            # the athlete performed.
-            if row.set_number > MAX_LOGGED_SET_NUMBER:
-                continue
-            if row.source_line_id is not None and not _client_held(
-                row, cleaned_sets, identified, live_rows
-            ):
-                continue
-            replaceable.append(row.pk)
-            if row.source_line_id is not None:
-                link_id = row.source_line_id
-            else:
-                link_id = row.reclaimed_line_id
-            if link_id is not None:
-                carried_links.append(
-                    {
-                        "prescription_id": row.prescription_id,
-                        "set_number": row.set_number,
-                        "values": (row.reps, row.load, row.rpe),
-                        "link_id": link_id,
-                        # #567: lets a cleaned set in IDENTIFIED mode claim
-                        # this link by the row's own pk rather than by the
-                        # slot it used to occupy — the slot is exactly what a
-                        # renumbering elsewhere in this same save can move.
-                        "row_pk": row.pk,
-                    }
-                )
-        log.sets.filter(pk__in=replaceable).delete()
-
-        # Drop any posted row that merely re-states a surviving parsed set. The
-        # payload is a snapshot of what the page rendered, and a reclaim can be
-        # undone: a row the client saw (and so posted) can be hidden again by the
-        # time the save lands, in which case it is NOT replaced above — and
-        # creating it would leave the same performance twice in one log, once as
-        # the parsed row and once as a source-less clone of it.
-        #
-        # Keyed on SET NUMBER as well as value, which is what separates "the
-        # client is re-posting THIS row" from "the client is posting a set that
-        # happens to look like a different one". Two identical performances on
-        # two sub-lines are an ordinary thing to do — 225 x 5 twice — and
-        # matching by value alone let the untouched survivor absorb the
-        # replacement for the row just deleted, so that performance vanished.
-        # The client reports the number ``serialize_session_log`` gave it, so
-        # the row it means still carries that number here (the renumbering
-        # below runs after this).
-        #
-        # Also keeps a surviving row that is hidden through `reclaimed_line`
-        # (#561): after a coach undo the copy is hidden, so the replace above
-        # spares it, but a page loaded BEFORE the undo still shows it as a
-        # filled Set row and re-posts it — and letting that repost fall through
-        # to the create below would log one performance twice. Recomputed on
-        # the POST-DELETE rows on purpose: deleting the parsed row that used to
-        # outrank a copy is exactly what makes the copy the row a line is
-        # showing, so "hidden" can only be judged after the delete above runs.
-        surviving = list(log.sets.select_related("source_line", "reclaimed_line"))
-        hidden_pks = hidden_parsed_set_pks(surviving)
-        available = [
-            row
-            for row in surviving
-            if row.source_line_id is not None or row.pk in hidden_pks
-        ]
-        keep = []
-        for cs in cleaned_sets:
-            # #567: IDENTIFIED matches by the row's own pk, not the slot it
-            # posted at. A hidden survivor's ``set_number`` can already have
-            # moved (this is exactly the renumbering below, run by an earlier
-            # save) while its pk hasn't — so pk is the only thing a stale
-            # repost can still name correctly. The value check stays: an id
-            # match with DIFFERENT values is an EDIT of a row the client can
-            # no longer replace directly (it's hidden, and was spared above),
-            # so it must fall through to the create below and let the
-            # renumbering move the hidden row aside — the same "a visible
-            # duplicate beats a silent deletion" call the rest of this slice
-            # makes. A cleaned set that only carries a ``client_id`` (a grid
-            # row with no server row) can never absorb anything here: its
-            # ``id`` is ``None``, which no real row's pk equals, so the set
-            # this issue used to swallow now always falls through to create.
-            #
-            # #567/#568 P1-B: the pk match above only applies to an ANCHORED
-            # id (``_names_live_row`` — it names a pk this log held before
-            # this save's delete, ``live_rows``). A STALE id names a row this
-            # log no longer holds at all (a write-ahead replay whose first
-            # delivery already replaced that row under a new pk, say) and so
-            # carries no identity information — it degrades to the exact
-            # positional test the id-less path below already uses, which is
-            # what lets the replayed body absorb into the row its own earlier
-            # delivery created, instead of creating a second copy of the same
-            # performance (P1-B's "twin" scenario). A ``client_id`` (P1-B's
-            # third case) never reaches a pk match at all — ``cs["id"]`` is
-            # ``None`` — so it always falls through to the positional test
-            # too; the positional test then requires the SAME slot+values,
-            # which #567 B's own cleaned set never restates (it's a genuinely
-            # new performance), so it still correctly finds no twin.
-            #
-            # #567/#568 P2-A/P1-G: an anchored match also requires the SAME
-            # prescription as the row it names — a crafted payload can post a
-            # real pk under the WRONG prescription, and pk equality alone
-            # would let it absorb (or, via ``_client_held``/
-            # ``_consume_carried_link``, spare or re-link) a row that belongs
-            # to a different lift entirely. That agreement is now folded into
-            # ``_names_live_row`` itself (P1-G) — checking it again here would
-            # be redundant (once ``row.pk == cs["id"]`` and the id is
-            # anchored, ``live_rows`` already guarantees the prescriptions
-            # match) and this file no longer does, so there is exactly one
-            # place that decides it.
-            if identified and cs["id"] is not None and _names_live_row(cs, live_rows):
-                twin = next(
-                    (
-                        row
-                        for row in available
-                        if row.pk == cs["id"]
-                        and parsing.same_logged_set(
-                            (row.reps, row.load, row.rpe),
-                            (cs["reps"], cs["load"], cs["rpe"]),
-                        )
-                    ),
-                    None,
-                )
-            elif identified and cs["id"] is not None:
-                # STALE id (P1-B): no live pk to trust, so fall back to the
-                # same positional test the id-less path below uses.
-                twin = next(
-                    (
-                        row
-                        for row in available
-                        if (row.prescription_id, row.set_number)
-                        == (cs["prescription_id"], cs["set_number"])
-                        and parsing.same_logged_set(
-                            (row.reps, row.load, row.rpe),
-                            (cs["reps"], cs["load"], cs["rpe"]),
-                        )
-                    ),
-                    None,
-                )
-            elif identified:
-                # ``client_id`` (P1-B): names no server row by construction
-                # (#567 B) — absorbs nothing, full stop.
-                twin = None
-            else:
-                twin = next(
-                    (
-                        row
-                        for row in available
-                        if (row.prescription_id, row.set_number)
-                        == (cs["prescription_id"], cs["set_number"])
-                        and parsing.same_logged_set(
-                            (row.reps, row.load, row.rpe),
-                            (cs["reps"], cs["load"], cs["rpe"]),
-                        )
-                    ),
-                    None,
-                )
-            if twin is not None:
-                available.remove(twin)  # one survivor absorbs one posted row
-                continue
-            keep.append(cs)
-        cleaned_sets = keep
-        posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
-
-        # Move any surviving PARSED row off a set number the client just posted.
-        # Two rows sharing (prescription, set_number) collapse in
-        # `athlete_session`'s dict, after which a save can delete both while
-        # reposting one. The client's numbering stays authoritative; the parsed
-        # row yields, because the client is the one with a page to keep in step.
-        #
-        # Covers the visible rows too, not just the hidden ones. A parsed row is
-        # numbered by its sub-line while the structured grid numbers from 1, so
-        # an athlete typing into structured row 1 collides with a parsed row on
-        # sub-line 1 — and since such a row is now SPARED rather than deleted
-        # (see `_client_held`), sparing it without renumbering simply moved the
-        # collision one step later.
-        #
-        # Also covers a HIDDEN copy (#561, `display_line_id`): it keeps the set
-        # number the parsed row had, so the athlete's now-empty Set row 1
-        # collides with it too. The collision only bites later — a second
-        # reclaim makes both rows visible, and one save can then delete both
-        # while reposting one — which is the same hazard this loop already
-        # exists for.
-        if posted:
-            for row in log.sets.select_related("source_line", "reclaimed_line"):
-                if display_line_id(row) is None:
-                    continue
-                if (row.prescription_id, row.set_number) not in posted:
-                    continue
-                taken = set(
-                    log.sets.filter(prescription_id=row.prescription_id)
-                    .exclude(pk=row.pk)
-                    .values_list("set_number", flat=True)
-                ) | {n for (pid, n) in posted if pid == row.prescription_id}
-                # #570: bounded at MAX_LOGGED_SET_NUMBER — the walk used to be
-                # a plain `number += 1` with no ceiling, so a survivor could
-                # climb past the number `_clean_logged_sets` will accept. The
-                # presenter still rendered it as an ordinary fillable row, and
-                # the moment the athlete filled or ticked it the endpoint
-                # rejected the number and 400'd the WHOLE payload — a hard
-                # lockout, with no way to save the session at all until
-                # something moved the row back down.
-                #
-                # When nothing is free in the whole legal range the save is
-                # REFUSED, rather than leaving this row on a number another row
-                # already holds: the collision is exactly the two-rows-one-number
-                # hazard this renumbering exists to prevent, and reinstating it
-                # here to avoid an awkward answer would let one later save delete
-                # both rows while reposting one.
-                #
-                # `set_rollback` before the return, and it is load-bearing:
-                # `log.sets.filter(pk__in=replaceable).delete()` has already run
-                # in this same block, so returning a response without it would
-                # COMMIT those deletes and refuse the save anyway — the athlete's
-                # rows gone AND the save rejected. Marked for rollback, this
-                # block's exit rolls everything back, so a refused save writes
-                # nothing at all. Nothing else in the block runs after this
-                # return, so no query can hit the poisoned transaction.
-                number = _first_free_set_number(taken, row.set_number)
-                if number is None:
-                    # Name the exercise BEFORE marking the rollback: once the
-                    # transaction is poisoned no query may run, and
-                    # `row.prescription` is a lazy FK fetch.
-                    refused = f"Too many sets logged for {row.prescription.name}."
-                    # 400, not `athlete_cell_write`'s 503 (#571) — deliberately
-                    # the other way, and both are load-bearing: this refusal is
-                    # DETERMINISTIC (the same payload exhausts the same range
-                    # again), so retrying it can only fail again and the client
-                    # drops the queued entry rather than keep retrying
-                    # something that can never succeed. #571's 503 is for a
-                    # write that MIGHT yet land — a poisoned connection, not a
-                    # rejected payload — so that client keeps its entry queued
-                    # and retries.
-                    transaction.set_rollback(True)
-                    # JSON with an `error` string, not the bare
-                    # `HttpResponseBadRequest` this endpoint's OTHER 400s use,
-                    # and the difference is the contract: `meso_athlete.js`
-                    # renders `error` to the athlete VERBATIM, so only a
-                    # refusal actually written for them may carry that shape.
-                    # The validation 400s from `_clean_logged_sets`
-                    # ("Duplicate id in sets.") are developer-facing and stay
-                    # plain text, which is exactly how the client tells the
-                    # two apart instead of guessing from the body.
-                    return JsonResponse({"ok": False, "error": refused}, status=400)
-                row.set_number = number
-                row.save(update_fields=["set_number"])
-
-        # #541: a cleaned set inherits the link `carried_links` remembered for
-        # the row it's replacing ONLY when it restates that row verbatim — same
-        # slot AND the same values `_client_held` uses to decide a payload
-        # actually reposts a given row. An edit (a different value on the same
-        # slot) is a different performance and gets no link, which is exactly
-        # how the carry is meant to end: the moment the athlete or coach
-        # changes the numbers instead of retyping them back, there is no
-        # "restore" left to reuse the row for. Each carried link is consumed at
-        # most once so two cleaned sets can never both claim it.
-        created_rows = LoggedSet.objects.bulk_create(
-            [
-                LoggedSet(
-                    session_log=log,
-                    prescription_id=cs["prescription_id"],
-                    # #578 C1: written alongside `prescription_id`, not instead
-                    # of it — a code rollback mid-deploy must leave the old
-                    # `prescription`-reading derivations working. See
-                    # `LoggedSet.exercise_slot`'s model comment.
-                    exercise_slot_id=slot_id_by_cell_pk.get(cs["prescription_id"]),
-                    set_number=cs["set_number"],
-                    reps=cs["reps"],
-                    load=cs["load"],
-                    unit=locked_plan.unit,
-                    rpe=cs["rpe"],
-                    reclaimed_line_id=_consume_carried_link(
-                        carried_links, cs, identified, live_rows
-                    ),
-                )
-                for cs in cleaned_sets
-            ]
-        )
-        # #567: hands the client back the server pk for every row it minted
-        # itself this save (a ``client_id``, no ``id``), so a page that just
-        # created a grid row learns the id it must post from now on — without
-        # this, that row would stay ``client_id``-only forever and never
-        # qualify for the identified match above. Zipped positionally: the
-        # cleaned sets fed `bulk_create` (in this list-comprehension order) are
-        # positionally exactly this save's `created_rows`, one per element,
-        # since `bulk_create` neither reorders nor drops fed rows. Skips an
-        # entry with no `client_id` (nothing to report) or no returned `pk`
-        # (a backend that doesn't hand pks back from `bulk_create` — the
-        # response is then simply silent about this row's id, exactly like
-        # any other read that follows such an insert).
-        client_ids = {
-            row.pk: cs["client_id"]
-            for row, cs in zip(created_rows, cleaned_sets)
-            if cs["client_id"] is not None and row.pk is not None
-        }
-        # Net growth, not "a row was written" (#509 set_logged): this save
-        # REPLACES rows (delete + bulk_create), so row identity doesn't survive
-        # it — a resave, an edit, or reposting sets the typed path already
-        # counted all replace-then-recreate their own rows and must add zero.
-        # Known undercount: removing one set and adding another in the same
-        # save nets zero.
-        new_sets = max(0, log.sets.count() - sets_before)
         # Refresh the athlete's persisted 1RM for this session's lifts from their
-        # *completed* logs. Run on every save, not only a done one: a save that
-        # edits an already-DONE log's sets (a heavier set, a correction, a
-        # removed basis) changes exactly the history derivation reads from, so
-        # skipping the refresh on a "pending" save would leave a stale estimate
-        # until some later done save happened to fix it. (Status can no longer
-        # move DONE->PENDING here at all — see the sticky-status comment above —
-        # so this is never clearing an estimate a downgrade just orphaned; it is
-        # only ever keeping a DONE log's own estimate current.) Recomputes from
-        # scratch — a heavier set raises it, an edit that drops the PR lowers
-        # it, a removed basis clears it.
+        # *completed* logs. Run on every post, not only a done one: the estimate
+        # is derived from DONE logs only, so a PENDING -> DONE flip changes its
+        # input, and a post that leaves the status alone just recomputes the
+        # same answer. (Status can't move DONE -> PENDING here — see the
+        # sticky-status comment above — so this never clears an estimate a
+        # downgrade just orphaned.) Recomputes from scratch.
         meso_one_rm.refresh_one_rms(
             request.user,
             list(session.trainable_cells()),
             session.week.mesocycle.plan.unit,
         )
-    for _ in range(new_sets):
-        track(EventName.SET_LOGGED, actor=request.user, subject=log, via="log")
+    if has_legacy_sets:
+        track(
+            EventName.LEGACY_SETS_IGNORED,
+            actor=request.user,
+            subject=log,
+            count=legacy_count,
+        )
     if not was_done and log.status == SessionLog.Status.DONE:
         track(EventName.SESSION_COMPLETED, actor=request.user, subject=log, via="log")
     # #441 P3-5: the results step auto-advances once the coach *completes* one of
     # their own self-link sessions. Gated on the step's own predicate so a
-    # ``pending`` "save progress" — or a done log the coach makes as an athlete
-    # under *another* coach — never skips the step. A no-op unless parked on
-    # results.
+    # ``pending`` post — or a done log the coach makes as an athlete under
+    # *another* coach — never skips the step. A no-op unless parked on results.
     meso_tour.advance_self_step_if_complete(request.user, "results")
-    # Phase 4c: the lifts in this session that beat the athlete's prior best, so
-    # the logger can celebrate a PR the instant it's logged. Pure detection off
-    # the just-committed rows. As of 5a this read is LIVE (it counts pending
-    # sets), so a "Save progress" draft can legitimately return records too —
-    # it is no longer DONE-gated.
-    #
-    # Minus anything this save did not actually log. A parsed row that is still
-    # displayed by its own sub-line was celebrated by the blur that created it
-    # (``_upsert_parsed_set`` fires the optimistic toast), and it survives this
-    # save untouched — so reporting it here congratulated the athlete a second
-    # time for a record they had already seen, on a save that changed nothing.
-    hidden_set_pks = hidden_parsed_set_pks(
-        log.sets.select_related("source_line", "reclaimed_line")
-    )
-    new_records = [
-        r for r in new_records_in(log) if r.logged_set_id not in hidden_set_pks
-    ]
     return JsonResponse(
         {
             "ok": True,
-            "log": serialize_session_log(log, client_ids=client_ids),
-            "new_records": [serialize_new_record(r) for r in new_records],
+            "log": {
+                "id": log.pk,
+                "status": log.status,
+                "date": log.date.isoformat() if log.date else None,
+                "notes": log.notes,
+            },
+            "progress": presenters.athlete_set_progress(session, request.user),
         }
     )
 
@@ -2969,7 +2483,7 @@ def athlete_cell_write(request, pk):
         # still claims the line (and re-parses it) as before.
         # What this line was DISPLAYING before this write. The upsert needs it to
         # tell its own rows — the ones this line was showing — from history
-        # handed to the structured logger by a reclaim.
+        # left behind by a reclaim (the retired structured logger's rows).
         previous_text = "" if created_cell else cell.text
         untouched_coach_line = (
             not created_cell and not cell.athlete_authored and cell.text == text
@@ -3130,13 +2644,15 @@ def athlete_cell_write(request, pk):
                 "warn_reason": warn_reason,
             },
             # Optimistic PR toast (5a, plan §7): any lift this parsed set just
-            # beat the athlete's current LIVE best on — mirrors
-            # athlete_log_session's wiring of new_records_in/
-            # serialize_new_record, but off the *live* (PENDING-inclusive)
-            # read, so it can fire before the session ever reaches DONE. Can
-            # occasionally be a false alarm if the set is later corrected —
-            # the accepted trade for in-the-moment feedback (5b settles it).
+            # beat the athlete's current LIVE best on — off the *live*
+            # (PENDING-inclusive) read, so it can fire before the session ever
+            # reaches DONE. Can occasionally be a false alarm if the set is
+            # later corrected — the accepted trade for in-the-moment feedback
+            # (5b settles it).
             "new_records": [serialize_new_record(r) for r in new_records],
+            # The header's "N of M sets logged", recounted from the database
+            # after this write — the same count the coach's results read.
+            "progress": presenters.athlete_set_progress(session, request.user),
         }
     )
 
@@ -3190,8 +2706,8 @@ def _upsert_parsed_set(
 
     Returns the list of ``personal_records.NewRecord``s this upsert unlocks
     (§7) — computed off the same, now-PENDING-inclusive ``new_records_in``
-    ``athlete_log_session`` already uses, so a blur can surface the same
-    optimistic 🎉 the structured logger does, without waiting for DONE. Always
+    the coach's results read, so a blur can surface an optimistic 🎉 on the
+    line that earned it, without waiting for DONE. Always
     ``[]`` when nothing beat the live best, or when the guard below caught an
     error.
 
@@ -3293,8 +2809,8 @@ def _upsert_parsed_set(
                 )
 
             # Replace only the rows THIS LINE WAS SHOWING. A set the line no
-            # longer displays was handed to the structured logger by a reclaim
-            # and is now visible history — the athlete editing this line to a
+            # longer displays (a coach reclaimed and rewrote the line) is now
+            # read-only history on the athlete's page — editing this line to a
             # note, a blank, or a different set must not erase a performance
             # they already earned. Judged against `previous_text`, not the text
             # just saved: under the NEW text a normal re-blur's own row looks
@@ -3310,9 +2826,9 @@ def _upsert_parsed_set(
             # row's freed number says nothing about where the replacement can
             # go — the delete could succeed while the create had nowhere to
             # land, which is a performed set destroyed outright. Sparing it
-            # instead is the same call the replace-delete's own
-            # trainable/hidden skips already make: a row this path cannot
-            # account for is history, not draft state.
+            # instead is the same call the retired structured logger's
+            # replace-delete made with its trainable/hidden skips: a row this
+            # path cannot account for is history, not draft state.
             mine = [
                 row
                 for row in log.sets.filter(
@@ -3357,7 +2873,7 @@ def _upsert_parsed_set(
                     "load": str(parsed.get("load", "")),
                     "rpe": str(parsed.get("rpe", "")),
                 }
-                # Bound the fields the same way the structured logger does. A
+                # Bound the fields to the column length. A
                 # parsed value longer than the column raises on Postgres, and
                 # since we're inside the savepoint the guard would swallow it
                 # and roll the DELETE back too — leaving the OLD set counting
@@ -3428,11 +2944,14 @@ def _upsert_parsed_set(
                         ),
                         None,
                     )
-                    # #541: a "Log session" between the reclaim and the restore
-                    # replaced that row with a source-less structured copy that
+                    # #541: before #578 stage 4 retired it, a "Log session"
+                    # between the reclaim and the restore could replace that
+                    # row with a source-less structured copy that
                     # answers to this line through `reclaimed_line` instead, so
                     # the lookup above can't see it. Same restore, same reuse:
-                    # re-link the copy rather than mint a twin of it.
+                    # re-link the copy rather than mint a twin of it. Nothing
+                    # writes `reclaimed_line` any more, but copies made before
+                    # stage 4 still carry it until stage 4b drops the column.
                     #
                     # Only when this line wasn't showing a set of its own
                     # (`previous is None`). If it was, this blur edits THAT set,
@@ -3481,14 +3000,14 @@ def _upsert_parsed_set(
                                 "set_number", flat=True
                             )
                         )
-                        # #570: bounded by the SAME helper `athlete_log_session`
-                        # uses. This was the fourth writer of a `set_number` and
-                        # the only one still unbounded, so an exercise already
-                        # carrying the full legal range could mint a row at 51+ —
-                        # a number `_clean_logged_sets` rejects and
-                        # `presenters._set_rows` no longer renders, i.e. a set
-                        # that counts toward records while being invisible and
-                        # unpostable.
+                        # #570: bounded by `_first_free_set_number`, whose
+                        # ceiling (`MAX_LOGGED_SET_NUMBER`) the retired
+                        # structured logger also enforced. This was the fourth
+                        # writer of a `set_number` and the only one unbounded,
+                        # so an exercise already carrying the full legal range
+                        # could mint a row at 51+ — a set that counted toward
+                        # records while that logger could neither render nor
+                        # post it.
                         #
                         # `None` means nothing in the legal range is free. A
                         # line that just replaced a row of its OWN can still
@@ -3619,13 +3138,14 @@ def _upsert_parsed_set(
 def _first_free_set_number(taken, start):
     """The lowest set number in ``1..MAX_LOGGED_SET_NUMBER`` not in ``taken``, or ``None``.
 
-    #570: bounds ``athlete_log_session``'s collision renumbering. Tries upward
-    from ``start`` first, which preserves the old walk's "fall through to the
-    next free number" behavior and is the ordinary case (a row nudged aside by
-    a slot or two). Only when nothing is free between ``start`` and the cap
-    does it scan the whole range from the bottom, so a hole BELOW ``start`` —
-    freed by an earlier delete in this same save, say — is still found rather
-    than a save being refused that could have succeeded. ``None`` means every
+    #570: bounds the renumbering ``_upsert_parsed_set`` does when a set number
+    is already taken (the structured logger that used to share it is retired).
+    Tries upward from ``start`` first, which preserves the old walk's "fall
+    through to the next free number" behavior and is the ordinary case (a row
+    nudged aside by a slot or two). Only when nothing is free between ``start``
+    and the cap does it scan the whole range from the bottom, so a hole BELOW
+    ``start`` — freed by an earlier delete in this same save, say — is still
+    found rather than a save being refused that could have succeeded. ``None`` means every
     number in the legal range is genuinely taken.
     """
     # `max(start, 1)` keeps the first scan inside the range this docstring
@@ -3637,199 +3157,6 @@ def _first_free_set_number(taken, start):
     for number in range(1, MAX_LOGGED_SET_NUMBER + 1):
         if number not in taken:
             return number
-    return None
-
-
-def _names_live_row(cleaned_set, live_rows):
-    """Does ``cleaned_set["id"]`` ANCHOR to a row THIS log holds, under the SAME prescription (#567/#568 P1-B, P1-G)?
-
-    ``live_rows`` is the PRE-DELETE snapshot ``athlete_log_session`` takes
-    before it deletes or renumbers anything this save — see the comment
-    there — mapping each pk to that row's OWN ``prescription_id``. An id in
-    that snapshot, under the prescription its own row actually belongs to, is
-    ANCHORED: real evidence about a row this very save is looking at (even
-    one it is about to replace, since the payload naming it is exactly the
-    payload doing the replacing). Anything else is treated exactly the same
-    as "no live row at all":
-
-    * an id NOT in the snapshot is STALE — the row it once named is already
-      gone, most plausibly because a write-ahead body is replaying after its
-      first delivery already committed and moved that row's data under a new
-      pk — and a stale id is not weaker evidence, it is NO evidence,
-      indistinguishable from an id the client made up;
-    * an id that IS in the snapshot, but under a DIFFERENT prescription than
-      the one ``cleaned_set`` claims (#567/#568 P1-G), is likewise no
-      evidence for THIS claim — a crafted payload can pair a real, live pk
-      with the wrong lift, and pk equality alone must not let it borrow that
-      row's identity. Before this fold, that case was classified anchored,
-      failed a SEPARATE prescription check at each of the three call sites,
-      and simply ``continue``d without ever trying the positional fallback —
-      degrading to "no match at all" instead of "stale id, try position",
-      exactly the failure the stale-id rule exists to avoid. Folding the
-      agreement in here means an id under the wrong prescription now falls
-      through to the very same positional path a stale id does, with no
-      separate check needed at any call site.
-
-    ``_client_held``, the twin absorb in ``athlete_log_session``, and
-    ``_consume_carried_link`` all fall back to today's positional match
-    whenever this returns ``False``, rather than treating it as "no match",
-    because position is the only evidence left behind — exactly what the
-    id-less path already runs on.
-    """
-    row_id = cleaned_set["id"]
-    return (
-        row_id is not None and live_rows.get(row_id) == cleaned_set["prescription_id"]
-    )
-
-
-def _client_held(row, cleaned_sets, identified, live_rows):
-    """Did this save's payload actually come from a page showing ``row``?
-
-    Only asked of a VISIBLE parsed row — one a coach rewrite surfaced after the
-    athlete's page had loaded. The replace-delete needs to know whether the
-    client was looking at it, and the payload is the only evidence there is.
-
-    IDENTIFIED (#567), ANCHORED id (``_names_live_row``, #568 P1-B, P1-G):
-    pure id — ``cs["id"] == row.pk``. The prescription agreement (P2-A) is
-    already part of what "anchored" means (folded into ``_names_live_row``
-    itself, P1-G) — nothing further to check here. The id is the client's own
-    proof it rendered this exact row (``serialize_session_log`` handed it
-    out, and a current client only ever posts one it was given), which is
-    strictly stronger evidence than the values match below — so there's
-    nothing left for a value check to rule out... with one exception (P1-A):
-    a WHOLLY BLANK posted set (``reps``, ``load`` and ``rpe`` all ``""``) is
-    not evidence the client saw this row's VALUES, because an empty,
-    merely-checked grid row and a row a stale page
-    never rendered at all post identically. Counting a blank id match as
-    "held" let a bare id — adopted from a response the client's own stale page
-    never asked for, see ``syncFromLog``'s "no match" comment — delete a row
-    that still carried real values and replace it with nothing. So a blank
-    posted set counts as held ONLY when the row itself is also blank; the
-    moment the row carries any of the three, a blank id match is treated as NO
-    match, and the row falls through to being spared, same as any other id
-    that names nothing here. This guard applies HERE only — the twin absorb
-    and ``_consume_carried_link`` already require exact value equality via
-    ``same_logged_set``, so a blank posted set naturally fails to match a
-    non-blank row there with no special-casing needed.
-    Consequence, worth stating plainly, for the ordinary (non-blank) anchored
-    case: an EDIT to a visible parsed row now REPLACES it (same grid row, one
-    performance, new values) — where the positional path below spares an
-    id-less edit, since its values no longer match, and leaves the collision
-    renumbering to push the old row aside into a visible duplicate. Preferring
-    one row over two for the id-known case is the more correct behavior; it
-    isn't applied to the id-less path because that path can't tell an edit
-    from an athlete typing an unrelated set into the same slot (see the
-    docstring below).
-
-    STALE id (#568 P1-B; tagged, but ``_names_live_row`` is false) and
-    CLIENT_ID (names no server row by construction, #567 B) both fall through
-    to the very same positional test the fully id-less path below uses — see
-    ``_names_live_row``'s docstring for why a stale id carries no information,
-    and #567 B's own fix for why a ``client_id`` set must never be read as
-    holding a row it never claimed to be.
-
-    Positional (id-less; a legacy/stale-tab client, or #567's identified mode
-    turned off because the WHOLE payload lacks ids — also the fallback for a
-    STALE id or a ``client_id`` within an identified payload, above): posting
-    the row's slot is not enough on its own. A parsed row is numbered by its
-    sub-line (``cell.line``), and the structured grid numbers its own rows
-    from 1, so the two share a numbering space: an athlete typing a different
-    set into structured row 1 posts ``(prescription, 1)`` and would have
-    looked like proof of seeing a parsed row that also happens to be set 1 —
-    and the delete then destroyed a performance nobody asked to change.
-
-    So the payload must RE-STATE the row: same slot, same values. An edit to a
-    visible parsed row still replaces it (the athlete posts the slot with new
-    values only after the old ones were rendered there — see the collision
-    renumbering, which moves the row aside instead). Preferring a visible
-    duplicate over a silent deletion is the same call the rest of this slice
-    makes.
-    """
-    for cs in cleaned_sets:
-        if identified and cs["id"] is not None:
-            if _names_live_row(cs, live_rows):
-                if cs["id"] != row.pk:
-                    continue
-                row_blank = row.reps == "" and row.load == "" and row.rpe == ""
-                cs_blank = cs["reps"] == "" and cs["load"] == "" and cs["rpe"] == ""
-                if cs_blank and not row_blank:
-                    continue  # P1-A: a blank id match is no match at all
-                return True
-            # STALE (P1-B), or ANCHORED to a DIFFERENT row than `row` (an id
-            # naming some other live pk under the wrong prescription, P1-G,
-            # or under the RIGHT prescription but a DIFFERENT row entirely):
-            # no live pk we can trust for THIS row — fall through to position.
-        elif identified:
-            continue  # client_id: names no server row, so holds nothing
-        if (cs["prescription_id"], cs["set_number"]) == (
-            row.prescription_id,
-            row.set_number,
-        ) and parsing.same_logged_set(
-            (row.reps, row.load, row.rpe), (cs["reps"], cs["load"], cs["rpe"])
-        ):
-            return True
-    return False
-
-
-def _consume_carried_link(carried_links, cleaned_set, identified, live_rows):
-    """Claim the reclaim link a just-deleted row carried forward (#541), if any.
-
-    ``carried_links`` (built in ``athlete_log_session``, right before the
-    delete it survives) holds one entry per replaced row that still points at
-    an open reclaim — either the row's own ``source_line`` (a held VISIBLE
-    parsed row) or a ``reclaimed_line`` it already carried in from an earlier
-    save.
-
-    IDENTIFIED (#567), ANCHORED id (``_names_live_row``, #568 P1-B, P1-G): a
-    cleaned set claims a link by the replaced row's own pk
-    (``candidate["row_pk"]``) rather than the slot it used to occupy — the
-    renumbering elsewhere in this same save can move a hidden row's slot out
-    from under a stale repost, but never its pk. The prescription agreement
-    (P2-A) is already part of what "anchored" means (folded into
-    ``_names_live_row`` itself, P1-G), so there's nothing further to check
-    here — a crafted payload naming a real pk under the WRONG prescription
-    never reaches this branch at all; it degrades to the positional branch
-    below, same as a stale id. The value check stays regardless of mode: same
-    as ``_client_held``'s call, an id match with DIFFERENT values is an edit,
-    not a restore, and #541's rule ("a later save carries the link only when
-    the posted row restates it unchanged, and an edit drops it") means an
-    edit must get no link.
-
-    STALE id (#568 P1-B, and P1-G's wrong-prescription case) and Positional
-    (id-less, unchanged from #541): a cleaned set only inherits the link when
-    it exactly restates the row it replaced: same slot (``prescription``,
-    ``set_number``) AND the same values — the same test ``_client_held``
-    falls back to for a stale id or an id-less payload. A ``client_id`` set
-    (names no server row, #567 B) never reaches this loop at all — see below.
-
-    Mutates ``carried_links``, removing the entry it matches, so the same
-    reclaim can never be handed to two different cleaned sets.
-    """
-    if identified and cleaned_set["id"] is None:
-        # client_id: names no server row by construction (#567 B), so there
-        # is nothing it could have carried forward. Checked up front so a
-        # client_id set can never accidentally claim a link by slot+value
-        # alone — the very ambiguity #567 exists to remove.
-        return None
-    anchored = identified and _names_live_row(cleaned_set, live_rows)
-    for index, candidate in enumerate(carried_links):
-        if anchored:
-            if candidate["row_pk"] != cleaned_set["id"]:
-                continue
-        else:
-            # Positional: id-less, unchanged from #541 — and (P1-B) a STALE
-            # id's fallback, since a stale id carries no information and
-            # position is the only evidence left (see `_names_live_row`).
-            if candidate["prescription_id"] != cleaned_set["prescription_id"]:
-                continue
-            if candidate["set_number"] != cleaned_set["set_number"]:
-                continue
-        if not parsing.same_logged_set(
-            candidate["values"],
-            (cleaned_set["reps"], cleaned_set["load"], cleaned_set["rpe"]),
-        ):
-            continue
-        return carried_links.pop(index)["link_id"]
     return None
 
 
@@ -3898,7 +3225,7 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
     second writer that was merely PARKED on the session lock is freed by that
     very commit and can run, and finish, before this read even starts. An
     ordinary trigger, not a contrived one: a sub-line has focus while the
-    athlete taps "Log session" — the blur's POST and the save's POST are
+    athlete taps "Finish session" — the blur's POST and the finish POST are
     concurrent by construction, and ``athlete_log_session`` takes the exact
     same session lock this function's own caller does. The PLACEMENT is still
     correct, and must not move back inside the transaction (P1-D, above) — but
@@ -4018,143 +3345,6 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
         return ""
 
 
-def _clean_logged_sets(raw_sets, session):
-    """Validate the posted ``sets`` against this session, or return a 400.
-
-    Returns ``(cleaned, None)`` on success or ``(None, HttpResponseBadRequest)``.
-    Every set must reference a prescription **in this session** (no foreign rows),
-    carry a positive integer ``set_number`` (defaulting to its position), and have
-    string reps/load/rpe within the model's ``max_length``.
-
-    Row identity (#567): each set may ALSO carry ``id`` (a positive int — the
-    ``LoggedSet.pk`` the client rendered in that grid row) or ``client_id`` (a
-    non-empty string, at most 64 chars — a client-minted id for a row that has
-    no server row yet), but never both — a client always knows which of the two
-    describes a given grid row, so one item claiming both is malformed, not
-    ambiguous-but-valid. Neither is RESOLVED here: ``id`` is only ever checked
-    against ``log.sets`` inside ``athlete_log_session``'s transaction, because
-    the row it names can have been deleted by an earlier step of the very save
-    that's validating it (a replace, an absorb) — an id that names no row in
-    THIS athlete's log for THIS session is simply "no match", exactly as if the
-    row were never mentioned. What's enforced here is shape and payload-wide
-    uniqueness only: a duplicate ``id`` or ``client_id`` across two items in one
-    request is always wrong regardless of what either later resolves to (the
-    same reasoning as the existing duplicate ``(prescription, set_number)``
-    check above). Every cleaned item carries both keys — ``None`` when the
-    client sent neither — so a caller can test for presence without a
-    ``dict.get`` default sprinkled at every read site.
-
-    #567 P2-B: a payload that MIXES tagged and untagged sets — some carrying
-    ``id``/``client_id``, others neither — is ALSO malformed, and rejected
-    here for the same reason as the both-in-one-item case above: no shipped
-    client can produce it (a client on this contract tags every set it knows
-    how to, always), so it is not a legitimate "partial upgrade" to degrade
-    gracefully, only a bug to surface. Silently demoting a payload like that
-    to the whole-request positional fallback — which is what happened before
-    this check existed, since ``athlete_log_session`` computes ``identified``
-    from exactly these cleaned sets — would hide the bug behind the same
-    fallback a genuinely old client uses on purpose. Rejecting it here makes
-    ``identified`` a VALIDATED property of any payload that reaches
-    ``athlete_log_session``, not merely an inferred one: by the time it's
-    computed there, every cleaned set is already guaranteed to agree on
-    whether this payload tags rows at all.
-    """
-    if not isinstance(raw_sets, list):
-        return None, HttpResponseBadRequest("sets must be a list.")
-    # Only trainable rows are postable — the logger never renders a skipped cell.
-    allowed_ids = {p.pk for p in session.trainable_cells()}
-    cleaned = []
-    seen = set()
-    seen_ids = set()
-    seen_client_ids = set()
-    for position, raw in enumerate(raw_sets, start=1):
-        if not isinstance(raw, dict):
-            return None, HttpResponseBadRequest("Each set must be an object.")
-        presc_id = raw.get("prescription")
-        # ``bool`` is an ``int`` subclass — reject it explicitly so ``true`` isn't an id.
-        if (
-            not isinstance(presc_id, int)
-            or isinstance(presc_id, bool)
-            or presc_id not in allowed_ids
-        ):
-            return None, HttpResponseBadRequest(
-                "Each set must reference a prescription in this session."
-            )
-        set_number = raw.get("set_number", position)
-        if (
-            not isinstance(set_number, int)
-            or isinstance(set_number, bool)
-            or not 1 <= set_number <= MAX_LOGGED_SET_NUMBER
-        ):
-            return None, HttpResponseBadRequest(
-                f"set_number must be between 1 and {MAX_LOGGED_SET_NUMBER}."
-            )
-        # Each (prescription, set_number) is logged at most once — duplicates
-        # would persist as two rows that the presenter collapses on reload but
-        # the agent's grounding still double-counts, breaking idempotency.
-        key = (presc_id, set_number)
-        if key in seen:
-            return None, HttpResponseBadRequest(
-                "Duplicate set for the same prescription and set number."
-            )
-        seen.add(key)
-
-        row_id = raw.get("id")
-        client_id = raw.get("client_id")
-        if row_id is not None and client_id is not None:
-            return None, HttpResponseBadRequest(
-                "A set may carry id or client_id, not both."
-            )
-        if row_id is not None:
-            # ``bool`` is an ``int`` subclass, same guard as ``prescription`` above.
-            if not isinstance(row_id, int) or isinstance(row_id, bool) or row_id <= 0:
-                return None, HttpResponseBadRequest("id must be a positive integer.")
-            if row_id in seen_ids:
-                return None, HttpResponseBadRequest("Duplicate id in sets.")
-            seen_ids.add(row_id)
-        if client_id is not None:
-            if (
-                not isinstance(client_id, str)
-                or not client_id.strip()
-                or len(client_id) > MAX_CLIENT_ID_LENGTH
-            ):
-                return None, HttpResponseBadRequest(
-                    "client_id must be a non-empty string of at most "
-                    f"{MAX_CLIENT_ID_LENGTH} characters."
-                )
-            if client_id in seen_client_ids:
-                return None, HttpResponseBadRequest("Duplicate client_id in sets.")
-            seen_client_ids.add(client_id)
-
-        fields = {}
-        for field, max_length in LOG_SET_FIELDS.items():
-            value = raw.get(field, "")
-            if not isinstance(value, str):
-                return None, HttpResponseBadRequest(f"{field} must be a string.")
-            if len(value) > max_length:
-                return None, HttpResponseBadRequest(f"{field} is too long.")
-            fields[field] = value
-        cleaned.append(
-            {
-                "prescription_id": presc_id,
-                "set_number": set_number,
-                "id": row_id,
-                "client_id": client_id,
-                **fields,
-            }
-        )
-    # #567 P2-B: every set must agree on whether this payload tags rows at
-    # all — see the docstring. Checked once, over the whole cleaned list,
-    # rather than per-item above: only here do we know every item's verdict.
-    if cleaned:
-        tagged = [cs["id"] is not None or cs["client_id"] is not None for cs in cleaned]
-        if any(tagged) and not all(tagged):
-            return None, HttpResponseBadRequest(
-                "Every set must carry id or client_id, or none may."
-            )
-    return cleaned, None
-
-
 # -- Athlete PWA: manifest, service worker, offline shell (Phase 4b — S7) --
 #
 # The athlete surface is an installable, offline-tolerant PWA. The manifest and
@@ -4236,7 +3426,11 @@ def manifest_webmanifest(request):
 # v10: meso_push.js honours its own dismiss key and the first-log tip renders
 #     suppressed until the coordinator runs (#669), so prompt exclusivity no
 #     longer depends on script order; the athlete home also changes (#667).
-PWA_CACHE_VERSION = "meso-pwa-v11"
+# v12: the structured Set-row logger is retired (#578 stage 4): the session
+#     page loses its Set rows and gains the progress header and the single
+#     "Finish session" button. A cached page would still post `sets`, which the
+#     server now ignores, so installed clients need a fresh cache namespace.
+PWA_CACHE_VERSION = "meso-pwa-v12"
 
 
 @require_GET
@@ -6568,11 +5762,10 @@ def prescription_skip(request, plan_id, pk):
         cell.save(update_fields=["skipped"])
         # Deliberately does NOT touch already-derived LoggedSets. Skipping a row
         # the athlete has already performed does not un-perform it: this
-        # codebase's settled position (see `athlete_log_session`'s delete, which
-        # scopes itself to `trainable_cells()` for exactly this reason) is that a
-        # set logged against a since-skipped cell is HISTORY, not draft state,
-        # and wiping it would silently destroy the athlete's record. A parsed set
-        # is no different from a structured one here. What 5a does add is a guard
+        # codebase's settled position is that a set logged against a
+        # since-skipped cell is HISTORY, not draft state, and wiping it would
+        # silently destroy the athlete's record. A parsed set is no different
+        # from a structured (legacy) one here. What 5a does add is a guard
         # on the CREATE side — `_upsert_parsed_set` won't mint a NEW set for a
         # row that is currently skipped — which is a separate question from
         # preserving one already earned. Leaving them also means unskipping needs
@@ -6686,8 +5879,9 @@ def cell_line_write(request, plan_id, slot_id):
         # of the plan snapshot precisely so "undo must never touch ... athlete
         # data". Deleting it here (an earlier attempt) lost the record with no
         # way back; detaching it (a later one) made it look like a structured
-        # row, so the logger's own delete then wiped it on the next save. The
-        # set simply stays as it is: overwriting the text above is enough,
+        # row, so the old structured logger's own delete then wiped it on the
+        # next save (that logger is retired; the reasoning stands). The set
+        # simply stays as it is: overwriting the text above is enough,
         # because the no-double-display suppression (`parsed_set_is_hidden`)
         # asks whether the source line still SHOWS this performance — it
         # re-parses the cell text, it does NOT read `athlete_authored` — so once

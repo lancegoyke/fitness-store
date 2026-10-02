@@ -40,49 +40,10 @@
       <span class="meso-badge" data-testid="session-status" :class="status === 'done' ? 'meso-badge--ok' : ''" x-text="status === 'done' ? 'Logged' : 'To do'">{{ session.status_label }}</span>
     </div>
 
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
-      <span class="meso-mono" style="font-size:12px;font-weight:700;color:var(--ink);" x-text="doneSets + '/' + totalSets"></span>
-      {% comment %} The count is checked-off Set rows only; a typed line never
-         ticks it. So it says "checked off", not "logged". {% endcomment %}
-      <span class="meso-row-meta">sets checked off. <span data-testid="log-instruction" x-show="status !== 'done'">When you're done, tap <strong>Log session</strong>.</span></span>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+      <span class="meso-mono" data-testid="set-progress" style="font-size:12px;font-weight:700;color:var(--ink);" x-text="progressLabel">{{ session.progress_label }}</span>
+      <span class="meso-row-meta" data-testid="log-instruction" x-show="status !== 'done'">Lines save as you type. Tap <strong>Finish session</strong> when you're done.</span>
     </div>
-
-    <!-- New-PR celebration (Phase 4c): populated from the log response; dismissible. -->
-    <template x-if="newRecords.length">
-      <div class="meso-card meso-card--pad" x-cloak
-           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--surface));background:color-mix(in srgb,var(--accent) 12%,var(--surface));">
-        <span style="font-size:20px;line-height:1.2;flex:0 0 auto;">🎉</span>
-        <div style="flex:1;min-width:0;line-height:1.45;">
-          <div style="font-size:14px;font-weight:800;letter-spacing:-0.01em;color:var(--accent-deep);">
-            New PR<span x-show="newRecords.length > 1">s</span>!
-          </div>
-          <div class="meso-row-meta meso-mono">
-            <template x-for="pr in newRecords" :key="pr.key">
-              <span style="display:block;color:var(--ink);" x-text="prLabel(pr)"></span>
-            </template>
-          </div>
-        </div>
-        <button type="button" @click="newRecords = []" aria-label="Dismiss"
-                class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;flex:0 0 auto;">&times;</button>
-      </div>
-    </template>
-
-    {% if show_first_log_hint %}
-      <!-- First-log coachmark (first-time UX Phase 4): server-driven, shown only
-           to a first-ever logger; meso_onboarding.js persists a manual dismiss. -->
-      <div class="meso-card meso-card--pad" data-coachmark-key="firstlog-session"
-           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
-        <span style="font-size:18px;line-height:1.3;">💡</span>
-        <span style="flex:1;min-width:0;">
-          {% comment %} Both entry paths, in page order, with no favourite. Which
-             one stays is 5b's call (it retires the structured logger), so
-             rewrite this when 5b lands, not before. {% endcomment %}
-          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Two ways to log a set</span>
-          <span class="meso-row-meta">Type it on a line under <strong>what you did</strong>, like <span style="white-space:nowrap;">225 x 5, RPE 8</span>. Or fill in a Set row below and tap its circle to check it off. Pick one for each set, not both. When you're done, tap <strong>Log session</strong> at the bottom.</span>
-        </span>
-        <button type="button" data-coachmark-dismiss aria-label="Dismiss tip" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
-      </div>
-    {% endif %}
 
     <template x-for="ex in exercises" :key="ex.id">
       <div class="meso-card" data-testid="exercise-card" style="margin-bottom:12px;overflow:hidden;">
@@ -104,6 +65,11 @@
         </div>
         <div style="padding:9px 16px 11px;">
           <div class="meso-row-meta meso-mono" style="margin-bottom:6px;">what you did</div>
+          {% comment %} Sets logged before typed lines were the only way (or whose line a
+             coach has since rewritten): history, shown as text and never posted. {% endcomment %}
+          <template x-for="r in (ex.logged_readonly || [])" :key="r.id">
+            <div class="meso-row-meta meso-mono" data-testid="logged-set-readonly" style="color:var(--dim);margin-bottom:6px;" title="Logged earlier — read-only" x-text="r.label"></div>
+          </template>
           <template x-for="l in ex.sub_lines" :key="l.line">
             <div class="meso-sub-line-row">
               {% comment %} The border/background go through --cell-line/--cell-bg so the
@@ -121,32 +87,12 @@
               <span class="meso-row-meta meso-mono" data-testid="sub-line-save-error" style="color:var(--warn);white-space:nowrap;" x-show="l.saveError && !l.queued" x-cloak>couldn&#8217;t save</span>
               <span class="meso-row-meta meso-mono" data-testid="sub-line-warn" style="color:var(--warn);white-space:nowrap;" x-show="l.warn && !l.saveError && !l.queued" x-cloak title="Saved, but this doesn&#8217;t look like a complete set — it won&#8217;t count toward your records.">not logged as a set</span>
               {% comment %} The optimistic PR (5a §7), marked where the athlete is actually
-                 looking. The page-top card stays for "Log session"; a blur is a
-                 per-line act, so it earns a per-line mark. {% endcomment %}
+                 looking: a blur is a per-line act, so it earns a per-line mark. {% endcomment %}
               <span class="meso-row-meta meso-mono" data-testid="sub-line-pr" style="color:var(--accent-deep);white-space:nowrap;font-weight:700;" x-show="l.pr && !l.warn && !l.saveError && !l.queued" x-cloak :title="'A new best for this lift — ' + l.pr + ' estimated 1RM.'">&#127881; PR <span x-text="l.pr"></span></span>
             </div>
           </template>
           <button type="button" @click="addLine(ex)" :disabled="ex.sub_lines.length >= 20" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:12px;">+ add a line</button>
         </div>
-        <template x-for="r in ex.set_rows" :key="r.set_number">
-          <div class="meso-set-row">
-            <div class="meso-mono meso-set-row-label">Set <span x-text="r.set_number"></span></div>
-            <input class="meso-phone-input meso-log-input" x-model="r.load" placeholder="load" inputmode="decimal"
-                   style="border:1px solid var(--line);background:var(--rail);" />
-            <span style="font-size:11px;color:var(--dim);">&#215;</span>
-            <input class="meso-phone-input meso-log-input" x-model="r.reps" placeholder="reps" inputmode="numeric"
-                   style="border:1px solid var(--line);background:var(--rail);" />
-            <input class="meso-phone-input meso-log-input" x-model="r.rpe" placeholder="rpe" inputmode="decimal"
-                   style="border:1px solid var(--line);background:var(--rail);" />
-            <template x-if="isPercentLift(ex)">
-              <span class="meso-row-meta meso-mono meso-set-row-hint" x-show="setImpliedOneRm(r)" x-cloak x-text="'1RM ≈ ' + setImpliedOneRm(r)"></span>
-            </template>
-            <button type="button" class="meso-set-toggle" data-testid="set-toggle" @click="toggle(r)" :aria-pressed="r.done" aria-label="Mark set done">
-              <template x-if="r.done"><div style="width:26px;height:26px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent-ink);font-size:13px;">&#10003;</div></template>
-              <template x-if="!r.done"><div style="width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line);background:var(--surface);"></div></template>
-            </button>
-          </div>
-        </template>
       </div>
     </template>
 
@@ -155,12 +101,10 @@
       <div class="meso-spacer"></div>
       <span class="meso-row-meta" style="color:var(--ok);" x-show="saved" x-cloak>Saved &#10003;</span>
       <span class="meso-row-meta" style="color:var(--dim);" x-show="queued" x-cloak>Saved offline — will sync when you&#8217;re back.</span>
-      {# #570: errorMessage carries a refusal's own text (e.g. "Too many sets logged for Box Squat.") when the last save failed with one; blank otherwise, and the fallback below is today's static text. #}
-      <span class="meso-row-meta" style="color:var(--warn);" x-show="error" x-cloak x-text="errorMessage || 'Couldn’t save — try again.'"></span>
+      <span class="meso-row-meta" style="color:var(--warn);" x-show="error" x-cloak>Couldn&#8217;t save — try again.</span>
       <span class="meso-row-meta" data-testid="session-line-error" style="color:var(--warn);" x-show="lineError" x-cloak>A line above couldn&#8217;t save.</span>
       <div class="meso-log-actions-buttons">
-        <button type="button" data-testid="session-save" class="meso-btn" @click="save(false)" :disabled="saving">Save progress</button>
-        <button type="button" data-testid="session-log" class="meso-btn meso-btn--primary" @click="save(true)" :disabled="saving" x-text="saving ? 'Saving…' : 'Log session'">Log session</button>
+        <button type="button" data-testid="session-finish" class="meso-btn meso-btn--primary" x-show="status !== 'done'" @click="finish()" :disabled="saving" x-text="saving ? 'Saving…' : 'Finish session'">Finish session</button>
       </div>
     </div>
   </div>

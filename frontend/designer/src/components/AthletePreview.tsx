@@ -53,8 +53,8 @@ export function AthletePreview({
             <div className="meso-coachmark-title">Preview as your athlete</div>
             <div className="meso-coachmark-text">
               {selectedWeek?.label ?? "This week"} follows your athlete&apos;s page layout — each day,
-              exercise, target, note, and “what you did” line updates as you edit. Set rows and
-              logging show up on their phone. Deliver sends them a heads-up.
+              exercise, target, note, and “what you did” line updates as you edit.
+              Logging happens on their phone. Deliver sends them a heads-up.
             </div>
           </div>
           <button

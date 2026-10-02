@@ -1,11 +1,11 @@
-/* Meso — athlete session logger (athlete slice Phase 2).
+/* Meso — athlete session logger.
  *
- * The athlete's delivered-session screen. init() hydrates the set rows from the
- * injected `meso-log-data` (pre-filled from the athlete's own existing log), the
- * athlete fills reps/load/rpe and checks sets off, and save() POSTs the whole
- * session to the log endpoint (api/me/session/<id>/log/). The write is idempotent
- * — re-saving updates the one log — so "Save progress" and "Log session" hit the
- * same endpoint, differing only in the status they stamp (pending vs done).
+ * The athlete's delivered-session screen. The athlete logs by TYPING A LINE per
+ * set under "what you did" ("225 x 5, RPE 8"); each line saves on blur through
+ * the cell endpoint (saveCell/_postCell), which the server parses into a set.
+ * finish() POSTs `{status: "done"}` to the log endpoint (api/me/session/<id>/log/)
+ * to complete the session. The server counts the sets the lines became and
+ * sends the count back as `progress`, which `progressLabel` shows.
  */
 // ---- %1RM ergonomics helpers (S2 Phase 2b) ----
 // Pure maths shared by the logger and its tests. A %1RM target ("75%") is an
@@ -36,7 +36,9 @@ function roundToStep(value, step) {
 
 // Estimated 1RM from a logged set via Epley: w × (1 + reps/30). A single rep IS a
 // 1RM, so it returns the load unchanged (not the formula's slight overshoot).
-// Null when either cell isn't a usable number (load > 0, reps ≥ 1).
+// Null when either cell isn't a usable number (load > 0, reps ≥ 1). The page no
+// longer calls it (the per-set implied-1RM hint went with the Set rows); it
+// stays exported, with its tests.
 function epleyOneRm(load, reps) {
   const w = parseNum(load);
   const r = parseNum(reps);
@@ -75,50 +77,6 @@ function notifyTourRefresh() {
 // unbounded stack.
 const MAX_CELL_LINE = 20;
 
-// Issue #567: `athlete_log_session` used to decide what a posted Set row
-// MEANT by matching `(prescription, set_number, values)` — but a hidden
-// parsed row isn't on screen, so the client's `set_number` is only evidence
-// about a render that can be several saves stale, and the slot's own meaning
-// can have moved (a renumbering pass shifts a hidden row off the number this
-// page still shows) since this page last loaded. The fix is row identity in
-// the payload: a row that already has a server id posts that id; a row that
-// doesn't mints its own id CLIENT-SIDE so the server can tell "this is the
-// same not-yet-created row, retried" from "this is a second, genuinely new
-// performance" — something position alone can never say. `crypto.randomUUID`
-// covers every current browser (and this file's own test environment); the
-// fallback (an insecure context, or the Safari that shipped without it) only
-// has to be unique within one page's lifetime, so a counter salted with
-// `Math.random()` is enough. Kept well under the server's 64-char cap.
-let _clientIdSeq = 0;
-function newClientId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  _clientIdSeq += 1;
-  return "c" + _clientIdSeq.toString(36) + Math.random().toString(36).slice(2, 10);
-}
-
-// #567/#568 P1-I: does `item` (a response set) carry what `posted` (the set
-// object THIS grid row actually posted, from the payload being reconciled —
-// see `syncFromLog`) says it posted? Only `reps`/`load`/`rpe` are compared —
-// never `id`/`client_id`/`prescription`/`set_number`, which is exactly what
-// the caller used to FIND `item` in the first place and so is already
-// settled by the time this runs. A missing field on either side defaults to
-// `""`, since a hand-built response stub (or a genuinely blank set) omits
-// fields the same way an empty string would compare. Sound because the
-// server (`_clean_logged_sets`) stores these three fields verbatim, with no
-// normalisation — a row the server created FOR a posted set always echoes
-// back byte-identical values, while a row that merely happens to sit at the
-// same slot or share the same id essentially never does.
-function postedValuesMatch(item, posted) {
-  if (!item || !posted) return false;
-  return (
-    (item.reps ?? "") === (posted.reps ?? "") &&
-    (item.load ?? "") === (posted.load ?? "") &&
-    (item.rpe ?? "") === (posted.rpe ?? "")
-  );
-}
-
 // The offline outbox (`meso-log-queue`) holds two kinds of write. A session
 // log is `{url, body}`, the shape it has always had, so a queue written before
 // #527 still replays. A typed line is `{kind: "cell", url, body: {exercise_id,
@@ -152,42 +110,10 @@ function isRetryableStatus(status) {
   return status >= 500 || status === 408 || status === 429;
 }
 
-// #570: a non-retryable refusal (`athlete_log_session`'s 400, "Too many sets
-// logged for Box Squat.") names the exercise, and the generic "try again"
-// banner would tell the athlete to retry a save that can never succeed — so
-// the server's own message has to reach them.
-//
-// Only a JSON body carrying an `error` string qualifies, which is the shape
-// that endpoint uses for exactly one refusal. Its OTHER 400s are bare
-// `HttpResponseBadRequest`s whose text is developer-facing ("Duplicate id in
-// sets.", "status must be 'pending' or 'done'."): reading the body as plain
-// text would put those in front of an athlete who can do nothing about them,
-// and would also render whatever a proxy or load balancer answered with.
-// Opting in per-message beats guessing from the body's shape. Truncated
-// rather than dropped when long — an exercise name can be 255 characters, and
-// a clipped message still names the lift, where no message at all doesn't.
-async function readErrorMessage(res) {
-  let data;
-  try {
-    data = await res.json();
-  } catch (e) {
-    return "";
-  }
-  // `ok: false` as well as `error`, because a proxy or WAF can answer a 4xx
-  // with JSON of its own (`{"error": "Forbidden"}`) and this value is shown
-  // to the athlete verbatim. Both keys together are this endpoint's shape,
-  // not a generic one.
-  const named =
-    data && data.ok === false && typeof data.error === "string"
-      ? data.error.trim()
-      : "";
-  return named.slice(0, 200);
-}
-
 // How long a logging write may take before it counts as offline (#527). fetch
 // has no timeout of its own, and gym wifi that connects but never answers would
-// hold a write open forever — and "Log session" with it, since it waits for the
-// lines — with nothing queued. The writes are idempotent, so one that landed
+// hold a write open forever — and "Finish session" with it, since it waits for
+// the lines — with nothing queued. The writes are idempotent, so one that landed
 // after all and is sent again does no harm. The timer isn't cleared: firing
 // after the exchange finished does nothing, and it also bounds the body read.
 const WRITE_TIMEOUT_MS = 15000;
@@ -222,11 +148,6 @@ function createLogger() {
     saving: false,
     saved: false,
     error: false,
-    // #570: the refusal's own message ("Too many sets logged for Box
-    // Squat."), when the last save's `error` came from a non-retryable
-    // response that named one — blank otherwise, in which case the template
-    // falls back to the generic banner text.
-    errorMessage: "",
     // What `status` was before the save whose entry is still in the outbox
     // flipped it optimistically — so a flush that the server later REFUSES
     // can put the badge back (see `flushLog`). Empty once nothing of this
@@ -234,7 +155,9 @@ function createLogger() {
     statusBeforeQueued: "",
     queued: false, // a save is stashed locally, waiting for the network
     lineError: false, // the log landed, but a line the server refused didn't
-    newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
+    // Sets logged vs prescribed across the session, as the server counts them
+    // (`applyProgress`): shown by `progressLabel`.
+    progress: { logged: 0, prescribed: 0 },
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
     _cellSaves: {}, // per-cell promise chain, so blurs reach the server in order
     _blurSaves: 0, // line saves started by a blur, for `settleLines`
@@ -260,17 +183,18 @@ function createLogger() {
       this.status = data.status;
       this.unit = data.unit || "";
       this.exercises = data.exercises || [];
+      this.applyProgress(data.progress);
       // Default the freeform tracking stack (Phase 4a) so the template's
       // `x-for` over `ex.sub_lines` is safe even for an exercise with none.
       //
       // ...and open with ONE EMPTY LINE PER PRESCRIBED SET, so the stack the
       // athlete types into lines up with the sets they were asked for. Blank
       // cells aren't persisted (the presenter drops them), so an exercise with
-      // nothing typed yet arrives EMPTY — which rendered as a bare "+ add a
-      // line" button under three labelled set inputs, and nobody would choose
-      // to put their data there. `set_rows` is already sized to the
-      // prescription server-side (its own default and caps applied), so
-      // matching it keeps one source of truth for "how many sets is this".
+      // nothing typed yet arrives EMPTY — which would render as a bare "+ add a
+      // line" button, and nobody would choose to put their data there. The
+      // server sends the prescribed count as `pad_lines` (its own default and
+      // caps applied), so the server stays the one source of truth for "how
+      // many sets is this"; the client only clamps it to 1..MAX_CELL_LINE.
       //
       // Gaps are filled by NUMBER, not appended: a cleared line leaves a hole
       // (the server drops the blank but keeps later ones), and `line` is also
@@ -278,27 +202,12 @@ function createLogger() {
       // every reload. Filling 1..n by number does that; appending would walk
       // the numbers up on each visit. Lines the athlete has beyond the
       // prescription are always kept.
-      // Issue #567: normalize every rendered row's server identity ONCE,
-      // here, so the rest of the file never has to guess between `undefined`
-      // (a field the injected JSON happened to omit) and `null` (a row the
-      // server explicitly has no LoggedSet for): `r.id` is the LoggedSet pk
-      // this grid row is bound to right now, or `null`. `r.client_id` always
-      // starts `null` — it's minted lazily, once, the first time a row with
-      // no id is actually sent (see `buildPayload`), not here, since most
-      // rows already have a server id and never need one at all. (Alpine
-      // proxies these objects once mounted, so plain assignment is fine —
-      // this runs before that happens anyway.)
-      for (const ex of this.exercises) {
-        if (!Array.isArray(ex.set_rows)) ex.set_rows = [];
-        for (const r of ex.set_rows) {
-          r.id = r.id == null ? null : r.id;
-          r.client_id = null;
-        }
-      }
       for (const ex of this.exercises) {
         if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
-        const rows = Array.isArray(ex.set_rows) ? ex.set_rows.length : 0;
-        const want = Math.min(Math.max(rows, 1), MAX_CELL_LINE);
+        const want = Math.min(
+          Math.max(Number.isInteger(ex.pad_lines) ? ex.pad_lines : 1, 1),
+          MAX_CELL_LINE,
+        );
         const present = new Set(ex.sub_lines.map((l) => l.line));
         for (let n = 1; n <= want; n += 1) {
           if (!present.has(n)) ex.sub_lines.push({ line: n, text: "" });
@@ -399,94 +308,48 @@ function createLogger() {
     },
 
     // ---- derived progress ----
-    get totalSets() {
-      return this.exercises.reduce((acc, e) => acc + e.set_rows.length, 0);
-    },
-    get doneSets() {
-      return this.exercises.reduce(
-        (acc, e) => acc + e.set_rows.filter((r) => r.done).length,
-        0,
-      );
-    },
-
-    toggle(row) {
-      row.done = !row.done;
-    },
-
-    // One PR line for the celebration toast (Phase 4c). The server preformatted
-    // the numbers (value/delta), so this only assembles them — never re-rounds.
-    prLabel(pr) {
-      const base = pr.name + " — " + pr.value + " " + pr.unit;
-      if (pr.is_first) return base + " (first best)";
-      // A real PR can round to the same whole number as the old best.
-      return pr.delta === "0" ? base : base + " (+" + pr.delta + ")";
-    },
-
-    // A row is worth sending if it's checked or carries any entry.
-    rowFilled(r) {
-      return (
-        r.done ||
-        (r.reps || "") !== "" ||
-        (r.load || "") !== "" ||
-        (r.rpe || "") !== ""
-      );
-    },
-
-    // Collect the filled rows into the endpoint's payload shape.
-    buildPayload(markDone) {
-      const sets = [];
-      for (const e of this.exercises) {
-        for (const r of e.set_rows) {
-          if (!this.rowFilled(r)) continue;
-          const set = {
-            prescription: e.id,
-            set_number: r.set_number,
-            reps: r.reps || "",
-            load: r.load || "",
-            rpe: r.rpe || "",
-          };
-          // Issue #567: identity, not position, is what the server matches a
-          // posted row against — see the comment above `newClientId`. A row
-          // that already has a server id posts that id; a row that doesn't
-          // mints its OWN client_id the first time it's ever sent and
-          // REMEMBERS it on the row (assignment sticks whether or not Alpine
-          // has proxied it yet) — never both. That memoized id is what keeps
-          // three different sends of the same never-saved row — the click-
-          // time `enqueue`, the actual `fetch`, and any offline replay of
-          // either — naming the SAME row instead of minting a fresh one each
-          // time: `save()` calls `buildPayload` twice (once before
-          // `settleLines()`, once after), and the queued copy can outlive
-          // both if the page dies mid-request.
-          if (r.id != null) {
-            set.id = r.id;
-          } else {
-            if (!r.client_id) r.client_id = newClientId();
-            set.client_id = r.client_id;
-          }
-          sets.push(set);
-        }
+    // The server's count of sets logged vs prescribed (`progress` in the page
+    // data, and in every cell-write and log response). Anything that isn't two
+    // non-negative integers leaves the current count alone.
+    applyProgress(p) {
+      if (
+        p &&
+        typeof p === "object" &&
+        Number.isInteger(p.logged) &&
+        Number.isInteger(p.prescribed) &&
+        p.logged >= 0 &&
+        p.prescribed >= 0
+      ) {
+        this.progress = { logged: p.logged, prescribed: p.prescribed };
       }
-      // "Log session" completes the session; "Save progress" keeps the current
-      // status, so saving edits to an already-logged session never downgrades it
-      // back to "To do".
-      return { status: markDone ? "done" : this.status, sets };
     },
 
-    // POST the session. `markDone` flips it to "done" (Log session) vs "pending"
-    // (Save progress); both upsert the same log. When the network is unreachable
-    // (flaky gym wifi — S7), the save is stashed locally and flushed on
-    // reconnect instead of being lost; an HTTP error (the server answered) is a
-    // real error the athlete should retry.
-    async save(markDone) {
+    // "3 of 4 sets logged" — or "5 sets logged" when nothing is prescribed.
+    // The server renders the same string for first paint
+    // (`presenters.progress_label`); the two must stay identical.
+    get progressLabel() {
+      const { logged, prescribed } = this.progress;
+      if (prescribed > 0) {
+        const noun = prescribed === 1 ? " set" : " sets";
+        return logged + " of " + prescribed + noun + " logged";
+      }
+      return logged + (logged === 1 ? " set" : " sets") + " logged";
+    },
+
+    // Complete the session: POST `{status: "done"}` to the log endpoint. The
+    // sets themselves were saved line by line as the athlete typed; this only
+    // stamps the status. When the network is unreachable (flaky gym wifi — S7),
+    // the request is stashed locally and flushed on reconnect instead of being
+    // lost; an HTTP error (the server answered) is a real error the athlete
+    // should retry.
+    async finish() {
       if (this.saving || !this.logUrl) return;
       this.saving = true;
       this.saved = false;
       this.error = false;
-      this.errorMessage = "";
       this.queued = false;
       this.lineError = false;
-      this.newRecords = []; // clear any prior toast; this save recomputes it
-      // #570: what to put back if this save is REFUSED (a non-retryable
+      // #570: what to put back if this request is REFUSED (a non-retryable
       // response, below) rather than merely delayed — the database kept
       // nothing, so the optimistic flip right below has to come back off
       // too, and it can only do that if the value it's overwriting was
@@ -494,37 +357,32 @@ function createLogger() {
       const previousStatus = this.status;
       // Reflect the intended status locally right away so the UI is responsive
       // whether the request lands now or after a sync.
-      if (markDone) this.status = "done";
+      this.status = "done";
+      const payload = { status: "done" };
       // Written ahead, like a line (#527): the wait below can take a while on
-      // bad wifi, and leaving the page meanwhile must not lose the Set rows.
-      // The flush leaves this entry to save(), which replaces it with what it
-      // finally sends, and takes that out once it lands.
-      const ahead = this.enqueue(this.buildPayload(markDone));
+      // bad wifi, and leaving the page meanwhile must not lose the finish. The
+      // flush leaves this entry to finish(), which takes it out once it lands.
+      // The payload is a constant, so settling the lines below can't change
+      // it: there is no second, rebuilt copy to enqueue.
+      const ahead = this.enqueue(payload);
       // Lines first (#527). Pressing the button blurs the line being typed, so
       // its save is already on its way: let it land, then send any line still
       // queued from earlier. The log then reaches the server after the sets its
-      // lines carry, one request at a time, and what this save reports below
+      // lines carry, one request at a time, and the count it reports below
       // covers the lines too.
       try {
         await this.settleLines();
       } catch (err) {
         // Never let the outbox keep the log itself from being saved.
-        console.error("Could not settle the lines before saving", err);
+        console.error("Could not settle the lines before finishing", err);
       }
-      // Built after the wait, which can take a while on bad wifi: the Set rows
-      // stay editable meanwhile, and a change made then belongs in this save.
-      const payload = this.buildPayload(markDone);
-      // And queued in place of the click-time copy before it goes out: if the
-      // page dies mid-request, this newer log is the one to replay. (Storage
-      // refusing it leaves the click-time copy, the best there is.)
-      const sending = this.enqueue(payload) || ahead;
       let res;
       try {
         res = await postJson(this.logUrl, payload, this.csrf);
       } catch (netErr) {
         // Network unreachable → queue it; the upsert endpoint is idempotent, so
-        // replaying on reconnect is safe (latest save for a session wins).
-        if (this.keepForLater(payload) || this.holdsThisLog(sending)) {
+        // replaying on reconnect is safe (latest write for a session wins).
+        if (this.keepForLater(payload) || this.holdsThisLog(ahead)) {
           this.statusBeforeQueued = previousStatus;
         } else {
           this.status = previousStatus;
@@ -538,60 +396,67 @@ function createLogger() {
         // HTML). Don't lose it: queue for retry, where the next online flush
         // (after re-login) carries a fresh CSRF.
         if (res.redirected) {
-          if (this.keepForLater(payload) || this.holdsThisLog(sending)) {
+          if (this.keepForLater(payload) || this.holdsThisLog(ahead)) {
             this.statusBeforeQueued = previousStatus;
           } else {
             this.status = previousStatus;
           }
           return;
         }
+        // The Finish button hides once the status is "done", so every failure
+        // below must leave either a queued retry or a visible button — never
+        // neither.
         if (!res.ok) {
-          if (!isRetryableStatus(res.status)) {
-            // #570: a refusal (e.g. "Too many sets logged for Box Squat.")
-            // is deterministic — retrying the same payload can only fail
-            // again — so the optimistic "done" above comes back off (the
-            // database kept nothing) and the server's own message, naming
-            // what actually went wrong, replaces the generic banner text.
-            // A retryable status (5xx/408/429) falls through untouched: the
-            // write might yet land, so neither the status nor the message
-            // changes here — same as a network failure above.
-            // Message first, THEN the revert: the body read is bounded by
-            // `postJson`'s own timeout, and flipping the status back before
-            // it resolves would leave the page showing neither "Logged" nor
-            // a reason for up to that long.
-            this.errorMessage = await readErrorMessage(res);
-            this.status = previousStatus;
+          if (isRetryableStatus(res.status)) {
+            // The server failed (5xx/408/429), not the write: it might yet
+            // land, so treat it like a network failure — keep the entry for
+            // the next flush (`flushLog` also reads these as "kept"). Dropping
+            // it here would leave "Logged" up with nothing to retry it.
+            if (this.keepForLater(payload) || this.holdsThisLog(ahead)) {
+              this.statusBeforeQueued = previousStatus;
+            } else {
+              this.status = previousStatus;
+            }
+            return;
           }
+          // #570: a refusal is deterministic — retrying the same payload can
+          // only fail again — so the optimistic "done" above comes back off
+          // (the database kept nothing), the button returns, and the athlete
+          // retries by hand.
+          this.status = previousStatus;
           throw new Error("Request failed: " + res.status);
         }
-        if (sending) this.dropEntry(sending);
-        const data = await res.json();
+        if (ahead) this.dropEntry(ahead);
+        let data;
+        try {
+          data = await res.json();
+          if (!data || !data.log || typeof data.log.status !== "string") {
+            throw new Error("unexpected reply shape");
+          }
+        } catch (e) {
+          // A 200 whose body can't be read (a proxy mangling it): the write
+          // landed, so "done" stands and there is nothing to retry or report.
+          // The count re-syncs on the next response.
+          this.statusBeforeQueued = "";
+          this.reportSaved();
+          return;
+        }
         this.status = data.log.status;
-        this.statusBeforeQueued = ""; // the server has this save; nothing to put back
-        // `payload` — not `sending`'s body-only shape, though they carry the
-        // same `sets` here — is this save's own request body, exactly what
-        // was actually posted (#567/#568 P1-E/F): `syncFromLog` needs it to
-        // tell a posted row from one this save never touched.
-        this.syncFromLog(data.log, payload);
-        // Any lift this save beat. As of 5a the records read is LIVE — it counts
-        // pending sets too — so a "Save progress" no longer comes back empty and
-        // can legitimately surface a toast before the session is ever done.
-        this.newRecords = data.new_records || [];
+        this.statusBeforeQueued = ""; // the server has this write; nothing to put back
+        this.applyProgress(data.progress);
         this.reportSaved();
         // Key the tour nudge off the log status the *server* persisted, not the
         // button pressed (#451): the self-variant "results" step advances on a
-        // `done` log (`advance_self_step_if_complete("results")`), and a "Save
-        // progress" on an already-completed session still writes `done` — so
-        // `markDone` alone would leave the card stale after re-saving a logged
-        // session. A pending save returns `pending` → no spurious re-render /
-        // screen-reader re-announcement (the offline `flushQueue` path stays
-        // silent regardless — it never calls this).
+        // `done` log (`advance_self_step_if_complete("results")`). A pending
+        // reply → no spurious re-render / screen-reader re-announcement (the
+        // offline `flushQueue` path stays silent regardless — it never calls
+        // this).
         if (data.log.status === "done") notifyTourRefresh();
       } catch (err) {
         console.error("Log save failed", err);
         this.error = true;
-        // An HTTP error is the athlete's to retry, not the outbox's.
-        if (sending) this.dropEntry(sending);
+        // A refusal is the athlete's to retry, not the outbox's.
+        if (ahead) this.dropEntry(ahead);
       } finally {
         this.saving = false;
       }
@@ -612,15 +477,13 @@ function createLogger() {
         this.lineError = true;
         return;
       }
-      // A refusal outranks a tick. An earlier save of THIS page's grid that
-      // the server refused is still refused — nothing retries it, since a
-      // refusal drops its outbox entry — so "Saved ✓" would be a plain lie,
-      // and clearing the refusal to make room for the tick (which an earlier
-      // version of this did) states it even more confidently. The flush that
-      // brings us here may well have landed a log queued by ANOTHER tab on
-      // the same session: `flushedMine` means a log for this URL landed, not
-      // that this page's did. `save()` clears both at the top of the next
-      // real attempt, which is the moment the claim stops being true.
+      // A refusal outranks a tick. A finish the server refused is still
+      // refused — nothing retries it, since a refusal drops its outbox entry —
+      // so "Saved ✓" would be a plain lie. The flush that brings us here may
+      // well have landed a log queued by ANOTHER tab on the same session:
+      // `flushedMine` means a log for this URL landed, not that this page's
+      // did. `finish()` clears `error` at the top of the next real attempt,
+      // which is the moment the claim stops being true.
       if (this.error) return;
       this.saved = true;
       setTimeout(() => {
@@ -693,7 +556,7 @@ function createLogger() {
 
     // Only well-formed entries: anything else in the key (another script's
     // value, a hand edit) would otherwise throw deep inside a flush and leave
-    // "Log session" stuck.
+    // "Finish session" stuck.
     readQueue() {
       let items;
       try {
@@ -717,13 +580,11 @@ function createLogger() {
       }
     },
 
-    // Queue this session's log and say so — or, when storage refused it, say
-    // it didn't save.
-    // Whether `entry` — the write-ahead copy `save()` made before the request
+    // Whether `entry` — the write-ahead copy `finish()` made before the request
     // went out — is still in the outbox for this session. `writeQueue` is
-    // all-or-nothing, so a LATER `enqueue` of the same save can fail while
+    // all-or-nothing, so a LATER `enqueue` of the same write can fail while
     // that earlier copy sits there perfectly intact and due to flush: the
-    // save is queued, not lost, and saying "couldn't save" (or taking the
+    // write is queued, not lost, and saying "couldn't save" (or taking the
     // status back off) would under-claim what the page actually holds.
     holdsThisLog(entry) {
       return !!entry && this.readQueue().some((item) => item.id === entry.id);
@@ -787,7 +648,7 @@ function createLogger() {
       this.writeQueue(queue);
     },
 
-    // Replay the outbox. `init()`, `online` and `save()` can all ask at once,
+    // Replay the outbox. `init()`, `online` and `finish()` can all ask at once,
     // but only one pass runs at a time: two would send the same entries twice,
     // and concurrently. A request that arrives mid-pass gets one more pass
     // after it, so a write queued in between isn't left behind.
@@ -825,10 +686,10 @@ function createLogger() {
       }
       let flushedMine = false;
       for (const item of queue.filter((i) => !isCellEntry(i))) {
-        // Mid-save, this session's log is save()'s to send, right after.
+        // Mid-finish, this session's log is finish()'s to send, right after.
         if (this.saving && item.url === this.logUrl) continue;
         // The lines before it can take a while: a log sent or replaced since
-        // this pass read the outbox (save() landing meanwhile) is not resent,
+        // this pass read the outbox (finish() landing meanwhile) is not resent,
         // or its older copy would replace the newer log on the server.
         if (!this.isQueued(item)) continue;
         const outcome = await this.flushLog(item);
@@ -836,8 +697,8 @@ function createLogger() {
         if (outcome === "mine") flushedMine = true;
       }
       // A pass that lands this session's log, or the last line a "will sync"
-      // message was waiting on, updates the message. Not mid-`save()`, though:
-      // save reports once its own log is in.
+      // message was waiting on, updates the message. Not mid-`finish()`, though:
+      // finish reports once its own log is in.
       if (!this.saving && (flushedMine || this.queued)) this.reportSaved();
     },
 
@@ -887,17 +748,16 @@ function createLogger() {
       // now" — a rotated CSRF token after a re-login (this page captures
       // `csrf` once, at load), or a write belonging to someone else. They are
       // not refusals of the payload, and dropping one would destroy the only
-      // copy of a session logged offline: unlike a sub-line, a queued log's
-      // set rows are never restored into the grid on load. `flushCell` makes
-      // this check first for the same reason.
+      // copy of a session finished offline. `flushCell` makes this check
+      // first for the same reason.
       if (isWrongAccount(res)) return "offline";
       if (isRetryableStatus(res.status)) return "kept";
       if (!res.ok) {
-        // A refusal (#570's 400) won't change on retry, so keeping it queued
-        // promises a sync that can never happen: the outbox re-POSTs the same
-        // doomed payload on every `online` event while the footer says "will
-        // sync". Drop it and say what went wrong instead — the same split
-        // `flushCell` makes, which this function simply never had.
+        // A refusal won't change on retry, so keeping it queued promises a
+        // sync that can never happen: the outbox re-POSTs the same doomed
+        // payload on every `online` event while the footer says "will sync".
+        // Drop it and say it failed instead — the same split `flushCell`
+        // makes, which this function simply never had.
         //
         // Only for THIS session's log, for `flushCell`'s reason: another
         // session's log has nothing on this page to report it on, so it stays
@@ -905,17 +765,16 @@ function createLogger() {
         // see it.
         if (item.url !== this.logUrl) return "kept";
         this.dropEntry(item);
-        // The badge goes back with it. `save()` flipped `status` to "done"
+        // The badge goes back with it. `finish()` flipped `status` to "done"
         // optimistically before queuing this entry and recorded what it was
         // before (`statusBeforeQueued`); now that the server has refused the
-        // entry and nothing is left to retry, leaving "Logged" up is the same
-        // claim the revert in `save()` exists to stop — just reached by the
-        // flush instead. Only when we still know the earlier value: an entry
-        // queued by a previous page load carries none, and guessing would be
-        // worse than leaving the next page load to say what the server holds.
+        // entry and nothing is left to retry, leaving "Logged" up would claim
+        // a log the database doesn't have. Only when we still know the
+        // earlier value: an entry queued by a previous page load carries
+        // none, and guessing would be worse than leaving the next page load
+        // to say what the server holds.
         if (this.statusBeforeQueued) this.status = this.statusBeforeQueued;
         this.error = true;
-        this.errorMessage = await readErrorMessage(res);
         return "rejected";
       }
       this.dropEntry(item);
@@ -926,222 +785,18 @@ function createLogger() {
       } catch (e) {
         return "mine"; // synced server-side regardless; UI reconciles on next load
       }
-      // A pass can already be sending this session's older log when save()
-      // starts, so its reply can land mid-save — checked after the body is
-      // read, which can itself outlast the tap. Leave the rows alone then:
-      // reconciling them to the older log would un-tick rows ticked since,
-      // just before save() builds its payload from them. save's own reply
-      // reconciles.
+      // A pass can already be sending this session's older log when finish()
+      // starts, so its reply can land mid-finish — checked after the body is
+      // read, which can itself outlast the tap. finish's own reply is the one
+      // that reports, so leave the reconciling to it.
       if (this.saving) return "mine";
       try {
         this.status = data.log.status;
-        // `item.body` is exactly what this queued entry posted (#567/#568
-        // P1-E/F) — same contract as `save()`'s own call above.
-        this.syncFromLog(data.log, item.body);
-        this.newRecords = data.new_records || []; // a PR beaten offline still lands
+        this.applyProgress(data.progress);
       } catch (e) {
         /* a reply of an unexpected shape: synced server-side regardless */
       }
       return "mine";
-    },
-
-    // Reconcile the rows with what the server actually persisted so the check
-    // circles and counter match the saved log immediately — without this, rows
-    // that were sent because they carried data (but were never ticked) would
-    // stay un-checked until a reload. The returned log is the source of truth.
-    //
-    // Issue #567: reconcile by IDENTITY first, position second — but ONLY for
-    // a grid row THIS PAYLOAD actually posted. `payload` is the request body
-    // this exact save sent (`save()` and `flushLog()` both thread through the
-    // one they actually posted — see their own calls below), and is now part
-    // of this method's contract, not an optional extra: a caller that cannot
-    // supply one treats NOTHING as posted, the strict reading, rather than
-    // silently treating everything as posted (which is the bug below).
-    //
-    // #567/#568 P1-E/F, THE ROOT CAUSE three independent reviewers traced
-    // back here: the slot fallback used to run over EVERY grid row, whether
-    // or not this payload posted it. A grid row this save left untouched
-    // (empty, unticked) has no business adopting ANYTHING from the response
-    // — but the response can still carry a set at that row's slot for a
-    // reason that has nothing to do with this save at all: a hidden parsed
-    // row a coach's rewrite just made VISIBLE, echoed back because it's
-    // visible now, happening to sit at a slot this stale page's own empty
-    // grid row shares. The old fallback ticked that grid row and PLANTED the
-    // visible row's real pk onto it, though its inputs stayed empty — and the
-    // very next ordinary edit into that same-looking-empty row then posted
-    // the planted id, letting the server delete a real, distinct performance
-    // this page never touched or even knew existed (see
-    // `athlete_log_session`'s docstring for the exact sequence). It was also
-    // simply unstable on its own terms: the spurious tick made `rowFilled`
-    // re-post that blank-looking row on every subsequent save, and each of
-    // those repeated posts renumbered the real survivor one `set_number`
-    // higher.
-    //
-    // #567/#568 P1-I: the paragraph this replaces argued the only visible row
-    // left at a POSTED slot, after the save, is the one the server created
-    // FOR that exact posted set — but that is only true when the set was
-    // CREATED. When a posted set is instead ABSORBED (the twin absorb in
-    // `athlete_log_session`), nothing is created at that slot at all, and
-    // `posted` there is RECOMPUTED after the absorb runs — so the slot never
-    // enters `posted` in the first place, and the collision renumbering (which
-    // only moves a row off a slot IN `posted`) never even looks at it. A
-    // visible parsed row already sitting at that same slot, left over from
-    // before this save, is therefore untouched — and it is a DIFFERENT row
-    // than the one whose id this grid row posted.
-    //
-    // Concretely: a hidden row X and a visible row Y can both exist on one
-    // exercise's rows, at different set numbers, after a coach rewrite/undo
-    // cycle. A payload posting `{id: X.pk, set_number: 1, reps: "5", load:
-    // "225"}` is absorbed by X — the absorb matches on pk and VALUES alone,
-    // with no `set_number` agreement, so this works even though X's own
-    // `set_number` is 2, not 1 — which drops slot 1 out of `posted` entirely.
-    // Y, sitting at slot 1 the whole time, is left exactly where it was. The
-    // response's item at slot 1 is therefore Y, not X: without a value check,
-    // legs 2 and 3 below would plant Y's pk onto this grid row, and the very
-    // next ordinary edit into it would post that pk and let the server delete
-    // a performance the page never rendered.
-    //
-    // So the rule that actually holds is narrower than "the only row at a
-    // posted slot is the one this save created for it": a grid row may only
-    // adopt a response item that carries what THAT ROW ITSELF POSTED — see
-    // `postedValuesMatch`, above `newClientId`. Sound because
-    // `_clean_logged_sets` stores `reps`/`load`/`rpe` verbatim, with no
-    // normalisation, so a row the server created FOR a posted set always
-    // echoes back byte-identical values, while a row that merely happens to
-    // share a slot or an id essentially never does. Leg 1 (`client_id`) needs
-    // no such check: a `client_id` the server echoes is an exact,
-    // server-minted identity for THIS request's set, so a value check there
-    // adds no safety and only risks a false negative.
-    //
-    // This also closes a second, related gap in leg 2 (`byId`): without the
-    // value check it bound a grid row to a response item at a DIFFERENT
-    // `set_number` without noticing — after a spared row is renumbered away
-    // by the collision pass, the page would show a tick at the row's OLD
-    // number for a row that has since moved to a different one.
-    //
-    // Why the value check refuses that match is worth stating exactly,
-    // because the obvious reason is the WRONG one: it is not that "the
-    // renumbered row's values didn't change" — unchanged values would make
-    // `postedValuesMatch` ACCEPT it. It is that a row can only be both
-    // SPARED and renumbered when its values differ from what this payload
-    // posted: `_client_held` deletes any visible row an anchored id restates
-    // verbatim (see `athlete_log_session`), so a visible survivor is one the
-    // payload did NOT restate, and a hidden survivor never reaches the
-    // response at all. Either way there is nothing left at the old number
-    // for this row's own posted values to match.
-    //
-    // Match order, for a grid row `r`, where "posted" means this payload's
-    // OWN `sets` list actually named `r`'s current `(prescription,
-    // set_number)` — and, for legs 2 and 3, that the matched item's
-    // `reps`/`load`/`rpe` equal what THIS row posted there (`postedValuesMatch`):
-    //   1. `r.client_id`, against the response's client_id map — the row the
-    //      server just created FOR this grid row. No posted-gate or value
-    //      check needed: the server only ever echoes a client_id it just
-    //      minted FROM this same request's payload, so a match here is
-    //      impossible unless this row really was posted, and the id is
-    //      strictly stronger evidence than a value comparison could be.
-    //   2. posted AND `r.id != null`, against the response's id map, values
-    //      matching — exact identity, for a row that already had a server id.
-    //   3. posted, against the slot map (first write wins, as before), values
-    //      matching — the rolling-deploy fallback: an OLD server build
-    //      doesn't know `client_id` and never echoes it, so leg 1 fails for a
-    //      client_id row even though it truly was posted; matching ONLY by
-    //      client_id then left such a row un-ticked forever — `rowFilled`
-    //      drops an unticked, empty-looking row from the NEXT save's payload,
-    //      and that save deletes the very row the old server just created
-    //      for it.
-    //      Leg 3 can still land on a FOREIGN row whose values happen to
-    //      equal what this row posted — `athlete_log_session` itself calls
-    //      two identical performances ("225 x 5" twice) an ordinary thing to
-    //      do. That is harmless, and deliberately so: the collision
-    //      renumbering leaves at most one VISIBLE row at a slot this payload
-    //      posted, so the pk adopted there is exactly the one a reload would
-    //      bind to this grid row showing these values. Adopting it agrees
-    //      with the render rather than guessing against it.
-    // A row with NO match — posted or not — gets `r.done = false` and
-    // NEITHER `r.id` NOR `r.client_id` touched:
-    //   * POSTED, nothing at the id/slot at all: the server ABSORBED it (it
-    //     restated a row hidden from the logger, a twin the coach's rewrite
-    //     created), so the response carries no set for it. Clearing its id
-    //     here would make the NEXT save mint a fresh client_id and post it as
-    //     a brand-new row — creating the very duplicate #567 exists to
-    //     prevent. Keeping the id lets the server absorb it again next time,
-    //     which is stable.
-    //   * POSTED, an item sits at the id/slot but its VALUES differ (P1-I):
-    //     that item is a FOREIGN row this save never touched, exactly the
-    //     scenario above. Leaving the row un-ticked and its id untouched
-    //     means the worst case is a stale tick lingering one save longer, not
-    //     a stranger's pk getting planted here — a reload re-derives this
-    //     row from `_set_rows`, which knows the truth.
-    //   * UNPOSTED: this save never touched the row at all, so there is
-    //     nothing here to reconcile it against, whatever the response
-    //     happens to carry at its slot. A reload renders it properly from
-    //     `_set_rows` (values AND `done`), which is the only thing that
-    //     actually knows this row's true state.
-    syncFromLog(log, payload) {
-      const sets = log.sets || [];
-      // #567/#568 P1-I: a Map from slot to the posted set OBJECT, not a Set
-      // of slot keys — legs 2 and 3 below need the actual values this row
-      // posted, not just proof that its slot was posted at all.
-      const posted = new Map(
-        (payload && Array.isArray(payload.sets) ? payload.sets : []).map(
-          (s) => [`${s.prescription}:${s.set_number}`, s],
-        ),
-      );
-      const byClientId = new Map();
-      const byId = new Map();
-      const bySlot = new Map();
-      for (const s of sets) {
-        // Only an item the server just minted FROM a client_id carries one
-        // back (the contract: `client_id` is null on every other item,
-        // including a pre-existing row posted by `id`) — so this map can
-        // only ever match the one row that named it.
-        if (s.client_id) byClientId.set(s.client_id, s);
-        if (s.id != null) byId.set(s.id, s);
-        // P3: the FIRST entry wins a slot, not the last. Two response items
-        // can only share a slot when the server is on an old build that
-        // ignores `client_id` (see above) — the first is exactly the row
-        // that build created FOR this slot; a later item that happens to
-        // report the same slot (a survivor absorbed into it, say) is not.
-        const slotKey = `${s.prescription}:${s.set_number}`;
-        if (!bySlot.has(slotKey)) bySlot.set(slotKey, s);
-      }
-      for (const e of this.exercises) {
-        for (const r of e.set_rows) {
-          const postedSet = posted.get(`${e.id}:${r.set_number}`);
-          // `undefined` (not merely falsy `null`) whenever the posted-gate
-          // fails, so `postedValuesMatch` — which requires both arguments —
-          // rejects it the same way it rejects "no item found".
-          const idItem = postedSet && r.id != null ? byId.get(r.id) : undefined;
-          const slotItem = postedSet
-            ? bySlot.get(`${e.id}:${r.set_number}`)
-            : undefined;
-          // #567/#568 P1-E/F/I: identity first, slot second — posted AND
-          // value-matched only, for legs 2/3 — and NEVER for a row this
-          // payload didn't post. See the comment above this method.
-          const match =
-            (r.client_id && byClientId.get(r.client_id)) ||
-            (postedValuesMatch(idItem, postedSet) && idItem) ||
-            (postedValuesMatch(slotItem, postedSet) && slotItem);
-          r.done = !!match;
-          if (match) {
-            // P3: a response item can legitimately omit `id` (nothing to
-            // report — see the server's `client_ids` comment in
-            // `athlete_log_session`). Assigning `match.id` unguarded then set
-            // `r.id` to `undefined`, which `r.id != null` reads as "no id" —
-            // so the very next `buildPayload` minted a brand-new `client_id`
-            // for a row the server already knows, instead of leaving `r.id`
-            // as it was.
-            const matchId = match.id ?? null;
-            if (matchId != null) r.id = matchId;
-            r.client_id = null;
-          }
-          // NO match, POSTED or not: leave r.id and r.client_id exactly as
-          // they are — do NOT clear them. See the comment above this method
-          // for the shapes this covers (absorbed, a foreign row at the same
-          // id/slot, or simply untouched).
-        }
-      }
     },
 
     // ---- %1RM ergonomics (S2 Phase 2b) ----
@@ -1182,15 +837,6 @@ function createLogger() {
       const load = loadForPercent(this.effectiveOneRm(ex), this.percentTarget(ex));
       if (load == null) return "";
       return fmtNum(load) + (this.unit ? " " + this.unit : "");
-    },
-
-    // The 1RM a logged set implies (Epley), with the unit — shown on a %1RM lift so
-    // the athlete can refine their estimate from what they actually lifted. Empty
-    // until the set carries a numeric load + reps.
-    setImpliedOneRm(row) {
-      const one = epleyOneRm(row.load, row.reps);
-      if (one == null) return "";
-      return fmtNum(one) + (this.unit ? " " + this.unit : "");
     },
 
     // ---- manual 1RM persistence (server-side, Phase 2) ----
@@ -1296,8 +942,8 @@ function createLogger() {
         .then((outcome) => {
           // A line landing can change what the footer last said: once no
           // line is queued or refused, "will sync" or "a line couldn't save"
-          // gives way — no second "Log session" needed — and a line that
-          // failed after "Saved ✓" went up takes it down. `save()` reports
+          // gives way — no second "Finish session" needed — and a line that
+          // failed after "Saved ✓" went up takes it down. `finish()` reports
           // for itself, after its own log.
           if (!this.saving && (this.queued || this.lineError || this.saved)) {
             this.reportSaved();
@@ -1459,6 +1105,11 @@ function createLogger() {
         if (entry) entry.savedText = undefined;
         return "saved";
       }
+      // The count is session-wide, not this line's, so it applies before the
+      // stale-text checks below. Responses from two different cells can land
+      // out of order (rare: it needs overlapping blurs); Finish's response
+      // re-syncs the count.
+      this.applyProgress(data.progress);
       // A replay of text another tab queued: if this tab never touched the
       // line, show what the server now holds, or a later blur here would post
       // the old text back over it. Never for this page's own entry — the line
@@ -1497,14 +1148,11 @@ function createLogger() {
       // alone. Derive-on-read like `warn` itself, so a reason that stops
       // applying clears on the next blur. "" when the server sent none.
       entry.warn_reason = (data.cell && data.cell.warn_reason) || "";
-      // Optimistic PR (5a §7), marked ON THE LINE THAT EARNED IT rather than in
-      // `newRecords`. That card renders at the top of the page, which is right
-      // for `save()` — "Log session" is a whole-session act — but wrong here: a
-      // blur happens wherever the athlete is typing, and UAT found the
+      // Optimistic PR (5a §7), marked ON THE LINE THAT EARNED IT: a blur
+      // happens wherever the athlete is typing, and UAT found a page-top
       // celebration firing off-screen every time. The point of the optimistic
       // path is feedback in the moment, so it belongs beside the cell, in the
       // same slot as this line's other status labels.
-      //
       // Cleared when the line no longer wins anything, so correcting a set down
       // takes its badge with it — derive-on-read, exactly like `warn`.
       const earned =

@@ -21,6 +21,10 @@ class EventName(models.TextChoices):
     SESSION_OPENED = "session_opened", _("Session opened")
     SET_LOGGED = "set_logged", _("Set logged")
     SESSION_COMPLETED = "session_completed", _("Session completed")
+    # A pre-#578-stage-4 client (an installed PWA on the old page, or its
+    # replayed offline queue) posted `sets` to the finish endpoint, which no
+    # longer writes sets. `count` is how many it carried.
+    LEGACY_SETS_IGNORED = "legacy_sets_ignored", _("Legacy sets ignored")
 
     # Relationships.
     INVITE_SENT = "invite_sent", _("Invite sent")

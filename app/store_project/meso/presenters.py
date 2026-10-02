@@ -41,7 +41,6 @@ from . import parsing
 from . import tour
 from .billing import access as billing_access
 from .billing import agent_usage_report
-from .models import MAX_LOGGED_SET_NUMBER
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
@@ -295,7 +294,7 @@ def _profile_results(link):
 
     Reuses ``session_results`` (the coach results screen) so the profile's "Latest
     session" card shows the same completion %, RPE-vs-target, and overshoot flag.
-    Scoped to the athlete's own *done* logs — a pending "Save progress" draft isn't
+    Scoped to the athlete's own *done* logs — a pending draft (lines typed, session not finished) isn't
     a result — on this link's plans. Archived plans are excluded. ``None`` — the
     card is hidden — when the athlete has no openable logged session yet.
     """
@@ -1172,7 +1171,7 @@ def _coach_sub_lines_by_slot(session):
     One query for the whole session (``Session.line_cells()``, already used
     this way by ``serialize_session``) rather than one per prescription —
     batched, matching the lookup ``seed_meso_demo.py``'s
-    ``_logged_sets_from_cells`` uses for the analogous (but cross-session)
+    ``_typed_set_texts_from_cells`` uses for the analogous (but cross-session)
     case. A single session's cells all share one week, so grouping by slot id
     alone is enough here (no need for that helper's ``(slot, week)`` key).
 
@@ -1298,7 +1297,7 @@ def session_results(session):
     newest log by ``created_at`` (models.newest_session_logs, #579) — not the
     athlete-supplied workout ``date`` — so this agrees with the athlete's own
     page (``athlete_session``) about which log is current. A pending draft
-    (the athlete hit "Save progress" but hasn't finished) is not feedback
+    (the athlete has typed some lines but hasn't tapped "Finish session") is not feedback
     yet, so it — like an unlogged session — renders an honest awaiting state
     (targets only, 0% complete) rather than inventing numbers. ``session``
     arrives coach-scoped; its cells are read via ``session.cells()`` (P0
@@ -1341,12 +1340,7 @@ def session_results(session):
     # documents and defers to C2 — not fixed here: deciding which of two real
     # rows is the duplicate is the model question #578 defers, not a grouping
     # change to make quietly in a presenter.
-    sets_by_slot = defaultdict(list)
-    if log is not None:
-        for s in log.sets.all():
-            slot_id = s.anchor_slot_id
-            if slot_id is not None:
-                sets_by_slot[slot_id].append(s)
+    sets_by_slot = _sets_by_anchor_slot(log.sets.all() if log is not None else [])
 
     results = [
         _exercise_result(
@@ -1366,15 +1360,11 @@ def session_results(session):
     for row, p in zip(rows, prescriptions):
         row["pr"] = key_str(p.exercise_id, p.name) in pr_keys
 
-    # Completion = logged sets / prescribed sets. A free-form set cell ("AMRAP",
-    # "3-4") has no integer target, so fall back to what was logged for that row
-    # — it neither divides by zero nor skews the ratio with an empty denominator.
-    prescribed_total = 0
-    logged_total = 0
-    for p in prescriptions:
-        logged_n = len(sets_by_slot.get(p.exercise_slot_id, []))
-        prescribed_total += _prescribed_set_count(p) or logged_n
-        logged_total += logged_n
+    # Completion = logged sets / prescribed sets, from the same helper the
+    # athlete's header uses (see ``set_progress``).
+    progress = set_progress(prescriptions, sets_by_slot)
+    logged_total = progress["logged"]
+    prescribed_total = progress["prescribed"]
     completion = (
         min(round(100 * logged_total / prescribed_total), 100)
         if prescribed_total
@@ -1404,6 +1394,9 @@ def session_results(session):
             "session": _session_label(session),
             "logged": _logged_date(log),
             "completion": completion,
+            "logged_sets": logged_total,
+            "prescribed_sets": prescribed_total,
+            "progress_label": progress_label(logged_total, prescribed_total),
             "avg_rpe_delta": _avg_rpe_delta(
                 prescriptions, sets_by_slot, sub_lines_by_slot
             ),
@@ -1780,7 +1773,7 @@ def _week_chip_groups(plan_weeks, focus):
 
 
 def _prescribed_set_count(prescription):
-    """How many set rows a prescription's cell asks for, or 0.
+    """How many sets a prescription's cell asks for, or 0.
 
     Text-first (Phase 2a): the count comes from parsing the freeform cell —
     "3 x 12" is a plain count of 3, but "AMRAP" or a packed circuit parses to
@@ -1791,57 +1784,96 @@ def _prescribed_set_count(prescription):
     return max(sets, 0) if isinstance(sets, int) else 0
 
 
-def _set_rows(
-    prescription, logged, *, default=3, cap=12, hard_cap=MAX_LOGGED_SET_NUMBER
-):
-    """Pre-filled set-input rows for one prescription (Phase 2 logger).
+def set_progress(prescriptions, sets_by_slot):
+    """``{"logged", "prescribed"}`` set counts for one session's lineup.
 
-    ``logged`` maps ``(prescription_id, set_number)`` to the athlete's own
-    ``LoggedSet``. The row count is the prescribed sets (capped, or ``default``
-    when the cell is free-form), widened to show every set the athlete already
-    logged so a reload never hides logged data — but ``hard_cap`` bounds the
-    render unconditionally so a stray large ``set_number`` can never balloon the
-    page. #570: ``hard_cap`` defaults to the SAME ``MAX_LOGGED_SET_NUMBER`` the
-    log endpoint enforces (both the posted-set_number ceiling and the
-    collision-renumbering walk's cap) — a mismatch here is exactly what let a
-    row past 50 render as an ordinary fillable row the endpoint would then
-    reject outright.
+    THE one count the athlete's header ("N of M sets logged") and the coach's
+    results (completion %, the tile's "N of M sets logged") share, so the two
+    screens cannot disagree about how much of a session was done.
 
-    ``logged`` must already be scoped to ``source_line__isnull=True`` by the
-    caller (``athlete_session``) — a parse-at-commit ``LoggedSet`` derived from
-    a freeform sub-line (5a) renders itself as that sub-line's text, so
-    admitting it here too would double-display the same performed data as a
-    phantom structured input row (plan §6).
-
-    Each row also carries ``id`` — the ``LoggedSet.pk`` visible at this
-    (prescription, set_number), or ``None`` for a blank/unlogged row (#567,
-    row identity). This is how the client learns the id it should post back
-    for a row it's editing, instead of the server having to infer which row a
-    save means from ``(prescription, set_number)`` alone — evidence that goes
-    stale the moment a hidden row's own number moves out from under it.
+    ``prescriptions`` is ``session.trainable_cells()``; ``sets_by_slot`` groups
+    the log's sets by ``anchor_slot_id`` (sets with no anchor are left out of
+    it by the callers). A free-form set cell ("AMRAP", "3-4") has no integer
+    target, so its prescribed count falls back to what was logged for that
+    row — it neither divides by zero nor skews the ratio with an empty
+    denominator.
     """
-    prescribed = _prescribed_set_count(prescription) or default
-    logged_numbers = [n for (pid, n) in logged if pid == prescription.pk]
-    count = max(min(prescribed, cap), max(logged_numbers, default=0), 1)
-    count = min(count, hard_cap)
-    rows = []
-    for n in range(1, count + 1):
-        s = logged.get((prescription.pk, n))
-        rows.append(
-            {
-                "set_number": n,
-                "reps": s.reps if s else "",
-                "load": s.load if s else "",
-                "rpe": s.rpe if s else "",
-                "done": s is not None,
-                "id": s.pk if s else None,
-            }
+    prescribed = 0
+    logged = 0
+    for p in prescriptions:
+        n = len(sets_by_slot.get(p.exercise_slot_id, ()))
+        prescribed += _prescribed_set_count(p) or n
+        logged += n
+    return {"logged": logged, "prescribed": prescribed}
+
+
+def progress_label(logged, prescribed):
+    """The header's progress text, e.g. "3 of 4 sets logged".
+
+    The client's ``progressLabel`` getter (meso_athlete.js) builds the same
+    string for live updates; the two must stay identical so first paint and
+    the first keystroke never disagree.
+    """
+    if prescribed > 0:
+        return f"{logged} of {prescribed} {'set' if prescribed == 1 else 'sets'} logged"
+    return f"{logged} {'set' if logged == 1 else 'sets'} logged"
+
+
+def _sets_by_anchor_slot(sets):
+    """Group ``sets`` by ``anchor_slot_id`` (sets with no anchor are dropped)."""
+    grouped = defaultdict(list)
+    for s in sets:
+        slot_id = s.anchor_slot_id
+        if slot_id is not None:
+            grouped[slot_id].append(s)
+    return grouped
+
+
+def athlete_set_progress(session, athlete):
+    """``set_progress`` for the athlete's newest log of ``session`` (any status).
+
+    What both write endpoints report back so the header can resync with the
+    database after a save.
+    """
+    log = (
+        newest_session_logs(session, athlete)
+        .prefetch_related(
+            Prefetch("sets", queryset=LoggedSet.objects.select_related("prescription"))
         )
-    return rows
+        .first()
+    )
+    sets = log.sets.all() if log else []
+    return set_progress(session.trainable_cells(), _sets_by_anchor_slot(sets))
+
+
+def _logged_set_label(logged_set, plan_unit):
+    """A stored set as one read-only line, e.g. "Set 2 · 70 kg × 6 · RPE 7".
+
+    The load carries its unit (the set's own, else the plan's) only when it is
+    a plain number — "BW" or "bodyweight" stand alone.
+    """
+    load = logged_set.load
+    if load and _num(load) is not None:
+        load = f"{load} {logged_set.unit or plan_unit}"
+    reps = logged_set.reps
+    if load and reps:
+        core = f"{load} × {reps}"
+    elif load:
+        core = load
+    elif reps:
+        core = f"{reps} reps"
+    else:
+        core = ""
+    parts = [f"Set {logged_set.set_number}"]
+    if core:
+        parts.append(core)
+    if logged_set.rpe:
+        parts.append(f"RPE {logged_set.rpe}")
+    return " · ".join(parts)
 
 
 def _target_label(prescription, lines=()):
-    """The prescribed target shown above a logger's set rows.
+    """The prescribed target shown above the athlete's typed lines.
 
     The coach's freeform cell text, verbatim (Phase 2a) — what they typed IS
     the target, e.g. "4 x 6, RPE 9, 225" — with any non-blank sub-lines
@@ -1853,11 +1885,16 @@ def _target_label(prescription, lines=()):
 
 
 def athlete_session(session, athlete):
-    """One session as the athlete's interactive logger (Phase 2).
+    """One session as the athlete's logger page.
 
-    ``session`` is already athlete-scoped by the view; this formats
-    the prescribed grid into set-input rows, pre-filled from the athlete's own
-    most-recent ``SessionLog``, and reports its done status. Cells are read via
+    ``session`` is already athlete-scoped by the view; this formats the
+    prescribed lineup with each exercise's typed "what you did" lines (its
+    ``sub_lines``), reports the athlete's most-recent ``SessionLog`` status, and
+    counts the sets logged against the prescription (``progress`` — the same
+    ``set_progress`` helper the coach's results use). Sets the page cannot show
+    as a typed line of their own (structured-logger history, or a typed set
+    whose line a coach has since rewritten) come back per exercise as
+    ``logged_readonly``. Cells are read via
     ``session.trainable_cells()`` (P0 fixed-lineup cutover) — live AND
     non-skipped, so a skipped row is never presented to the athlete as
     loggable. (The docstring said ``session.cells()``; the code has used
@@ -1870,19 +1907,20 @@ def athlete_session(session, athlete):
     # log for a tied pair and disagree about what backs a line.
     log = (
         newest_session_logs(session, athlete)
-        .prefetch_related("sets__source_line", "sets__reclaimed_line")
+        .prefetch_related(
+            "sets__source_line", "sets__reclaimed_line", "sets__prescription"
+        )
         .first()
     )
-    # No double-display (5a, plan §6): a freeform sub-line's text already
-    # renders itself (``_sub_lines`` below), so a ``LoggedSet`` DERIVED from
-    # that same text must not ALSO render as a structured input row.
+    # A freeform sub-line renders itself (``_sub_lines`` below), so a
+    # ``LoggedSet`` DERIVED from that same text (5a, plan §6) must not ALSO be
+    # listed read-only: ``hidden_parsed_set_pks`` names the sets their own
+    # line currently shows, and everything else is history to list.
     #
-    # The test is literally whether the source line still SHOWS that text —
-    # see ``models.parsed_set_is_hidden``, the single predicate this and the
-    # logger's replace-delete both use so they cannot drift apart. Nothing is
-    # mutated to make a reclaimed set reappear, which is what ``history.py``
-    # requires ("undo must never touch ... athlete data") since a coach edit
-    # is undoable.
+    # The test is literally whether the source line still SHOWS that text — see
+    # ``models.parsed_set_is_hidden``. Nothing is mutated to make a reclaimed set
+    # reappear, which is what ``history.py`` requires ("undo must never touch
+    # ... athlete data") since a coach edit is undoable.
     #
     # #561: a coach undo restores a reclaimed line's text without touching
     # ``LoggedSet``, so the row it now shows can be a source-less copy
@@ -1892,15 +1930,6 @@ def athlete_session(session, athlete):
     # at every row that could be displayed by the same line, not one at a time.
     all_sets = list(log.sets.all()) if log else []
     hidden_pks = hidden_parsed_set_pks(all_sets)
-    logged = (
-        {
-            (s.prescription_id, s.set_number): s
-            for s in all_sets
-            if s.pk not in hidden_pks
-        }
-        if log
-        else {}
-    )
     done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
     prescriptions = list(session.trainable_cells())
@@ -1916,7 +1945,7 @@ def athlete_session(session, athlete):
     # suppression rule uses, so "displayed by its line" means one thing here.
     #
     # Keyed on ``display_line_id`` (#561), not the raw ``source_line_id``: a
-    # copy left behind by "Log session" answers to its line only through
+    # copy left behind by the retired structured logger answers to its line only through
     # ``reclaimed_line``, and a cell's ``backing_sets`` has to include it or a
     # line a coach undo restored gets tinted as unlogged despite the set the
     # copy carries.
@@ -2026,6 +2055,23 @@ def athlete_session(session, athlete):
     # The athlete's persisted, log-derived 1RM per lift (in this plan's unit) — the
     # %1RM logger seeds its suggested bar load from it (no manual estimate needed).
     one_rm_map = one_rm_values(athlete, prescriptions, week.mesocycle.plan.unit)
+    plan_unit = week.mesocycle.plan.unit
+    sets_by_slot = _sets_by_anchor_slot(all_sets)
+    progress = set_progress(prescriptions, sets_by_slot)
+    # Read-only history per exercise: this log's sets anchored to the slot that
+    # no sub-line of the athlete's shows. In practice structured-logger rows
+    # (``source_line`` NULL) and a typed set whose line a coach has since
+    # overwritten. Shown as plain text, never editable, never posted.
+    readonly_by_slot = defaultdict(list)
+    for s in sorted(all_sets, key=lambda row: (row.set_number, row.pk)):
+        if s.pk not in hidden_pks and s.anchor_slot_id is not None:
+            readonly_by_slot[s.anchor_slot_id].append(
+                {
+                    "id": s.pk,
+                    "set_number": s.set_number,
+                    "label": _logged_set_label(s, plan_unit),
+                }
+            )
     return {
         "id": session.pk,
         "n": session.day_number,
@@ -2038,7 +2084,9 @@ def athlete_session(session, athlete):
         "plan_title": week.mesocycle.plan.title,
         # The plan's load unit (kg/lb) — the %1RM logger turns a "75%" target into
         # a bar load in this unit (S2 Phase 2b).
-        "unit": week.mesocycle.plan.unit,
+        "unit": plan_unit,
+        "progress": progress,
+        "progress_label": progress_label(progress["logged"], progress["prescribed"]),
         "notes": log.notes if log else "",
         "log_url": reverse("meso:athlete_log_session", kwargs={"pk": session.pk}),
         # Where the logger persists a manually-entered 1RM (Phase 2) — server-side
@@ -2060,7 +2108,11 @@ def athlete_session(session, athlete):
                 # ("logged"/"manual"/""), so the logger seeds the input from a
                 # manual value but treats a logged one as a placeholder.
                 "one_rm_source": _one_rm_source(one_rm_map.get(p.pk)),
-                "set_rows": _set_rows(p, logged),
+                # How many "what you did" lines the client opens the stack with
+                # (it fills gaps 1..pad_lines by line number): the prescribed set
+                # count, 3 for a free-form cell, never more than 12.
+                "pad_lines": max(1, min(_prescribed_set_count(p) or 3, 12)),
+                "logged_readonly": readonly_by_slot.get(p.exercise_slot_id, []),
             }
             for p in prescriptions
         ],
@@ -2078,11 +2130,11 @@ def _one_rm_source(one_rm):
 
 
 def athlete_log_payload(session_ctx):
-    """The JSON the Alpine logger hydrates from (and POSTs back).
+    """The JSON the Alpine page hydrates from.
 
     A trimmed view of ``athlete_session``: just what the client needs to render
-    the set rows and submit them — the log URL, current status, and per-exercise
-    rows. Kept separate from the display dict so the template's ``json_script``
+    the typed-line stack and finish the session — the URLs, current status, the
+    set progress, and per-exercise lines. Kept separate from the display dict so the template's ``json_script``
     payload stays small and intentional.
     """
     return {
@@ -2096,6 +2148,7 @@ def athlete_log_payload(session_ctx):
         "status": session_ctx["status"],
         # The unit lets the %1RM helper render a suggested bar load (S2 Phase 2b).
         "unit": session_ctx["unit"],
+        "progress": session_ctx["progress"],
         "exercises": [
             {
                 "id": e["id"],
@@ -2115,7 +2168,8 @@ def athlete_log_payload(session_ctx):
                 # The editable tracking stack (Phase 4a) — the client hydrates a
                 # freeform sub-line input per entry, saved on blur.
                 "sub_lines": e.get("sub_lines", []),
-                "set_rows": e["set_rows"],
+                "pad_lines": e["pad_lines"],
+                "logged_readonly": e["logged_readonly"],
             }
             for e in session_ctx["exercises"]
         ],

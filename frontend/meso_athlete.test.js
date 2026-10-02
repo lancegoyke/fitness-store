@@ -2,9 +2,9 @@
 //
 // Focus: the logic that is fragile and effectively impossible to verify by hand
 // — the offline write queue (stash on network failure, dedupe per session,
-// replay on reconnect) and the save/flush state machine. The pure helpers
-// (rowFilled / buildPayload / syncFromLog) are covered too since the queue
-// payloads are built from them.
+// replay on reconnect), the typed-line save path, and the finish/flush state
+// machine. The athlete logs by typing lines; `finish()` only stamps the session
+// done, and the server's `progress` count rides back on every response.
 
 import {
   createLogger,
@@ -16,39 +16,21 @@ import {
 const LOG_URL = "/meso/api/me/session/42/log/";
 const ONE_RM_URL = "/meso/api/me/session/42/one-rm/";
 
-// A minimal logger with two exercises (one prescription each, two sets each).
-// Each row carries a server `id` (11/12/21), as init() would hydrate it from
-// an already-rendered log — the ordinary case, and the one where `buildPayload`
-// posts `id` rather than minting a `client_id` (#567). A test exercising a
-// brand-new, never-saved row clears a row's `id` back to `null` itself (see
-// the "#567" cases under `buildPayload` / `syncFromLog` below).
+// A minimal logger with two exercises.
 function makeLogger(overrides = {}) {
   const c = createLogger();
   c.logUrl = LOG_URL;
   c.csrf = "tok";
   c.status = "pending";
   c.exercises = [
-    {
-      id: 1,
-      set_rows: [
-        { id: 11, client_id: null, set_number: 1, reps: "", load: "", rpe: "", done: false },
-        { id: 12, client_id: null, set_number: 2, reps: "", load: "", rpe: "", done: false },
-      ],
-    },
-    {
-      id: 2,
-      set_rows: [
-        { id: 21, client_id: null, set_number: 1, reps: "", load: "", rpe: "", done: false },
-      ],
-    },
+    { id: 1, sub_lines: [] },
+    { id: 2, sub_lines: [] },
   ];
   return Object.assign(c, overrides);
 }
 
-// Build a fetch Response stub. `body` is returned from .json() — including
-// on the refusal-message path (#570 round 2: `readErrorMessage` reads
-// `res.json()`, never `.text()` — a plain-text or HTML body must FAIL that
-// call, not hand back raw text, which is what `jsonError` simulates below).
+// Build a fetch Response stub. `body` is returned from .json(); `jsonError`
+// makes .json() reject, like a real fetch on a non-JSON body.
 function res({ ok = true, status = 200, redirected = false, body = {}, jsonError = false } = {}) {
   return {
     ok,
@@ -61,384 +43,15 @@ function res({ ok = true, status = 200, redirected = false, body = {}, jsonError
   };
 }
 
+// The 200 body of the log endpoint (contract): the log, plus the session's count.
+function logBody(status = "done", progress = { logged: 3, prescribed: 4 }) {
+  return { ok: true, log: { id: 1, status, date: null, notes: "" }, progress };
+}
+
 beforeEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.useRealTimers();
-});
-
-describe("rowFilled", () => {
-  const c = createLogger();
-  it("is true when the row is checked", () => {
-    expect(c.rowFilled({ done: true })).toBe(true);
-  });
-  it("is true when any entry is present", () => {
-    expect(c.rowFilled({ done: false, reps: "5" })).toBe(true);
-    expect(c.rowFilled({ done: false, load: "100" })).toBe(true);
-    expect(c.rowFilled({ done: false, rpe: "8" })).toBe(true);
-  });
-  it("is false for an empty, unchecked row", () => {
-    expect(c.rowFilled({ done: false, reps: "", load: "", rpe: "" })).toBe(
-      false,
-    );
-  });
-});
-
-describe("buildPayload", () => {
-  it("collects only filled rows in the endpoint's shape", () => {
-    const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
-    c.exercises[0].set_rows[1].reps = "5";
-    // exercise 2's only row stays empty → excluded.
-    const payload = c.buildPayload(false);
-    expect(payload.sets).toEqual([
-      { prescription: 1, set_number: 1, reps: "", load: "", rpe: "", id: 11 },
-      { prescription: 1, set_number: 2, reps: "5", load: "", rpe: "", id: 12 },
-    ]);
-  });
-
-  it("stamps status 'done' only when markDone is set", () => {
-    const c = makeLogger({ status: "pending" });
-    expect(c.buildPayload(true).status).toBe("done");
-    // Save-progress on an already-logged session must not downgrade it.
-    const logged = makeLogger({ status: "done" });
-    expect(logged.buildPayload(false).status).toBe("done");
-  });
-
-  // Issue #567: `athlete_log_session` used to decide what a posted row MEANT
-  // by matching `(prescription, set_number, values)` — but a hidden parsed
-  // row isn't on screen, so the client's `set_number` is only evidence about
-  // a render that can be several saves stale. The fix is row identity: a row
-  // that already has a server id posts that id; a row that doesn't mints its
-  // own `client_id` — never both.
-  it("posts id for a row with a server id, and client_id (never both) for one without", () => {
-    const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true; // has a server id (11)
-    c.exercises[0].set_rows[1].id = null; // never saved yet
-    c.exercises[0].set_rows[1].reps = "5";
-    const payload = c.buildPayload(false);
-    const [saved, fresh] = payload.sets;
-    expect(saved.id).toBe(11);
-    expect(saved.client_id).toBeUndefined();
-    expect(fresh.id).toBeUndefined();
-    expect(typeof fresh.client_id).toBe("string");
-    expect(fresh.client_id.length).toBeGreaterThan(0);
-    expect(fresh.client_id.length).toBeLessThanOrEqual(64);
-  });
-
-  // The remembered client_id is the whole point: save() builds this payload
-  // TWICE (once before settleLines(), once after), and the offline outbox
-  // can replay a third copy later — the click-time `enqueue`, the actual
-  // `fetch`, and any replay all have to name the SAME not-yet-created row,
-  // or the server sees three different new rows instead of one retried
-  // write.
-  it("mints a client_id once and reuses it on the next buildPayload call", () => {
-    const c = makeLogger();
-    c.exercises[0].set_rows[1].id = null;
-    c.exercises[0].set_rows[1].reps = "5";
-    const first = c.buildPayload(false).sets[0];
-    const second = c.buildPayload(false).sets[0];
-    expect(first.client_id).toBeTruthy();
-    expect(second.client_id).toBe(first.client_id);
-  });
-});
-
-describe("syncFromLog", () => {
-  // #567/#568 P1-E/F: `syncFromLog` is now part of a two-argument contract —
-  // it reconciles the response against `payload`, the body THIS SAVE
-  // actually sent, not just against the response by itself. Every case below
-  // passes one, built either directly or via a real `buildPayload()` call.
-  it("reconciles row check state to exactly what the server persisted", () => {
-    const c = makeLogger();
-    c.exercises[0].set_rows[1].done = true; // will be cleared (not in log)
-    const payload = {
-      sets: [
-        { prescription: 1, set_number: 1 },
-        { prescription: 2, set_number: 1 },
-      ],
-    };
-    c.syncFromLog(
-      {
-        sets: [
-          { prescription: 1, set_number: 1 },
-          { prescription: 2, set_number: 1 },
-        ],
-      },
-      payload,
-    );
-    expect(c.exercises[0].set_rows[0].done).toBe(true);
-    expect(c.exercises[0].set_rows[1].done).toBe(false);
-    expect(c.exercises[1].set_rows[0].done).toBe(true);
-  });
-
-  // Issue #567: a row that posted a client_id is matched by that client_id
-  // FIRST — an ordinary round trip like this one never needs the slot
-  // fallback below (#567/#568 P1-C), since the current server always echoes
-  // it. Once matched, the row adopts the server's real id and drops the
-  // client_id: the next save posts `id`, not a client_id, for this row.
-  it("adopts the server id and clears client_id once a new row's client_id round-trips", () => {
-    const c = makeLogger();
-    c.exercises[0].set_rows[1].id = null; // never saved yet
-    c.exercises[0].set_rows[1].reps = "5";
-    const payload = c.buildPayload(false);
-    const clientId = payload.sets[0].client_id;
-    c.syncFromLog(
-      {
-        sets: [{ prescription: 1, set_number: 2, id: 999, client_id: clientId }],
-      },
-      payload,
-    );
-    const row = c.exercises[0].set_rows[1];
-    expect(row.id).toBe(999);
-    expect(row.client_id).toBeNull();
-    expect(row.done).toBe(true);
-  });
-
-  // The same round trip, driven through the real save() plumbing (stubbed
-  // fetch) rather than calling buildPayload/syncFromLog directly. save()
-  // itself threads the payload it actually sent through to syncFromLog.
-  it("round-trips a new row's client_id through a full save()", async () => {
-    const c = makeLogger();
-    c.exercises[0].set_rows[1].id = null;
-    c.exercises[0].set_rows[1].reps = "5";
-    let sentClientId;
-    global.fetch = vi.fn().mockImplementation(async (_url, opts) => {
-      const body = JSON.parse(opts.body);
-      sentClientId = body.sets[0].client_id;
-      return res({
-        body: {
-          log: {
-            status: "pending",
-            sets: [
-              { prescription: 1, set_number: 2, id: 555, client_id: sentClientId },
-            ],
-          },
-        },
-      });
-    });
-    await c.save(false);
-    const row = c.exercises[0].set_rows[1];
-    expect(sentClientId).toBeTruthy();
-    expect(row.id).toBe(555);
-    expect(row.client_id).toBeNull();
-    expect(row.done).toBe(true);
-  });
-
-  // A row the server ABSORBED — it restated a row hidden from the logger, so
-  // the response carries no set for it — comes back un-ticked but KEEPS its
-  // id. Clearing it would make the next save mint a fresh client_id and post
-  // it as a brand-new row, duplicating the performance (#567); keeping it
-  // lets the server absorb it again next time, which is stable. This row
-  // WAS posted (it's filled), so the "un-posted" rule below does not apply
-  // to it — the id survives because it was posted-but-absorbed, not because
-  // it was never sent.
-  it("keeps a row's id when the server doesn't return it (absorbed by a hidden twin)", () => {
-    const c = makeLogger();
-    const row = c.exercises[0].set_rows[0]; // has a server id (11)
-    row.reps = "5"; // filled by content, independent of `done`
-    row.done = true;
-    const payload = c.buildPayload(false);
-    c.syncFromLog({ sets: [] }, payload);
-    expect(row.done).toBe(false);
-    expect(row.id).toBe(11);
-    expect(row.client_id).toBeNull();
-    // The next save posts the SAME id — not a freshly minted client_id.
-    const next = c.buildPayload(false);
-    expect(next.sets[0]).toMatchObject({ id: 11 });
-    expect(next.sets[0].client_id).toBeUndefined();
-  });
-
-  // #567/#568 P1-C: a rolling deploy can answer a client_id POST with an OLD
-  // server build that doesn't know the field and so never echoes it back.
-  // Matching ONLY by client_id then left the row un-ticked forever —
-  // `rowFilled` drops an unticked, empty-looking row from the next save's
-  // payload, and that save deletes the very row the old server just created
-  // for it. The fix falls back to the slot the response DOES carry — but
-  // only because this row's own slot really was posted.
-  it("ticks a client_id row by slot and adopts its id when the response echoes no client_id", () => {
-    const c = makeLogger();
-    c.exercises[0].set_rows[1].id = null; // never saved yet
-    c.exercises[0].set_rows[1].reps = "5";
-    const payload = c.buildPayload(false);
-    const clientId = payload.sets[0].client_id;
-    expect(clientId).toBeTruthy(); // sanity: a client_id really was posted
-    c.syncFromLog(
-      {
-        // No `client_id` at all on the response item -- an old server's
-        // shape. reps/load/rpe echo exactly what this row posted (#567/#568
-        // P1-I's value check requires that of the slot leg too).
-        sets: [{ prescription: 1, set_number: 2, id: 999, reps: "5", load: "", rpe: "" }],
-      },
-      payload,
-    );
-    const row = c.exercises[0].set_rows[1];
-    expect(row.id).toBe(999);
-    expect(row.done).toBe(true);
-    expect(row.client_id).toBeNull();
-    // Stays in later payloads: the next save posts the adopted id.
-    expect(c.buildPayload(false).sets[0]).toMatchObject({ id: 999 });
-  });
-
-  // P3: a response item can legitimately omit `id` (nothing to report — see
-  // the server's `client_ids` comment in `athlete_log_session`). Assigning
-  // `match.id` unguarded set `r.id` to `undefined`, which `r.id != null`
-  // then read as "no id" — so the very next `buildPayload` minted a
-  // brand-new `client_id` for a row the server already knows.
-  it("does not adopt an undefined id from a response item that omits it", () => {
-    const c = makeLogger();
-    const row = c.exercises[0].set_rows[0]; // has a server id (11)
-    row.reps = "5";
-    const payload = c.buildPayload(false);
-    // No `id` on the response item, but reps/load/rpe echo exactly what was
-    // posted -- #567/#568 P1-I's value check is what lets the slot leg match
-    // here despite the missing id.
-    c.syncFromLog(
-      { sets: [{ prescription: 1, set_number: 1, reps: "5", load: "", rpe: "" }] },
-      payload,
-    );
-    expect(row.done).toBe(true);
-    expect(row.id).toBe(11); // unchanged, not clobbered to undefined
-  });
-
-  // #567/#568 P1-E/F, THE ROOT CAUSE three independent reviewers traced back
-  // here: the old slot fallback ran over EVERY grid row, including one this
-  // payload never posted at all — so a hidden parsed row a coach's rewrite
-  // just made visible (echoed in the response because it's visible now, at
-  // a slot this stale page's own empty grid row happens to share) got
-  // silently ticked, and its pk got planted onto that unposted grid row.
-  // The NEXT ordinary edit into that same-looking-empty row then posted the
-  // planted id and let the server delete a real, distinct performance the
-  // athlete never touched. A grid row this payload did not post must get NO
-  // match at all, full stop — not even from the slot table.
-  it("leaves an UNPOSTED grid row un-ticked, with id still null, when the response carries a set at its slot", () => {
-    const c = makeLogger();
-    c.exercises[0].set_rows[1].id = null; // never saved, and never posted below
-    c.exercises[0].set_rows[0].reps = "5"; // only row 0 (slot 1) is posted
-    const payload = c.buildPayload(false);
-    expect(payload.sets.map((s) => s.set_number)).toEqual([1]); // sanity: slot 2 unposted
-
-    // The response carries a set at slot 2 anyway -- e.g. a hidden parsed
-    // row a coach's rewrite just made visible, unrelated to this save.
-    c.syncFromLog(
-      {
-        sets: [
-          { prescription: 1, set_number: 1, id: 11 },
-          { prescription: 1, set_number: 2, id: 777 },
-        ],
-      },
-      payload,
-    );
-
-    const untouched = c.exercises[0].set_rows[1];
-    expect(untouched.done).toBe(false);
-    expect(untouched.id).toBeNull();
-    expect(untouched.client_id).toBeNull();
-
-    // The athlete now types their own, genuinely new set into that
-    // same-looking-empty row. It must mint its OWN client_id -- never post
-    // the planted `777`.
-    untouched.reps = "8";
-    untouched.load = "315";
-    const next = c.buildPayload(false);
-    const row2 = next.sets.find((s) => s.set_number === 2);
-    expect(row2.id).toBeUndefined();
-    expect(typeof row2.client_id).toBe("string");
-  });
-
-  // #567/#568 P1-I: the slot fallback's soundness argument assumed the only
-  // visible row left at a posted slot, after the save, is the one the server
-  // created FOR that exact posted set -- true when the set was CREATED,
-  // false when it was ABSORBED (see the rewritten comment above this method,
-  // and `athlete_log_session`'s twin-absorb comment in views.py). When it's
-  // absorbed, `posted` there is recomputed AFTER the absorb, so the
-  // collision renumbering never moves a spared VISIBLE row off that slot --
-  // and the response's item at that slot is then a DIFFERENT row than the
-  // one this grid row posted. Without a value check, the slot leg plants
-  // that foreign row's pk onto this grid row, and the next ordinary edit
-  // posts it, letting the server delete a performance the page never
-  // rendered.
-  it("does not adopt a response item at the posted slot when its values differ from what this row posted", () => {
-    const c = makeLogger();
-    const row = c.exercises[0].set_rows[0]; // has a server id (11)
-    row.reps = "5";
-    row.load = "225";
-    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
-
-    // The response carries a DIFFERENT row at this same slot -- a foreign
-    // survivor (Y in the views.py comment) this save never touched, with its
-    // own distinct id and values.
-    c.syncFromLog(
-      {
-        sets: [
-          { prescription: 1, set_number: 1, id: 999, reps: "8", load: "315", rpe: "" },
-        ],
-      },
-      payload,
-    );
-
-    expect(row.done).toBe(false);
-    expect(row.id).toBe(11); // unchanged -- the foreign pk must NOT be planted
-    expect(row.client_id).toBeNull();
-    // The next save still posts THIS row's own id, never the foreign one.
-    expect(c.buildPayload(false).sets[0]).toMatchObject({ id: 11 });
-  });
-
-  // The mirror of the case above: when the response item at the posted slot
-  // DOES carry what this row posted, it is adopted exactly as before -- the
-  // value check is a new REFUSAL condition, not a new requirement that
-  // breaks the ordinary echo.
-  it("adopts a response item at the posted slot when its values match what this row posted", () => {
-    const c = makeLogger();
-    const row = c.exercises[0].set_rows[0]; // has a server id (11)
-    row.reps = "5";
-    row.load = "225";
-    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
-
-    // A different id than the row's own (e.g. the row was replaced under a
-    // new pk server-side) but the SAME values this row posted -- still a
-    // legitimate match via the slot leg.
-    c.syncFromLog(
-      {
-        sets: [
-          { prescription: 1, set_number: 1, id: 555, reps: "5", load: "225", rpe: "" },
-        ],
-      },
-      payload,
-    );
-
-    expect(row.done).toBe(true);
-    expect(row.id).toBe(555);
-    expect(row.client_id).toBeNull();
-  });
-
-  // #567/#568 P1-I, the byId leg's own version of the same gap: an id match
-  // at a DIFFERENT set_number than this row posted, carrying different
-  // values -- e.g. a spared row the collision renumbering moved elsewhere.
-  // Without the value check this bound the grid row to a set it never
-  // restated (and, separately, to the wrong `set_number` -- see the comment
-  // above this method).
-  it("does not adopt a byId match whose values differ from what this row posted (a renumbered row)", () => {
-    const c = makeLogger();
-    const row = c.exercises[0].set_rows[0]; // has a server id (11)
-    row.reps = "5";
-    row.load = "225";
-    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
-
-    // The response's item for THIS row's own id sits at a different slot,
-    // with different values -- not the row this save actually restated.
-    c.syncFromLog(
-      {
-        sets: [
-          { prescription: 1, set_number: 2, id: 11, reps: "8", load: "315", rpe: "" },
-        ],
-      },
-      payload,
-    );
-
-    expect(row.done).toBe(false);
-    expect(row.id).toBe(11); // unchanged
-    expect(row.client_id).toBeNull();
-  });
 });
 
 describe("offline queue", () => {
@@ -456,8 +69,8 @@ describe("offline queue", () => {
 
   it("keeps at most one queued save per session (latest wins)", () => {
     const c = makeLogger();
-    c.enqueue({ status: "pending", sets: [1] });
-    c.enqueue({ status: "done", sets: [1, 2] });
+    c.enqueue({ status: "pending" });
+    c.enqueue({ status: "done" });
     const q = c.readQueue();
     expect(q).toHaveLength(1);
     expect(q[0].url).toBe(LOG_URL);
@@ -466,280 +79,295 @@ describe("offline queue", () => {
 
   it("does not clobber another session's queued save", () => {
     const c = makeLogger();
-    c.writeQueue([{ url: "/meso/api/me/session/99/log/", body: { sets: [] } }]);
-    c.enqueue({ status: "pending", sets: [] });
+    c.writeQueue([{ url: "/meso/api/me/session/99/log/", body: { status: "done" } }]);
+    c.enqueue({ status: "pending" });
     expect(c.readQueue()).toHaveLength(2);
   });
 });
 
-describe("save", () => {
+describe("progress (applyProgress / progressLabel)", () => {
+  it.each([
+    [{ logged: 0, prescribed: 4 }, "0 of 4 sets logged"],
+    [{ logged: 1, prescribed: 1 }, "1 of 1 set logged"],
+    [{ logged: 3, prescribed: 4 }, "3 of 4 sets logged"],
+    [{ logged: 0, prescribed: 0 }, "0 sets logged"],
+    [{ logged: 1, prescribed: 0 }, "1 set logged"],
+    [{ logged: 5, prescribed: 3 }, "5 of 3 sets logged"],
+  ])("formats %j as %s", (progress, label) => {
+    const c = makeLogger();
+    c.applyProgress(progress);
+    expect(c.progressLabel).toBe(label);
+  });
+
+  it("starts at 0 sets logged", () => {
+    expect(createLogger().progressLabel).toBe("0 sets logged");
+  });
+
+  it.each([
+    undefined,
+    null,
+    "3 of 4",
+    [],
+    {},
+    { logged: 1 },
+    { prescribed: 4 },
+    { logged: "1", prescribed: 4 },
+    { logged: 1.5, prescribed: 4 },
+    { logged: -1, prescribed: 4 },
+    { logged: 1, prescribed: -4 },
+    { logged: NaN, prescribed: 4 },
+  ])("ignores malformed progress %j", (bad) => {
+    const c = makeLogger();
+    c.applyProgress({ logged: 2, prescribed: 4 });
+    c.applyProgress(bad);
+    expect(c.progress).toEqual({ logged: 2, prescribed: 4 });
+  });
+
+  it("init() reads progress from the injected page data", () => {
+    const el = document.createElement("script");
+    el.id = "meso-log-data";
+    el.type = "application/json";
+    el.textContent = JSON.stringify({
+      log_url: LOG_URL,
+      status: "pending",
+      progress: { logged: 2, prescribed: 6 },
+      exercises: [],
+    });
+    document.body.appendChild(el);
+    try {
+      vi.spyOn(window, "addEventListener").mockImplementation(() => {});
+      global.fetch = vi.fn();
+      const c = createLogger();
+      c.init();
+      expect(c.progressLabel).toBe("2 of 6 sets logged");
+    } finally {
+      el.remove();
+    }
+  });
+});
+
+describe("finish", () => {
+  it("posts exactly {status:'done'} (no sets) after the lines settle", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger({ cellUrl: "/meso/api/me/session/42/cell/" });
+    c.exercises = [{ id: 1, sub_lines: [{ line: 1, text: "225 x 5", savedText: "" }] }];
+    const calls = [];
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, body: JSON.parse(opts.body) });
+      if (url === LOG_URL) return res({ body: logBody("done", { logged: 1, prescribed: 4 }) });
+      return res({ body: { cell: { warn: false } } });
+    });
+    const pending = c.saveCell(c.exercises[0], 1); // the blur the tap causes
+    const finishing = c.finish();
+    await pending;
+    await finishing;
+    const urls = calls.map((x) => x.url);
+    expect(urls.indexOf("/meso/api/me/session/42/cell/")).toBeLessThan(urls.indexOf(LOG_URL));
+    const log = calls.find((x) => x.url === LOG_URL);
+    expect(log.body).toEqual({ status: "done" });
+    expect(c.status).toBe("done");
+    expect(c.progressLabel).toBe("1 of 4 sets logged");
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
   it("queues the write (not an error) when the network is unreachable", async () => {
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
-    await c.save(true);
+    await c.finish();
     expect(c.queued).toBe(true);
     expect(c.error).toBe(false);
     expect(c.saving).toBe(false);
     expect(c.readQueue()).toHaveLength(1);
-    // #570 round 2 pin: storage TOOK the queued save, so the optimistic
-    // "done" set at the top of save() stands -- keepForLater returning true
-    // is exactly the case where nothing should be put back.
+    // Storage TOOK the queued write, so the optimistic "done" stands.
     expect(c.status).toBe("done");
+    expect(c.statusBeforeQueued).toBe("pending");
+    expect(c.readQueue()[0].body).toEqual({ status: "done" });
+  });
+
+  it("a later flush landing applies the response's status and progress", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.finish();
+    expect(c.progressLabel).toBe("0 sets logged");
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: logBody("done", { logged: 3, prescribed: 4 }) }),
+    );
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.queued).toBe(false);
+    expect(c.status).toBe("done");
+    expect(c.progressLabel).toBe("3 of 4 sets logged");
   });
 
   it("queues the write when the request is redirected to login", async () => {
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     global.fetch = vi.fn().mockResolvedValue(res({ redirected: true }));
-    await c.save(false);
+    await c.finish();
     expect(c.queued).toBe(true);
     expect(c.error).toBe(false);
     expect(c.readQueue()).toHaveLength(1);
-  });
-
-  it("keeps the optimistic 'done' status when storage accepts a login-redirect queue", async () => {
-    // Same pin as the network-unreachable case above, for the OTHER call
-    // site `keepForLater` guards (#570 round 2): a login redirect queues the
-    // write just as successfully, so there's nothing to put back either.
-    const c = makeLogger();
-    global.fetch = vi.fn().mockResolvedValue(res({ redirected: true }));
-    await c.save(true);
-    expect(c.queued).toBe(true);
+    // Same pin as the network case: storage took it, so nothing is put back.
     expect(c.status).toBe("done");
   });
 
-  it("surfaces an HTTP error the athlete should retry", async () => {
+  it("surfaces a non-retryable HTTP error and brings the button back", async () => {
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 500 }));
-    await c.save(false);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 404 }));
+    await c.finish();
     expect(c.error).toBe(true);
+    expect(c.status).toBe("pending");
     expect(c.queued).toBe(false);
     expect(c.readQueue()).toHaveLength(0);
   });
 
-  // #570: a refusal like `athlete_log_session`'s 400 ("Too many sets logged
-  // for Box Squat.") is deterministic — retrying the same payload can only
-  // fail again — so the message has to reach the athlete and the optimistic
-  // "done" set at the top of save() has to come back off (the database kept
-  // nothing).
-  it("surfaces a refusal's own message and takes the optimistic status back off", async () => {
+  // #570: a refusal is deterministic — retrying the same payload can only fail
+  // again — so the optimistic "done" has to come back off (nothing was kept).
+  it("takes the optimistic status back off when the server refuses", async () => {
     const c = makeLogger();
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue(
-      res({
-        ok: false,
-        status: 400,
-        body: { ok: false, error: "Too many sets logged for Box Squat." },
-      }),
+      res({ ok: false, status: 400, body: { ok: false, error: "nope" } }),
     );
-    await c.save(true);
+    await c.finish();
     expect(c.error).toBe(true);
-    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
-    expect(c.status).toBe("pending"); // back to what it was before this save
+    expect(c.status).toBe("pending"); // back to what it was before
     expect(c.readQueue()).toHaveLength(0);
   });
 
-  it("falls back to no message when a non-retryable body isn't JSON (an HTML error page)", async () => {
-    const c = makeLogger();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    // A proxy/load-balancer error page, or anything else that isn't JSON —
-    // `res.json()` itself rejects on this, exactly like a real fetch would.
-    global.fetch = vi.fn().mockResolvedValue(
-      res({ ok: false, status: 400, jsonError: true }),
-    );
-    await c.save(false);
-    expect(c.error).toBe(true);
-    // The template's static fallback text covers this, not a multi-KB
-    // document in the banner.
-    expect(c.errorMessage).toBe("");
-  });
+  // The Finish button hides once the status is "done", so a failure must leave
+  // either a queued retry or a visible button — never neither.
+  it.each([500, 503, 408, 429])(
+    "queues the write for a retryable %i and keeps the optimistic status",
+    async (status) => {
+      const c = makeLogger();
+      global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status }));
+      await c.finish();
+      expect(c.status).toBe("done");
+      expect(c.statusBeforeQueued).toBe("pending");
+      expect(c.error).toBe(false);
+      expect(c.queued).toBe(true);
+      expect(c.readQueue()).toHaveLength(1);
+      expect(c.readQueue()[0].body).toEqual({ status: "done" });
+    },
+  );
 
-  it("falls back to no message for a plain validation 400 with no error key", async () => {
-    // The endpoint's OTHER 400s (`_clean_logged_sets`'s "Duplicate id in
-    // sets.", "status must be 'pending' or 'done'.") are developer-facing
-    // and never carry this shape — modeled here as JSON with no `error`
-    // field at all, which is the one thing `readErrorMessage` actually
-    // checks for, rather than the bare-text body those 400s really send
-    // (any real body of theirs would already fail `res.json()`, covered by
-    // the HTML case above).
-    const c = makeLogger();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = vi.fn().mockResolvedValue(
-      res({ ok: false, status: 400, body: { ok: false } }),
-    );
-    await c.save(false);
-    expect(c.error).toBe(true);
-    expect(c.errorMessage).toBe("");
-  });
-
-  it("falls back to no message when error is present but not a string", async () => {
-    const c = makeLogger();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = vi.fn().mockResolvedValue(
-      res({ ok: false, status: 400, body: { ok: false, error: 12345 } }),
-    );
-    await c.save(false);
-    expect(c.error).toBe(true);
-    expect(c.errorMessage).toBe("");
-  });
-
-  it("truncates a long error message to 200 characters instead of dropping it", async () => {
-    // An exercise name can run up to 255 characters, and a clipped message
-    // still names the lift — worth keeping over showing nothing at all.
-    const c = makeLogger();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const long = "Too many sets logged for " + "X".repeat(220) + ".";
-    global.fetch = vi.fn().mockResolvedValue(
-      res({ ok: false, status: 400, body: { ok: false, error: long } }),
-    );
-    await c.save(false);
-    expect(c.errorMessage).toHaveLength(200);
-    expect(c.errorMessage).toBe(long.slice(0, 200));
-  });
-
-  it("leaves status and errorMessage alone for a retryable HTTP status (unlike a refusal)", async () => {
-    const c = makeLogger();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    // The body is never even read here: `isRetryableStatus(503)` is true, so
-    // `save()` skips `readErrorMessage` altogether -- a 503 body's shape
-    // (JSON, text, whatever a proxy sends) is simply not this path's concern.
-    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 503 }));
-    await c.save(true);
-    expect(c.error).toBe(true);
-    expect(c.errorMessage).toBe(""); // the write might yet land -- no message swap
-    expect(c.status).toBe("done"); // -- and no status revert either
-  });
-
-  it("leaves status and errorMessage alone when the network is unreachable", async () => {
-    const c = makeLogger();
-    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
-    await c.save(true);
-    expect(c.queued).toBe(true);
-    expect(c.error).toBe(false);
-    expect(c.errorMessage).toBe("");
-    expect(c.status).toBe("done"); // unchanged from #570 -- still queued, not refused
-  });
-
-  it("reflects the server's log on success", async () => {
+  it("a later flush delivers a finish that got a 503, applying status and progress", async () => {
     vi.useFakeTimers();
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 503 }));
+    await c.finish();
     global.fetch = vi.fn().mockResolvedValue(
-      res({
-        body: {
-          log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] },
-        },
-      }),
+      res({ body: logBody("done", { logged: 2, prescribed: 4 }) }),
     );
-    await c.save(true);
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.status).toBe("done");
+    expect(c.progressLabel).toBe("2 of 4 sets logged");
+  });
+
+  it("takes the status back off when a retryable status can't be queued (storage full)", async () => {
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 503 }));
+    await c.finish();
+    expect(c.status).toBe("pending"); // the button comes back
+    expect(c.error).toBe(true);
+  });
+
+  it("keeps 'done' without an error when a 200's body can't be read", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    global.fetch = vi.fn().mockResolvedValue(res({ jsonError: true }));
+    await c.finish();
+    expect(c.status).toBe("done");
+    expect(c.error).toBe(false);
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.saved).toBe(true);
+  });
+
+  it("reflects the server's log and progress on success", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: logBody("done", { logged: 4, prescribed: 4 }) }),
+    );
+    await c.finish();
     expect(c.status).toBe("done");
     expect(c.saved).toBe(true);
     expect(c.error).toBe(false);
-    // syncFromLog applied the server's truth.
-    expect(c.exercises[0].set_rows[0].done).toBe(true);
+    expect(c.statusBeforeQueued).toBe("");
+    expect(c.progressLabel).toBe("4 of 4 sets logged");
+  });
+
+  it("keeps the count when the response carries no (or bad) progress", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    c.applyProgress({ logged: 2, prescribed: 4 });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, log: { status: "done" } } }),
+    );
+    await c.finish();
+    expect(c.progressLabel).toBe("2 of 4 sets logged");
   });
 
   it("is a no-op while a save is already in flight", async () => {
     const c = makeLogger({ saving: true });
     global.fetch = vi.fn();
-    await c.save(true);
+    await c.finish();
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
 
-// Issue #451: logging the coach's own session can auto-advance the guided tour
-// server-side (`advance_self_step_if_complete("results")` in
-// `athlete_log_session`), but the log POST is a fetch (no reload), so the
-// mounted meso_tour.js driver can't see it. The "results" step advances on a
-// `done` log, so the nudge keys off the log status the *server returned*, not
-// the button pressed: a completed save fires the `meso:tour-refresh` document
-// event; a re-save of an already-done session (which persists `done` even via
-// "Save progress") fires too; a pending save, an offline queue, or an outright
-// failure stays silent (no spurious re-render / SR re-announcement).
-describe("save → tour refresh nudge (#451)", () => {
-  it("dispatches meso:tour-refresh after a completed log (save(true))", async () => {
+// Issue #451: finishing the coach's own session can auto-advance the guided tour
+// server-side, but the log POST is a fetch (no reload), so the mounted
+// meso_tour.js driver can't see it. The nudge keys off the log status the
+// *server returned*: a done log fires the `meso:tour-refresh` document event; a
+// pending reply, an offline queue, or an outright failure stays silent.
+describe("finish → tour refresh nudge (#451)", () => {
+  it("dispatches meso:tour-refresh after a completed log", async () => {
     vi.useFakeTimers();
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     const handler = vi.fn();
     document.addEventListener("meso:tour-refresh", handler);
-    global.fetch = vi.fn().mockResolvedValue(
-      res({
-        body: {
-          log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] },
-        },
-      }),
-    );
-    await c.save(true);
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    await c.finish();
     document.removeEventListener("meso:tour-refresh", handler);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("does not dispatch for a pending 'save progress' (save(false))", async () => {
+  it("does not dispatch when the server answers pending", async () => {
     vi.useFakeTimers();
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     const handler = vi.fn();
     document.addEventListener("meso:tour-refresh", handler);
-    global.fetch = vi.fn().mockResolvedValue(
-      res({
-        body: {
-          log: {
-            status: "pending",
-            sets: [{ prescription: 1, set_number: 1 }],
-          },
-        },
-      }),
-    );
-    await c.save(false);
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("pending") }));
+    await c.finish();
     document.removeEventListener("meso:tour-refresh", handler);
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("dispatches when a 'save progress' re-saves an already-done session", async () => {
-    // Codex #451: on an already-completed session, `buildPayload(false)`
-    // preserves `status: "done"`, so the server still persists a done log and
-    // can advance the "results" step — keying off `data.log.status` (not the
-    // button) keeps the card from going stale.
-    vi.useFakeTimers();
-    const c = makeLogger({ status: "done" });
-    c.exercises[0].set_rows[0].done = true;
-    const handler = vi.fn();
-    document.addEventListener("meso:tour-refresh", handler);
-    global.fetch = vi.fn().mockResolvedValue(
-      res({
-        body: {
-          log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] },
-        },
-      }),
-    );
-    await c.save(false);
-    document.removeEventListener("meso:tour-refresh", handler);
-    expect(handler).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not dispatch when the save fails (HTTP error)", async () => {
+  it("does not dispatch when the request fails (HTTP error)", async () => {
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     vi.spyOn(console, "error").mockImplementation(() => {});
     const handler = vi.fn();
     document.addEventListener("meso:tour-refresh", handler);
     global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 500 }));
-    await c.save(true);
+    await c.finish();
     document.removeEventListener("meso:tour-refresh", handler);
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("does not dispatch when the save is queued offline", async () => {
+  it("does not dispatch when the write is queued offline", async () => {
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     const handler = vi.fn();
     document.addEventListener("meso:tour-refresh", handler);
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
-    await c.save(true);
+    await c.finish();
     document.removeEventListener("meso:tour-refresh", handler);
     expect(handler).not.toHaveBeenCalled();
   });
@@ -749,24 +377,40 @@ describe("flushQueue", () => {
   it("replays a queued save and clears it on success", async () => {
     vi.useFakeTimers();
     const c = makeLogger();
-    c.enqueue({ status: "done", sets: [{ prescription: 1, set_number: 1 }] });
+    c.enqueue({ status: "done" });
     c.queued = true;
-    global.fetch = vi.fn().mockResolvedValue(
-      res({
-        body: {
-          log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] },
-        },
-      }),
-    );
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(0);
     expect(c.queued).toBe(false);
     expect(c.status).toBe("done");
   });
 
+  // A queue written by pre-deploy JS carries the old body, `sets` and all. It is
+  // replayed verbatim (the server ignores `sets` with a 200) and the reply's
+  // status and progress land as for any other.
+  it("replays a pre-deploy queued entry verbatim and applies the reply", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    const body = {
+      status: "done",
+      sets: [{ prescription: 1, set_number: 1, reps: "5", load: "225", rpe: "", id: 11 }],
+    };
+    c.writeQueue([{ url: LOG_URL, body }]);
+    c.queued = true;
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: logBody("done", { logged: 1, prescribed: 3 }) }),
+    );
+    await c.flushQueue();
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual(body);
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.status).toBe("done");
+    expect(c.progressLabel).toBe("1 of 3 sets logged");
+  });
+
   it("keeps the item queued when still offline", async () => {
     const c = makeLogger();
-    c.enqueue({ status: "pending", sets: [] });
+    c.enqueue({ status: "pending" });
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(1);
@@ -774,39 +418,31 @@ describe("flushQueue", () => {
 
   it("keeps the item queued when bounced to login (redirect)", async () => {
     const c = makeLogger();
-    c.enqueue({ status: "pending", sets: [] });
+    c.enqueue({ status: "pending" });
     global.fetch = vi.fn().mockResolvedValue(res({ redirected: true }));
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(1);
   });
 
-  // #570 round 3: `flushLog` had no retryable/refusal split — every non-ok
-  // answer returned "kept", so the 400 that refuses a save for good stayed in
-  // the outbox and was re-POSTed on every `online` event, forever, behind a
-  // footer promising it would sync. The refusal has to end the entry and say
-  // what went wrong, exactly as `flushCell` already did for a line.
-  it("drops this session's log on a refusal and surfaces its message", async () => {
+  // #570 round 3: a refusal won't change on retry, so it ends the entry rather
+  // than being re-POSTed on every `online` event behind a "will sync" footer.
+  it("drops this session's log on a refusal", async () => {
     const c = makeLogger();
-    c.enqueue({ status: "done", sets: [] });
+    c.enqueue({ status: "done" });
     c.queued = true;
     global.fetch = vi.fn().mockResolvedValue(
-      res({
-        ok: false,
-        status: 400,
-        body: { ok: false, error: "Too many sets logged for Box Squat." },
-      }),
+      res({ ok: false, status: 400, body: { ok: false, error: "nope" } }),
     );
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(0); // never retried again
     expect(c.error).toBe(true);
-    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
     expect(c.queued).toBe(false);
     expect(c.saved).toBe(false); // a refusal outranks the tick
   });
 
   it("keeps this session's log queued for a retryable status", async () => {
     const c = makeLogger();
-    c.enqueue({ status: "done", sets: [] });
+    c.enqueue({ status: "done" });
     c.queued = true;
     global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 503 }));
     await c.flushQueue();
@@ -814,61 +450,50 @@ describe("flushQueue", () => {
     expect(c.error).toBe(false);
   });
 
-  // #570 round-3 verification: the refusal split must not swallow the two
-  // statuses that mean "not postable as this account right now". `csrf` is
-  // captured once at page load, so a re-login elsewhere rotates the token and
-  // the next flush 403s — and a queued LOG is the only copy of an offline
-  // session (unlike a sub-line, its set rows are never restored into the grid
-  // on load). Dropping it there would destroy the workout.
+  // The refusal split must not swallow the two statuses that mean "not postable
+  // as this account right now": `csrf` is captured once at page load, so a
+  // re-login elsewhere rotates the token and the next flush 403s. A queued log
+  // is the only copy of a session finished offline.
   it.each([403, 409])("keeps this session's log queued on a %i", async (status) => {
     const c = makeLogger();
-    c.enqueue({ status: "done", sets: [] });
+    c.enqueue({ status: "done" });
     c.queued = true;
     global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status }));
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(1);
     expect(c.error).toBe(false);
-    expect(c.errorMessage).toBe("");
   });
 
   // ...and when the entry IS dropped for good, the optimistic badge goes with
-  // it: "Logged" with nothing on the server and nothing left to retry is the
-  // claim `save()`'s own revert exists to stop, just reached via the flush.
+  // it: "Logged" with nothing on the server and nothing left to retry.
   it("takes the optimistic status back off when a flushed log is refused", async () => {
     const c = makeLogger();
     c.status = "pending";
-    // The shape `save()` leaves behind when it queues offline.
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
-    await c.save(true);
+    await c.finish();
     expect(c.status).toBe("done"); // optimistic, and legitimately queued
     expect(c.statusBeforeQueued).toBe("pending");
 
     global.fetch = vi.fn().mockResolvedValue(
-      res({
-        ok: false,
-        status: 400,
-        body: { ok: false, error: "Too many sets logged for Box Squat." },
-      }),
+      res({ ok: false, status: 400, body: { ok: false, error: "nope" } }),
     );
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(0);
     expect(c.status).toBe("pending"); // the badge no longer claims Logged
-    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
   });
 
   it("keeps ANOTHER session's refused log queued, with nothing here to show it", async () => {
     const c = makeLogger();
     c.writeQueue([
-      c.stamp({ url: "/meso/api/me/session/99/log/", body: { status: "done", sets: [] } }),
+      c.stamp({ url: "/meso/api/me/session/99/log/", body: { status: "done" } }),
     ]);
     global.fetch = vi.fn().mockResolvedValue(
       res({ ok: false, status: 400, body: { ok: false, error: "nope" } }),
     );
     await c.flushQueue();
-    // Dropping it here would lose it silently: this page has no row for
-    // session 99 to report the refusal on. Its own page will refuse it again.
+    // Dropping it here would lose it silently: this page has nothing to report
+    // the refusal on. Its own page will refuse it again.
     expect(c.readQueue()).toHaveLength(1);
-    expect(c.errorMessage).toBe("");
   });
 
   it("does nothing when the queue is empty", async () => {
@@ -923,13 +548,13 @@ describe("loadForPercent", () => {
   });
 });
 
-describe("isPercentLift / suggestedLoad / setImpliedOneRm", () => {
+describe("isPercentLift / suggestedLoad", () => {
   function pctLogger() {
     const c = createLogger();
     c.unit = "kg";
     c.exercises = [
-      { id: 1, text: "3 x 5, 75%", e1rm: "120", set_rows: [] },
-      { id: 2, text: "3 x 10, 70", e1rm: "", set_rows: [] },
+      { id: 1, text: "3 x 5, 75%", e1rm: "120" },
+      { id: 2, text: "3 x 10, 70", e1rm: "" },
     ];
     return c;
   }
@@ -950,12 +575,6 @@ describe("isPercentLift / suggestedLoad / setImpliedOneRm", () => {
     expect(c.suggestedLoad(c.exercises[1])).toBe("");
     c.exercises[0].e1rm = "";
     expect(c.suggestedLoad(c.exercises[0])).toBe("");
-  });
-
-  it("shows the implied 1RM from a logged set", () => {
-    const c = pctLogger();
-    expect(c.setImpliedOneRm({ load: "100", reps: "1" })).toBe("100 kg");
-    expect(c.setImpliedOneRm({ load: "", reps: "" })).toBe("");
   });
 });
 
@@ -1017,7 +636,6 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
             text: "3 x 5, 75%",
             one_rm: "142.5",
             one_rm_source: "logged",
-            set_rows: [],
           },
         ],
       }) +
@@ -1044,7 +662,6 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
             text: "3 x 5, 75%",
             one_rm: "150",
             one_rm_source: "manual",
-            set_rows: [],
           },
         ],
       }) +
@@ -1202,7 +819,6 @@ describe("pre-Phase-2 override migration", () => {
             text: "3 x 5, 75%",
             one_rm: "",
             one_rm_source: "",
-            set_rows: [],
           },
         ],
       }) +
@@ -1241,7 +857,6 @@ describe("pre-Phase-2 override migration", () => {
             text: "3 x 5, 75%",
             one_rm: "200",
             one_rm_source: "manual",
-            set_rows: [],
           },
         ],
       }) +
@@ -1271,7 +886,7 @@ function cellLogger(overrides = {}) {
   c.cellUrl = CELL_URL;
   c.csrf = "tok";
   c.exercises = [
-    { id: 1, sub_lines: [{ line: 1, text: "RPE 8" }], set_rows: [] },
+    { id: 1, sub_lines: [{ line: 1, text: "RPE 8" }] },
   ];
   return Object.assign(c, overrides);
 }
@@ -1305,7 +920,7 @@ describe("saveCell", () => {
 
   it("posts a blank text (clear semantics)", async () => {
     const c = cellLogger({
-      exercises: [{ id: 1, sub_lines: [{ line: 2, text: "" }], set_rows: [] }],
+      exercises: [{ id: 1, sub_lines: [{ line: 2, text: "" }] }],
     });
     global.fetch = vi.fn().mockResolvedValue(
       res({ body: { ok: true, cell: { id: 9, line: 2, text: "" } } }),
@@ -1323,7 +938,7 @@ describe("saveCell", () => {
   it("sets the sub-line's warn flag from the response's cell.warn", async () => {
     const c = cellLogger({
       exercises: [
-        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }] },
       ],
     });
     global.fetch = vi.fn().mockResolvedValue(
@@ -1341,7 +956,6 @@ describe("saveCell", () => {
         {
           id: 1,
           sub_lines: [{ line: 1, text: "225 x 5", warn: true }],
-          set_rows: [],
         },
       ],
     });
@@ -1363,7 +977,7 @@ describe("saveCell", () => {
     // the first reply's warn and strands the tint on text that no longer exists.
     const c = cellLogger({
       exercises: [
-        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }] },
       ],
     });
     global.fetch = vi.fn().mockImplementation(async () => {
@@ -1388,7 +1002,7 @@ describe("saveCell", () => {
     // wins in the database while the UI shows the correction.
     const c = cellLogger({
       exercises: [
-        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }] },
       ],
     });
 
@@ -1420,12 +1034,11 @@ describe("saveCell", () => {
 
   // -- 5a §7: optimistic PR toast off a cell blur ----------------------------
 
-  // The page-top card belongs to `save()` — "Log session" is a whole-session
-  // act. A blur happens wherever the athlete is typing, so its celebration is
-  // marked on the line that earned it; UAT found the card firing off-screen
-  // every time.
+  // A blur happens wherever the athlete is typing, so its celebration is
+  // marked on the line that earned it; UAT found a page-top card firing
+  // off-screen every time.
 
-  it("marks the line that earned the record, not the page-top card", async () => {
+  it("marks the line that earned the record", async () => {
     const c = cellLogger();
     const pr = {
       key: "name:back squat",
@@ -1445,7 +1058,6 @@ describe("saveCell", () => {
     await c.saveCell(c.exercises[0], 1);
     const entry = c.exercises[0].sub_lines.find((l) => l.line === 1);
     expect(entry.pr).toBe("140 kg");
-    expect(c.newRecords).toEqual([]); // the card is `save()`'s, untouched here
   });
 
   it("clears the line's mark once it no longer wins anything", async () => {
@@ -1463,22 +1075,6 @@ describe("saveCell", () => {
     );
     await c.saveCell(c.exercises[0], 1);
     expect(entry.pr).toBe("");
-  });
-
-  it("leaves a card raised by Log session alone", async () => {
-    const existing = [{ key: "name:bench", name: "Bench", value: "100" }];
-    const c = cellLogger({ newRecords: existing });
-    global.fetch = vi.fn().mockResolvedValue(
-      res({
-        body: {
-          ok: true,
-          cell: { id: 5, line: 1, text: "RPE 8", warn: false },
-          new_records: [],
-        },
-      }),
-    );
-    await c.saveCell(c.exercises[0], 1);
-    expect(c.newRecords).toBe(existing); // untouched, not reset to []
   });
 
   // -- #571: the server now answers 503 (not 200) when it can't confirm a
@@ -1521,7 +1117,6 @@ describe("saveCell", () => {
               warn_reason: "elsewhere",
             },
           ],
-          set_rows: [],
         },
       ],
     });
@@ -1556,7 +1151,6 @@ describe("saveCell", () => {
                 warn_reason: reason,
               },
             ],
-            set_rows: [],
           },
         ],
       });
@@ -1577,7 +1171,7 @@ describe("saveCell", () => {
   it("copies the response's warn_reason onto the entry", async () => {
     const c = cellLogger({
       exercises: [
-        { id: 1, sub_lines: [{ line: 1, text: "225 x 5" }], set_rows: [] },
+        { id: 1, sub_lines: [{ line: 1, text: "225 x 5" }] },
       ],
     });
     global.fetch = vi.fn().mockResolvedValue(
@@ -1598,7 +1192,6 @@ describe("saveCell", () => {
         {
           id: 1,
           sub_lines: [{ line: 1, text: "225 x 5", warn_reason: "unlogged" }],
-          set_rows: [],
         },
       ],
     });
@@ -1613,7 +1206,7 @@ describe("saveCell", () => {
 describe("addLine", () => {
   it("appends an empty sub-line and stops at MAX_CELL_LINE", () => {
     const c = cellLogger({
-      exercises: [{ id: 1, sub_lines: [], set_rows: [] }],
+      exercises: [{ id: 1, sub_lines: [] }],
     });
     for (let i = 0; i < 25; i++) c.addLine(c.exercises[0]);
     const lines = c.exercises[0].sub_lines;
@@ -1627,7 +1220,7 @@ describe("addLine", () => {
     // Numbering by length+1 would fabricate a duplicate line 2; number off the
     // max existing line instead.
     const c = cellLogger({
-      exercises: [{ id: 1, sub_lines: [{ line: 2, text: "x" }], set_rows: [] }],
+      exercises: [{ id: 1, sub_lines: [{ line: 2, text: "x" }] }],
     });
     c.addLine(c.exercises[0]);
     const lines = c.exercises[0].sub_lines;
@@ -1639,7 +1232,7 @@ describe("addLine", () => {
     // A single line already at MAX_CELL_LINE — a length-based cap (1 < 20)
     // would wrongly allow another; cap off the max line value instead.
     const c = cellLogger({
-      exercises: [{ id: 1, sub_lines: [{ line: 20, text: "x" }], set_rows: [] }],
+      exercises: [{ id: 1, sub_lines: [{ line: 20, text: "x" }] }],
     });
     c.addLine(c.exercises[0]);
     expect(c.exercises[0].sub_lines.length).toBe(1); // no-op at the cap
@@ -1664,14 +1257,12 @@ describe("sub-line hydration", () => {
             one_rm: "",
             one_rm_source: "",
             sub_lines: [{ line: 1, text: "RPE 8" }],
-            set_rows: [],
           },
           {
             id: 8,
             text: "3 x 10",
             one_rm: "",
             one_rm_source: "",
-            set_rows: [],
           },
         ],
       }) +
@@ -1683,8 +1274,8 @@ describe("sub-line hydration", () => {
     // An exercise with nothing typed yet OPENS with a line per prescribed set
     // rather than an empty stack. Blank cells aren't persisted, so "no
     // sub-lines" is the normal state — and it rendered as a bare "+ add a line"
-    // button beneath three labelled set inputs, which made the freeform path
-    // invisible. (No set_rows here, so the floor of one applies.)
+    // button beneath three labelled set inputs (the retired Set rows), which made the freeform path
+    // invisible. (No pad_lines here, so the floor of one applies.)
     expect(c.exercises[1].sub_lines).toMatchObject([{ line: 1, text: "" }]);
   });
 
@@ -1701,7 +1292,7 @@ describe("sub-line hydration", () => {
             text: "3 x 10",
             one_rm: "",
             one_rm_source: "",
-            set_rows: [{ set_number: 1 }, { set_number: 2 }, { set_number: 3 }],
+            pad_lines: 3,
           },
         ],
       }) +
@@ -1713,6 +1304,34 @@ describe("sub-line hydration", () => {
       { line: 2, text: "" },
       { line: 3, text: "" },
     ]);
+  });
+
+  it.each([
+    [0, 1],
+    [-4, 1],
+    [1, 1],
+    [12, 12],
+    [20, 20],
+    [99, 20],
+    [undefined, 1],
+    ["3", 1],
+    [2.5, 1],
+  ])("clamps pad_lines %j to %i empty lines (1..20)", (padLines, count) => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [{ id: 7, text: "3 x 10", pad_lines: padLines }],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    const lines = c.exercises[0].sub_lines;
+    expect(lines).toHaveLength(count);
+    expect(lines.map((l) => l.line)).toEqual(Array.from({ length: count }, (_, i) => i + 1));
+    expect(lines.every((l) => l.text === "")).toBe(true);
   });
 
   it("fills gaps by number and keeps what the athlete typed", () => {
@@ -1728,7 +1347,7 @@ describe("sub-line hydration", () => {
             text: "3 x 10",
             one_rm: "",
             one_rm_source: "",
-            set_rows: [{ set_number: 1 }, { set_number: 2 }, { set_number: 3 }],
+            pad_lines: 3,
             // line 2 was cleared, so the server dropped it and kept line 3
             sub_lines: [{ line: 3, text: "100 x 5" }],
           },
@@ -1759,7 +1378,7 @@ describe("sub-line hydration", () => {
             text: "1 x 10",
             one_rm: "",
             one_rm_source: "",
-            set_rows: [{ set_number: 1 }],
+            pad_lines: 1,
             sub_lines: [
               { line: 1, text: "100 x 5" },
               { line: 2, text: "105 x 5" },
@@ -1786,7 +1405,6 @@ describe("sub-line hydration", () => {
             text: "3 x 10",
             one_rm: "",
             one_rm_source: "",
-            set_rows: [],
             sub_lines: [{ line: 1, text: "" }],
           },
         ],
@@ -1801,14 +1419,14 @@ describe("sub-line hydration", () => {
 // ---- offline queue — sub-line cells (issue #527) ---------------------------
 //
 // A line typed under "what you did" saves on blur (saveCell → _postCell), but
-// only `save()`'s whole-session payload was ever queued when the network was
+// only `finish()`'s whole-session payload was ever queued when the network was
 // down — a failed cell write showed "couldn't save" and nothing retried it,
 // so a set typed offline was lost while the page still said "Saved ✓". These
 // pin the contract the fix implements: a failed cell write gets its own
 // `kind: "cell"` entry in the SAME `meso-log-queue` (latest text per line
 // wins), `flushQueue` drains every cell before the log — one request at a
 // time, stopping at the first failure — `init()` folds an already-queued
-// cell back onto its line before flushing, and `save()` waits on the cell
+// cell back onto its line before flushing, and `finish()` waits on the cell
 // queue before it POSTs its own log.
 
 const OTHER_SESSION_CELL_URL = "/meso/api/me/session/99/cell/";
@@ -1817,7 +1435,7 @@ describe("saveCell — latest-wins queue keying (#527)", () => {
   it("keeps exactly one cell entry per line, holding the latest text", async () => {
     const c = cellLogger({
       exercises: [
-        { id: 1, sub_lines: [{ line: 1, text: "100 x 5" }], set_rows: [] },
+        { id: 1, sub_lines: [{ line: 1, text: "100 x 5" }] },
       ],
     });
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
@@ -1843,7 +1461,6 @@ describe("saveCell — latest-wins queue keying (#527)", () => {
             { line: 1, text: "100 x 5" },
             { line: 2, text: "RPE 8" },
           ],
-          set_rows: [],
         },
       ],
     });
@@ -1951,7 +1568,7 @@ describe("saveCell — outcomes that decide whether the write gets queued (#527)
 describe("flushQueue — cells drain before the log, one request at a time (#527)", () => {
   it("sends every kind:'cell' entry before the log, whatever order they were stored in", async () => {
     const c = cellLogger({ logUrl: LOG_URL });
-    // The log was queued FIRST (an earlier failed "Log session"); a cell
+    // The log was queued FIRST (an earlier failed "Finish session"); a cell
     // failed later — cells still go first once a flush actually runs.
     c.writeQueue([
       { url: LOG_URL, body: { status: "done", sets: [] } },
@@ -2029,7 +1646,7 @@ describe("flushQueue — cells drain before the log, one request at a time (#527
     const c = cellLogger({
       logUrl: LOG_URL,
       exercises: [
-        { id: 1, sub_lines: [{ line: 1, text: "bad", queued: true }], set_rows: [] },
+        { id: 1, sub_lines: [{ line: 1, text: "bad", queued: true }] },
       ],
     });
     c.writeQueue([
@@ -2038,7 +1655,7 @@ describe("flushQueue — cells drain before the log, one request at a time (#527
     ]);
     global.fetch = vi.fn().mockImplementation(async (url) => {
       if (url === CELL_URL) return res({ ok: false, status: 400 });
-      return res({ body: { log: { status: "done", sets: [] } } });
+      return res({ body: logBody("done") });
     });
     await c.flushQueue();
     const line = c.exercises[0].sub_lines[0];
@@ -2050,7 +1667,7 @@ describe("flushQueue — cells drain before the log, one request at a time (#527
   it("a synced cell reconciles the page's line: queued clears, savedText and warn apply", async () => {
     const c = cellLogger({
       exercises: [
-        { id: 1, sub_lines: [{ line: 1, text: "225 x", queued: true }], set_rows: [] },
+        { id: 1, sub_lines: [{ line: 1, text: "225 x", queued: true }] },
       ],
     });
     c.writeQueue([
@@ -2101,7 +1718,6 @@ describe("init — folds a queued cell onto its line, then flushes it (#527)", (
             one_rm: "",
             one_rm_source: "",
             sub_lines: [{ line: 1, text: "" }], // what the server last rendered
-            set_rows: [],
           },
         ],
       }) +
@@ -2145,7 +1761,6 @@ describe("init — folds a queued cell onto its line, then flushes it (#527)", (
             one_rm: "",
             one_rm_source: "",
             sub_lines: [{ line: 1, text: "" }],
-            set_rows: [],
           },
         ],
       }) +
@@ -2162,7 +1777,7 @@ describe("init — folds a queued cell onto its line, then flushes it (#527)", (
 });
 
 describe("dirty check — a blur that changed nothing posts nothing (#527)", () => {
-  function initLoggerWithHydratedLines(subLines, setRows) {
+  function initLoggerWithHydratedLines(subLines, padLines) {
     document.body.innerHTML =
       '<script id="meso-log-data" type="application/json">' +
       JSON.stringify({
@@ -2176,7 +1791,7 @@ describe("dirty check — a blur that changed nothing posts nothing (#527)", () 
             one_rm: "",
             one_rm_source: "",
             sub_lines: subLines,
-            set_rows: setRows,
+            pad_lines: padLines,
           },
         ],
       }) +
@@ -2191,7 +1806,7 @@ describe("dirty check — a blur that changed nothing posts nothing (#527)", () 
     // init() adds for the second prescribed set. Neither was typed into.
     const c = initLoggerWithHydratedLines(
       [{ line: 1, text: "RPE 8" }],
-      [{ set_number: 1 }, { set_number: 2 }],
+      2,
     );
     // Configured with a real response (not a bare `vi.fn()`) so that if the
     // dirty check is missing and a fetch fires anyway, the assertion below
@@ -2203,7 +1818,7 @@ describe("dirty check — a blur that changed nothing posts nothing (#527)", () 
   });
 
   it("makes no fetch re-saving the same text after a successful save", async () => {
-    const c = initLoggerWithHydratedLines([{ line: 1, text: "" }], []);
+    const c = initLoggerWithHydratedLines([{ line: 1, text: "" }], 1);
     global.fetch = vi.fn().mockResolvedValue(
       res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
     );
@@ -2217,7 +1832,7 @@ describe("dirty check — a blur that changed nothing posts nothing (#527)", () 
   });
 
   it("fetches when the text actually changed", async () => {
-    const c = initLoggerWithHydratedLines([{ line: 1, text: "RPE 8" }], []);
+    const c = initLoggerWithHydratedLines([{ line: 1, text: "RPE 8" }], 1);
     global.fetch = vi.fn().mockResolvedValue(
       res({ body: { ok: true, cell: { line: 1, text: "RPE 9", warn: false } } }),
     );
@@ -2230,7 +1845,7 @@ describe("dirty check — a blur that changed nothing posts nothing (#527)", () 
     // An earlier save is stuck offline (queued=true); the dirty check must
     // not skip it just because the text matches what the server last
     // confirmed — that confirmation is stale.
-    const c = initLoggerWithHydratedLines([{ line: 1, text: "100 x 5" }], []);
+    const c = initLoggerWithHydratedLines([{ line: 1, text: "100 x 5" }], 1);
     c.exercises[0].sub_lines[0].queued = true;
     global.fetch = vi.fn().mockResolvedValue(
       res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
@@ -2309,7 +1924,7 @@ describe("queue ownership — one athlete never flushes another's writes (#527)"
         cell_url: CELL_URL,
         owner: "athlete-a",
         status: "pending",
-        exercises: [{ id: 7, sub_lines: [], set_rows: [] }],
+        exercises: [{ id: 7, sub_lines: [] }],
       }) +
       "</script>";
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
@@ -2346,7 +1961,7 @@ describe("queue ownership — one athlete never flushes another's writes (#527)"
     const c = cellLogger({ owner: "athlete-a", logUrl: LOG_URL });
     c.writeQueue([{ url: LOG_URL, body: { status: "done", sets: [] } }]);
     global.fetch = vi.fn().mockResolvedValue(
-      res({ body: { log: { status: "done", sets: [] } } }),
+      res({ body: logBody("done") }),
     );
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(0);
@@ -2445,14 +2060,14 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
     c.exercises[0].sub_lines[0].text = "100 x 5";
-    // The line's blur got a 500 and waits in the queue; "Log session" landed
+    // The line's blur got a 500 and waits in the queue; "Finish session" landed
     // (its flush retried the line, which failed again).
     global.fetch = vi.fn().mockImplementation(async (url) => {
       if (url === CELL_URL) return res({ ok: false, status: 500 });
-      return res({ body: { log: { status: "done", sets: [] } } });
+      return res({ body: logBody("done") });
     });
     await c.saveCell(c.exercises[0], 1);
-    await c.save(true);
+    await c.finish();
     expect(c.queued).toBe(true);
 
     // The server recovers; the athlete blurs the line again.
@@ -2504,7 +2119,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(line.warn).toBe(true);
   });
 
-  it("waits for a line blurred while Log session is settling", async () => {
+  it("waits for a line blurred while Finish session is settling", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
     c.exercises[0].sub_lines.push({ line: 2, text: "110 x 5" });
@@ -2513,7 +2128,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     global.fetch = vi.fn().mockImplementation(async (url, opts) => {
       if (url !== CELL_URL) {
         calls.push("log");
-        return res({ body: { log: { status: "done", sets: [] } } });
+        return res({ body: logBody("done") });
       }
       const { line } = JSON.parse(opts.body);
       calls.push(line);
@@ -2522,10 +2137,10 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
       });
       return res({ body: { ok: true, cell: { warn: false } } });
     });
-    c.saveCell(c.exercises[0], 1); // in flight when Log session is pressed
-    const saving = c.save(true);
+    c.saveCell(c.exercises[0], 1); // in flight when Finish session is pressed
+    const saving = c.finish();
     await vi.waitFor(() => expect(calls).toEqual([1]));
-    c.saveCell(c.exercises[0], 2); // blurred while save() waits
+    c.saveCell(c.exercises[0], 2); // blurred while finish() waits
     await vi.waitFor(() => expect(calls).toEqual([1, 2]));
     release[1]();
     await vi.advanceTimersByTimeAsync(0);
@@ -2535,7 +2150,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(calls).toEqual([1, 2, "log"]);
   });
 
-  it("waits for a line blurred while Log session flushes the queue", async () => {
+  it("waits for a line blurred while Finish session flushes the queue", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
     c.exercises[0].sub_lines.push({ line: 2, text: "110 x 5" });
@@ -2546,7 +2161,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     global.fetch = vi.fn().mockImplementation(async (url, opts) => {
       if (url !== CELL_URL) {
         calls.push("log");
-        return res({ body: { log: { status: "done", sets: [] } } });
+        return res({ body: logBody("done") });
       }
       const { line } = JSON.parse(opts.body);
       calls.push(line);
@@ -2555,7 +2170,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
       });
       return res({ body: { ok: true, cell: { warn: false } } });
     });
-    const saving = c.save(true);
+    const saving = c.finish();
     await vi.waitFor(() => expect(calls).toEqual([1])); // the queued line
     c.saveCell(c.exercises[0], 2); // blurred mid-flush
     await vi.waitFor(() => expect(calls).toEqual([1, 2]));
@@ -2567,47 +2182,14 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(calls).toEqual([1, 2, "log"]);
   });
 
-  it("sends Set rows edited while it waited for the lines", async () => {
-    vi.useFakeTimers();
-    const c = cellLogger({ logUrl: LOG_URL });
-    // A real id (#567) — this test is about the outbox race, not identity,
-    // and a row with no id would mint a client_id and break the exact-shape
-    // assertion below.
-    c.exercises[0].set_rows = [
-      { id: 31, set_number: 1, reps: "", load: "", rpe: "", done: false },
-    ];
-    let logBody;
-    let land;
-    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
-      if (url !== CELL_URL) {
-        logBody = JSON.parse(opts.body);
-        return res({ body: { log: { status: "done", sets: [] } } });
-      }
-      await new Promise((r) => {
-        land = r;
-      });
-      return res({ body: { ok: true, cell: { warn: false } } });
-    });
-    c.saveCell(c.exercises[0], 1); // a line save that takes a while
-    const saving = c.save(true);
-    await vi.waitFor(() => expect(land).toBeTypeOf("function"));
-    c.exercises[0].set_rows[0].load = "100"; // typed during "Saving…"
-    c.exercises[0].set_rows[0].reps = "5";
-    land();
-    await saving;
-    expect(logBody.sets).toEqual([
-      { id: 31, prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
-    ]);
-  });
-
   it("takes 'Saved ✓' down when a line fails after it went up", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
     c.exercises[0].sub_lines[0].text = "100 x 5";
     global.fetch = vi.fn().mockResolvedValue(
-      res({ body: { log: { status: "done", sets: [] } } }),
+      res({ body: logBody("done") }),
     );
-    await c.save(true);
+    await c.finish();
     expect(c.saved).toBe(true);
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
     await c.saveCell(c.exercises[0], 1); // a blur that lands after the log
@@ -2704,18 +2286,17 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
 
   it("says the session couldn't save when storage refuses the queue", async () => {
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new DOMException("full", "QuotaExceededError");
     });
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
-    await c.save(true);
+    await c.finish();
     expect(c.queued).toBe(false);
     expect(c.error).toBe(true);
     // #570 round 2: storage refused the queue, so NOTHING holds this save --
     // not the server, not the outbox -- and the optimistic "done" set at the
-    // top of save() has to come back off, or the badge claims "Logged" over
+    // top of finish() has to come back off, or the badge claims "Logged" over
     // a write that landed nowhere at all.
     expect(c.status).toBe("pending");
   });
@@ -2731,7 +2312,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
       throw new DOMException("full", "QuotaExceededError");
     });
     global.fetch = vi.fn().mockResolvedValue(res({ redirected: true }));
-    await c.save(true);
+    await c.finish();
     expect(c.queued).toBe(false);
     expect(c.error).toBe(true);
     expect(c.status).toBe("pending");
@@ -2740,7 +2321,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
 
 describe("a write that never answers counts as offline (#527)", () => {
   // Gym wifi can connect and then never answer, and fetch has no timeout.
-  // "Log session" waits for the lines, so an unbounded one would hold it on
+  // "Finish session" waits for the lines, so an unbounded one would hold it on
   // "Saving…" forever with nothing queued.
   // A request that never answers; only aborting it ends it.
   function hangs(url, opts) {
@@ -2752,16 +2333,16 @@ describe("a write that never answers counts as offline (#527)", () => {
     });
   }
 
-  it("queues a stalled line and lets Log session finish", async () => {
+  it("queues a stalled line and lets Finish session finish", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
     c.exercises[0].sub_lines[0].text = "100 x 5";
     global.fetch = vi.fn().mockImplementation((url, opts) => {
       if (url === CELL_URL) return hangs(url, opts);
-      return Promise.resolve(res({ body: { log: { status: "done", sets: [] } } }));
+      return Promise.resolve(res({ body: logBody("done") }));
     });
     c.saveCell(c.exercises[0], 1); // the blur, still waiting on an answer
-    const saving = c.save(true);
+    const saving = c.finish();
     await vi.advanceTimersByTimeAsync(15000); // the blur gives up
     await vi.advanceTimersByTimeAsync(15000); // the flush's retry does too
     await saving;
@@ -2783,7 +2364,7 @@ describe("a write that never answers counts as offline (#527)", () => {
     expect(c.readQueue()).toHaveLength(1);
 
     global.fetch = vi.fn().mockResolvedValue(
-      res({ body: { log: { status: "done", sets: [] } } }),
+      res({ body: logBody("done") }),
     );
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(0);
@@ -2850,7 +2431,7 @@ describe("a replay, a stalled save, an unread response, a junk outbox (#527)", (
         cell_url: CELL_URL,
         status: "pending",
         exercises: [
-          { id: 7, sub_lines: [{ line: 1, text: "225 x 5" }], set_rows: [] },
+          { id: 7, sub_lines: [{ line: 1, text: "225 x 5" }] },
         ],
       }) +
       "</script>";
@@ -2925,51 +2506,33 @@ describe("a replay, a stalled save, an unread response, a junk outbox (#527)", (
   it("saves the session even when the outbox holds junk", async () => {
     vi.useFakeTimers();
     const c = makeLogger();
-    c.exercises[0].set_rows[0].done = true;
     localStorage.setItem(c.queueKey, JSON.stringify([null, 7, { url: "/x" }]));
-    global.fetch = vi.fn().mockResolvedValue(
-      res({ body: { log: { status: "done", sets: [] } } }),
-    );
-    await c.save(true);
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    await c.finish();
     expect(c.saving).toBe(false);
     expect(global.fetch).toHaveBeenCalledWith(LOG_URL, expect.anything());
   });
 
-  it("keeps rows ticked since an older queued log of the session", async () => {
+  it("supersedes an older queued log of the session instead of replaying it first", async () => {
     vi.useFakeTimers();
     const c = makeLogger();
-    // An earlier save of this session is still queued (sets: set 1 only).
+    // An earlier write of this session is still queued (pre-deploy shape).
     c.enqueue({
       status: "pending",
       sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
     });
-    c.exercises[0].set_rows[0].done = true;
-    c.exercises[0].set_rows[1].done = true; // ticked since
     const bodies = [];
     global.fetch = vi.fn().mockImplementation(async (url, opts) => {
       bodies.push(JSON.parse(opts.body));
-      return res({
-        body: {
-          log: {
-            status: "pending",
-            sets: bodies.at(-1).sets.map((s) => ({
-              prescription: s.prescription,
-              set_number: s.set_number,
-            })),
-          },
-        },
-      });
+      return res({ body: logBody("done") });
     });
-    await c.save(false);
-    // The older log is superseded, not replayed first (which un-ticked rows
-    // before save built its payload); what goes out carries both sets.
-    expect(bodies).toHaveLength(1);
-    expect(bodies[0].sets.map((s) => s.set_number)).toEqual([1, 2]);
+    await c.finish();
+    expect(bodies).toEqual([{ status: "done" }]);
     expect(c.readQueue()).toHaveLength(0);
   });
 });
 
-describe("a newer blur, an unknown outcome, a slow Log session (#527)", () => {
+describe("a newer blur, an unknown outcome, a slow Finish session (#527)", () => {
   function held() {
     const calls = [];
     const pending = [];
@@ -3026,30 +2589,27 @@ describe("a newer blur, an unknown outcome, a slow Log session (#527)", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the session's log in the outbox while Log session waits", async () => {
-    // Leaving the page during a slow "Saving…" must not lose the Set rows.
+  it("keeps the session's log in the outbox while Finish session waits", async () => {
+    // Leaving the page during a slow "Saving…" must not lose the finish.
     const c = cellLogger({ logUrl: LOG_URL });
-    c.exercises[0].set_rows = [
-      { set_number: 1, reps: "5", load: "100", rpe: "", done: true },
-    ];
     c.exercises[0].sub_lines[0].text = "RPE 8";
     const { calls, fetchMock, land } = held();
     global.fetch = fetchMock;
     c.saveCell(c.exercises[0], 1); // a line save that's slow to answer
-    const saving = c.save(true);
+    const saving = c.finish();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const log = c.readQueue().find((i) => i.url === LOG_URL);
-    expect(log.body.status).toBe("done");
-    expect(log.body.sets).toHaveLength(1);
+    expect(log.body).toEqual({ status: "done" });
     land({ ok: true, cell: { line: 1, text: "RPE 8", warn: false } });
     await vi.waitFor(() => expect(calls).toHaveLength(2));
-    land({ log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] } });
+    expect(calls[1].body).toEqual({ status: "done" });
+    land(logBody("done"));
     await saving;
     expect(c.readQueue()).toHaveLength(0);
   });
 });
 
-describe("Log session and an older log of the session (#527)", () => {
+describe("Finish session and an older log of the session (#527)", () => {
   // Each fetch waits until the test answers it by index.
   function controlled() {
     const calls = [];
@@ -3060,137 +2620,85 @@ describe("Log session and an older log of the session (#527)", () => {
         }),
     );
     const answer = (i, reply) => calls[i].resolve(reply);
-    const logReply = (body) =>
-      res({
-        body: {
-          log: {
-            status: body.status,
-            sets: body.sets.map((s) => ({
-              prescription: s.prescription,
-              set_number: s.set_number,
-            })),
-          },
-        },
-      });
+    const logReply = (body) => res({ body: logBody(body.status) });
     return { calls, fetchMock, answer, logReply };
   }
 
-  it("keeps rows ticked since, when an older log is already out as Log session starts", async () => {
+  it("sends its own log after an older log that is already out when it starts", async () => {
     vi.useFakeTimers();
     const c = makeLogger();
-    // An offline "Save progress" left set 1 queued; set 2 was ticked since.
+    // An older write was left queued (pre-deploy shape, `sets` and all).
     c.enqueue({
       status: "pending",
       sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
     });
-    c.exercises[0].set_rows[0].done = true;
-    c.exercises[0].set_rows[1].done = true;
     const { calls, fetchMock, answer, logReply } = controlled();
     global.fetch = fetchMock;
     const flushing = c.flushQueue(); // signal's back: the older log goes out
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    const saving = c.save(true); // tapped while it's in flight
+    const saving = c.finish(); // tapped while it's in flight
     answer(0, logReply(calls[0].body));
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     answer(1, logReply(calls[1].body));
     await saving;
     await flushing;
-    expect(calls[1].body.sets.map((s) => s.set_number)).toEqual([1, 2]);
-    expect(c.exercises[0].set_rows[1].done).toBe(true);
+    expect(calls[1].body).toEqual({ status: "done" });
+    expect(c.status).toBe("done");
   });
 
-  it("keeps rows ticked since, when an older log's reply body lands after the tap", async () => {
-    // Its headers arrived before Log session was tapped; its body after.
+  it("ignores an older log's reply body that lands after the tap", async () => {
+    // Its headers arrived before Finish session was tapped; its body after.
+    // Its "pending" must not take the badge off the finish in flight.
     vi.useFakeTimers();
-    const c = makeLogger({ status: "done" });
-    c.enqueue({
-      status: "pending",
-      sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
-    });
-    c.exercises[0].set_rows[0].done = true;
-    c.exercises[0].set_rows[1].done = true;
+    const c = makeLogger({ status: "pending" });
+    c.enqueue({ status: "pending" });
     let bodyLands;
     const bodies = [];
     global.fetch = vi.fn().mockImplementation(async (url, opts) => {
       const body = JSON.parse(opts.body);
       bodies.push(body);
-      const log = {
-        status: body.status,
-        sets: body.sets.map((s) => ({
-          prescription: s.prescription,
-          set_number: s.set_number,
-        })),
-      };
-      if (bodies.length > 1) return res({ body: { log } });
+      const reply = logBody(body.status, { logged: bodies.length, prescribed: 9 });
+      if (bodies.length > 1) return res({ body: reply });
       return {
         ok: true,
         status: 200,
         redirected: false,
         json: () =>
           new Promise((resolve) => {
-            bodyLands = () => resolve({ log });
+            bodyLands = () => resolve(reply);
           }),
       };
     });
     const flushing = c.flushQueue();
     await vi.waitFor(() => expect(bodyLands).toBeTypeOf("function"));
-    const saving = c.save(true);
+    const saving = c.finish();
+    expect(c.status).toBe("done");
     bodyLands();
     await saving;
     await flushing;
-    expect(bodies[1].sets.map((s) => s.set_number)).toEqual([1, 2]);
+    expect(bodies[1]).toEqual({ status: "done" });
     expect(c.status).toBe("done");
+    expect(c.progressLabel).toBe("2 of 9 sets logged"); // finish's own reply
   });
 
-  it("keeps what it's sending in the outbox, not the log as it was at the tap", async () => {
-    // The app closing mid-send must replay the newer log, not the older one.
-    const c = cellLogger({ logUrl: LOG_URL });
-    // A real id (#567) — this test is about the outbox race, not identity,
-    // and a row with no id would mint a client_id and break the exact-shape
-    // assertion below.
-    c.exercises[0].set_rows = [
-      { id: 41, set_number: 1, reps: "", load: "", rpe: "", done: false },
-    ];
-    c.exercises[0].sub_lines[0].text = "RPE 8";
-    const { calls, fetchMock, answer, logReply } = controlled();
-    global.fetch = fetchMock;
-    c.saveCell(c.exercises[0], 1); // a line save that's slow to answer
-    const saving = c.save(true);
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    c.exercises[0].set_rows[0].load = "100"; // typed during "Saving…"
-    c.exercises[0].set_rows[0].reps = "5";
-    answer(0, res({ body: { ok: true, cell: { line: 1, text: "RPE 8" } } }));
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
-    const log = c.readQueue().find((i) => i.url === LOG_URL);
-    expect(log.body.sets).toEqual([
-      { id: 41, prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
-    ]);
-    answer(1, logReply(calls[1].body));
-    await saving;
-    expect(c.readQueue()).toHaveLength(0);
-  });
-
-  it("doesn't replay a log that save() sent while a flush pass was busy", async () => {
+  it("doesn't replay a log that finish() sent while a flush pass was busy", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
-    c.exercises[0].set_rows = [
-      { set_number: 1, reps: "5", load: "100", rpe: "", done: true },
-    ];
     // A line whose earlier write got a 5xx waits in the outbox.
     c.enqueueCell({ exercise_id: 1, line: 1, text: "RPE 8" });
     c.exercises[0].sub_lines[0].queued = true;
     const { calls, fetchMock, answer, logReply } = controlled();
     global.fetch = fetchMock;
-    const saving = c.save(true);
+    const saving = c.finish();
     await vi.waitFor(() => expect(calls).toHaveLength(1)); // the line, again
     answer(0, res({ ok: false, status: 500 })); // still failing: kept
-    await vi.waitFor(() => expect(calls).toHaveLength(2)); // save's log
+    await vi.waitFor(() => expect(calls).toHaveLength(2)); // finish's log
     const flushing = c.flushQueue(); // an `online` event mid-POST
     await vi.waitFor(() => expect(calls).toHaveLength(3)); // the line
-    answer(1, logReply(calls[1].body)); // save's log lands
+    answer(1, logReply(calls[1].body)); // finish's log lands
     await saving;
     answer(2, res({ ok: false, status: 500 }));
-    // Either the pass ends, or it replays the log save() already sent.
+    // Either the pass ends, or it replays the log finish() already sent.
     await vi.waitFor(() =>
       expect(c._flushing === null || calls.length === 4).toBe(true),
     );
@@ -3226,7 +2734,6 @@ describe("footer line error clears once the line saves (#527)", () => {
             { line: 1, text: "100 x 5", saveError: true },
             { line: 2, text: "bad", saveError: true },
           ],
-          set_rows: [],
         },
       ],
     });
@@ -3239,64 +2746,52 @@ describe("footer line error clears once the line saves (#527)", () => {
   });
 });
 
-// #570 round 3: a refusal OUTRANKS a tick. Round 2 had `reportSaved` clear
-// the refusal where it was about to claim "Saved ✓", which states the wrong
-// thing more confidently: a refused save drops its own outbox entry, so
-// nothing is retrying it, and the flush that gets us here may have landed a
-// log queued by ANOTHER tab on this session (`flushedMine` means a log for
-// this URL landed, not that this page's did). So it never claims saved while
-// a refusal stands; `save()` clears both at the top of the next real attempt,
-// which is the moment the refusal stops being true.
+// #570 round 3: a refusal OUTRANKS a tick. A refused finish drops its own
+// outbox entry, so nothing is retrying it, and the flush that gets us here may
+// have landed a log queued by ANOTHER tab on this session (`flushedMine` means
+// a log for this URL landed, not that this page's did). So it never claims
+// saved while a refusal stands; `finish()` clears `error` at the top of the
+// next real attempt, which is the moment the refusal stops being true.
 describe("reportSaved and a standing refusal", () => {
-  it("does not claim saved while a refusal stands, and keeps its message", () => {
+  it("does not claim saved while a refusal stands", () => {
     const c = makeLogger();
     c.error = true;
-    c.errorMessage = "Too many sets logged for Box Squat.";
     c.reportSaved();
     expect(c.saved).toBe(false);
     expect(c.error).toBe(true);
-    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
   });
 
-  it("claims saved again once a fresh save() clears the refusal", async () => {
+  it("claims saved again once a fresh finish() clears the refusal", async () => {
     const c = makeLogger();
     c.error = true;
-    c.errorMessage = "Too many sets logged for Box Squat.";
-    global.fetch = vi.fn().mockResolvedValue(
-      res({ body: { log: { status: "done", sets: [] }, new_records: [] } }),
-    );
-    await c.save(true);
+    global.fetch = vi.fn().mockResolvedValue(res({ body: logBody("done") }));
+    await c.finish();
     expect(c.error).toBe(false);
-    expect(c.errorMessage).toBe("");
     expect(c.saved).toBe(true);
   });
 
   it("leaves a stale refusal in place while this page's log is still queued", () => {
     const c = makeLogger();
     c.error = true;
-    c.errorMessage = "Too many sets logged for Box Squat.";
-    c.enqueue({ status: "pending", sets: [] }); // this session's own log, still in the outbox
+    c.enqueue({ status: "pending" }); // this session's own log, still in the outbox
     c.reportSaved();
     expect(c.queued).toBe(true);
     expect(c.saved).toBe(false);
     expect(c.error).toBe(true);
-    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
   });
 
   it("leaves a stale refusal in place while a line is still refused", () => {
     const c = makeLogger();
     c.error = true;
-    c.errorMessage = "Too many sets logged for Box Squat.";
     c.exercises[0].sub_lines = [{ line: 1, text: "100 x 5", saveError: true }];
     c.reportSaved();
     expect(c.lineError).toBe(true);
     expect(c.saved).toBe(false);
     expect(c.error).toBe(true);
-    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
   });
 });
 
-describe("save() — waits on the cell queue before its own log POST (#527)", () => {
+describe("finish() — waits on the cell queue before its own log POST (#527)", () => {
   function loggerWithAQueuedLine() {
     const c = makeLogger();
     c.cellUrl = CELL_URL;
@@ -3322,32 +2817,32 @@ describe("save() — waits on the cell queue before its own log POST (#527)", ()
           body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } },
         });
       }
-      return res({ body: { log: { status: "pending", sets: [] } } });
+      return res({ body: logBody("pending") });
     });
-    await c.save(false);
+    await c.finish();
     expect(calls).toEqual([CELL_URL, LOG_URL]);
     expect(c.saved).toBe(true);
     expect(c.queued).toBe(false);
   });
 
-  it("offline: the flush's cell attempt and save's own log POST both fail, so it stays queued", async () => {
+  it("offline: the flush's cell attempt and finish's own log POST both fail, so it stays queued", async () => {
     const c = loggerWithAQueuedLine();
     global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
-    await c.save(false);
+    await c.finish();
     expect(c.queued).toBe(true);
     expect(c.saved).toBe(false);
   });
 
-  it("a stuck cell (500) beats a successful log — save() must not claim Saved", async () => {
+  it("a stuck cell (500) beats a successful log — finish() must not claim Saved", async () => {
     // This is the heart of #527: the log endpoint alone succeeding used to
-    // be enough for save() to say "Saved ✓" even though a line's own write
+    // be enough for finish() to say "Saved ✓" even though a line's own write
     // was still failing behind it.
     const c = loggerWithAQueuedLine();
     global.fetch = vi.fn().mockImplementation(async (url) => {
       if (url === CELL_URL) return res({ ok: false, status: 500 });
-      return res({ body: { log: { status: "pending", sets: [] } } });
+      return res({ body: logBody("pending") });
     });
-    await c.save(false);
+    await c.finish();
     expect(c.saved).toBe(false);
     expect(c.queued).toBe(true);
   });
@@ -3357,9 +2852,9 @@ describe("save() — waits on the cell queue before its own log POST (#527)", ()
     const c = loggerWithAQueuedLine();
     global.fetch = vi.fn().mockImplementation(async (url) => {
       if (url === CELL_URL) return res({ ok: false, status: 400 });
-      return res({ body: { log: { status: "done", sets: [] } } });
+      return res({ body: logBody("done") });
     });
-    await c.save(true);
+    await c.finish();
     expect(c.exercises[0].sub_lines[0].saveError).toBe(true);
     expect(c.saved).toBe(false);
     expect(c.queued).toBe(false);

@@ -2303,7 +2303,7 @@ class SessionLog(models.Model):
     notes = models.TextField(_("Notes"), blank=True)
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
     # 24h settle sweep (5b, settle.py). Bumped by both athlete write paths
-    # (a typed sub-line blur, "Save progress"/"Log session") on a REAL edit —
+    # (a typed sub-line blur, "Finish session") on a REAL edit —
     # never on an untouched re-blur — so the sweep can tell "still being
     # worked on" from "quietly abandoned". BOTH defaults matter: `db_default`
     # keeps an INSERT from OLD code (a rolling deploy's outgoing web
@@ -2574,8 +2574,9 @@ def _line_shows(line, logged_set):
 def display_line_id(logged_set):
     """The sub-line that could be displaying this row.
 
-    Its own ``source_line``, else the ``reclaimed_line`` a "Log session" left
-    behind (#541) — the two ways a row can be standing behind a line's text.
+    Its own ``source_line``, else the ``reclaimed_line`` the retired structured
+    logger left behind (#541; nothing writes it any more, existing values are
+    still read) — the two ways a row can be standing behind a line's text.
     """
     if logged_set.source_line_id is not None:
         return logged_set.source_line_id
@@ -2610,12 +2611,14 @@ def line_displays(line, rows):
 def parsed_set_is_hidden(logged_set, *, line_rows=None):
     """Is this set already on screen as its own sub-line's text (5a §6)?
 
-    Hidden means suppressed from every structured surface — ``athlete_session``'s
-    ``set_rows``, ``serialize_session_log``, and therefore also the structured
-    logger's replace-delete, which must never touch a row it cannot see.
+    Hidden means "already shown by its own line", so ``athlete_session`` leaves
+    it out of an exercise's read-only ``logged_readonly`` history. (Before the
+    structured Set-row logger was retired, #578 stage 4, the same predicate
+    also scoped that logger's replace-delete, which must never touch a row it
+    could not see.)
 
-    **Define the rule ONCE.** Visibility and that delete have to agree exactly,
-    and every time they were expressed separately they drifted: keying on
+    **Define the rule ONCE.** Visibility and any delete scoped by it have to
+    agree exactly, and every time they were expressed separately they drifted: keying on
     ``source_line`` alone hid a set whose text the coach had replaced (invisible
     yet still counting); scoping the delete to ``source_line__isnull=True``
     first WIPED reclaimed rows and then, once those became visible, let the
@@ -2683,7 +2686,8 @@ def hidden_parsed_set_pks(rows):
     The set-wise form of ``parsed_set_is_hidden``: it groups by the line that
     could display each row, so the one-row-per-line ranking is answered from
     memory instead of a query per row. Callers that hold a whole log's sets
-    (the presenter, the log serializer, the logger's replace-delete) use this.
+    (``presenters.athlete_session``'s ``logged_readonly``; the typed path's
+    backing-set reads) use this.
     """
     rows = list(rows)
     by_line = defaultdict(list)
@@ -2733,8 +2737,8 @@ def sub_line_warn_reason(
 
     ``backing_sets`` lets a caller pass rows it already has in memory; without
     it the row is looked up (also finding a copy through ``reclaimed_line``,
-    #561 — a line the coach put back can be backed by the copy "Log session"
-    left behind rather than by a row of its own). Reuses ``parsed_set_is_hidden``
+    #561 — a line the coach put back can be backed by the copy the retired
+    structured logger left behind rather than by a row of its own). Reuses ``parsed_set_is_hidden``
     via ``line_displays``, so "backed by its own line" means one thing across
     the slice: the line is backed when its text is showing a row, whether that
     row is its own parsed one or a reclaim's copy — otherwise a line a coach
@@ -2884,12 +2888,11 @@ def newest_session_log_ids(session_ids, athlete):
 # A generous ceiling on a set's number — no real session has this many sets.
 # #570: lives HERE, not in views.py, because three places must agree on one
 # number and ``presenters.py`` cannot import from ``views.py`` (views already
-# imports presenters — a cycle). ``views._clean_logged_sets`` rejects a posted
-# ``set_number`` above it, ``athlete_log_session``'s collision-renumbering walk
-# is bounded by it (a save is refused, see there, rather than climbing past
-# it), and ``presenters._set_rows``'s ``hard_cap`` renders exactly this many
-# rows — so the grid never shows a row the endpoint would reject. ``views.py``
-# re-exports this under its old name (``from .models import
+# imports presenters — a cycle). ``views._upsert_parsed_set``'s collision
+# renumbering (``views._first_free_set_number``) is bounded by it, so a typed
+# set never climbs past it. (The structured logger's ``_clean_logged_sets`` and
+# ``presenters._set_rows`` also used it; both were removed with that logger,
+# #578 stage 4.) ``views.py`` re-exports this under its old name (``from .models import
 # MAX_LOGGED_SET_NUMBER``) so existing callers and tests that spell it
 # ``views.MAX_LOGGED_SET_NUMBER`` keep working.
 MAX_LOGGED_SET_NUMBER = 50
@@ -2994,9 +2997,10 @@ class LoggedSet(models.Model):
     # Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §4). Points at the
     # athlete-authored sub-line cell (line >= 1) whose freeform text
     # ``parse_performed`` classified into this set. NULL = a structured-logger
-    # origin (``athlete_log_session``). Triple duty: discriminator (the
-    # structured logger's delete scopes around parsed rows), de-dup link
-    # (presenters suppress one display channel), and idempotency key
+    # origin (legacy history: the Set-row logger that wrote these was retired
+    # in #578 stage 4, so only existing rows remain). Triple duty:
+    # discriminator (the retired logger's delete scoped around parsed rows),
+    # de-dup link (presenters suppress one display channel), and idempotency key
     # (``(session_log, source_line)`` — a re-blur deletes-then-recreates rather
     # than appending). SET_NULL on a hard-deleted sub-line intentionally
     # orphans the set as structured-origin-like (it survives, ``prescription``
@@ -3009,14 +3013,16 @@ class LoggedSet(models.Model):
         related_name="parsed_sets",
         verbose_name=_("Source line"),
     )
-    # #541. Set only on a structured-logger row (``source_line`` NULL) that
-    # just replaced a reclaimed, visible parsed row — remembers which sub-line
-    # that row's own ``source_line`` was, so ``_upsert_parsed_set`` can find and
-    # re-link this row (rather than minting a twin) once the ordinary
-    # ``source_line=cell`` search comes up empty. ``athlete_log_session``
-    # carries it forward across further saves; cleared the moment a restore
-    # consumes it, or dropped for a repost that no longer restates the same
-    # values.
+    # retired in #578 stage 4; dropped in stage 4b
+    # Nothing writes this column any more; existing values are still read.
+    #
+    # #541. Was set only on a structured-logger row (``source_line`` NULL) that
+    # had just replaced a reclaimed, visible parsed row — remembers which
+    # sub-line that row's own ``source_line`` was, so ``_upsert_parsed_set`` can
+    # find and re-link this row (rather than minting a twin) once the ordinary
+    # ``source_line=cell`` search comes up empty. The retired
+    # ``athlete_log_session`` carried it forward across further saves; it is
+    # cleared the moment a restore consumes it.
     #
     # No DB-level FK (mirrors ``analytics.Event.actor``, #509): it's a hint for
     # that restore lookup only, and a real constraint would make a caller's
@@ -3081,16 +3087,13 @@ class LoggedSet(models.Model):
         plus no write, not an extra UPDATE.
 
         This does NOT cover ``bulk_create`` — Django never calls ``save()``
-        per row for a bulk insert, so the four ``bulk_create`` sites
-        (``views.athlete_log_session``, ``demo.py``'s sample-log seeder, and
-        ``seed_meso_demo.py``'s two sample-log seeders) still set
-        ``exercise_slot_id`` themselves. It DOES cover ``_upsert_parsed_set``'s
-        re-link of a reclaimed row (``existing.save(update_fields=["source_line",
-        "reclaimed_line"])``) and ``athlete_log_session``'s collision-renumbering
-        walk (``row.save(update_fields=["set_number"])``) — that walk is
-        bounded and rare (``MAX_LOGGED_SET_NUMBER``), so the one extra
-        lightweight query this adds there is an acceptable price for the
-        invariant holding everywhere, not just at creation. It also does NOT
+        per row for a bulk insert, so the three ``bulk_create`` sites
+        (``demo.py``'s sample-log seeder and ``seed_meso_demo.py``'s two
+        sample-log seeders) still set ``exercise_slot_id`` themselves. It DOES cover
+        ``_upsert_parsed_set``'s re-link of a reclaimed row
+        (``existing.save(update_fields=["source_line", "reclaimed_line"])``),
+        so the one extra lightweight query this adds there is an acceptable
+        price for the invariant holding everywhere, not just at creation. It also does NOT
         cover ``save(raw=True)`` — the path ``DeserializedObject.save()`` uses
         for ``loaddata`` — which calls ``Model.save_base(..., raw=True)``
         directly and never reaches this override at all. Latent only: the repo
