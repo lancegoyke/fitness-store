@@ -111,6 +111,76 @@ class TestApplyChange:
         presc.refresh_from_db()
         assert presc.text == "3 x 10, RPE 7, 92.5 kg"
 
+    def test_progress_keeps_the_coachs_notation_and_notes(self):
+        plan, _, presc = make_plan()
+        presc.text = "3x5 @ 225\nfelt heavy"
+        presc.save()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.PROGRESS,
+            prescription=presc,
+            payload={"load": "230"},
+        )
+        agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        assert presc.text == "3x5 @ 230\nfelt heavy"
+
+    def test_progress_on_a_cell_without_a_load_appends_in_its_own_style(self):
+        plan, _, presc = make_plan()
+        presc.text = "Up to 3x5 @ RPE 8, stop at 90%\nUse 3-1-1 tempo"
+        presc.save()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.PROGRESS,
+            prescription=presc,
+            payload={"load": "230"},
+        )
+        agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        assert presc.text == "Up to 3x5 @ RPE 8, stop at 90%, 230\nUse 3-1-1 tempo"
+
+    def test_progress_swaps_a_thousands_separated_load_whole(self):
+        plan, _, presc = make_plan()
+        presc.text = "3x5 @ 1,000 lbs, RPE 8"
+        presc.save()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.PROGRESS,
+            prescription=presc,
+            payload={"load": "1050"},
+        )
+        agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        assert presc.text == "3x5 @ 1050lbs, RPE 8"
+
+    def test_progress_swaps_a_load_after_a_spaceless_comma(self):
+        plan, _, presc = make_plan()
+        presc.text = "Up to 3x5 @ RPE 8,102.5 kg, stop at 90%\nnote"
+        presc.save()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.PROGRESS,
+            prescription=presc,
+            payload={"load": "107.5"},
+        )
+        agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        assert presc.text == "Up to 3x5 @ RPE 8,107.5kg, stop at 90%\nnote"
+
+    def test_progress_writes_the_first_line_stripped_like_the_card(self):
+        plan, _, presc = make_plan()
+        presc.text = "  3x5 @ 225  \nfelt heavy"
+        presc.save()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.PROGRESS,
+            prescription=presc,
+            payload={"load": "230"},
+        )
+        agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        assert presc.text == "3x5 @ 230\nfelt heavy"
+
     def test_volume_rewrites_the_cells_set_count(self):
         plan, _, presc = make_plan()  # default cell "3 x 10, RPE 7, 60"
         change = ProposedChangeFactory(

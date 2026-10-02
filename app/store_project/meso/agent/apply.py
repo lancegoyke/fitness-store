@@ -23,6 +23,8 @@ that lacks what it needs to apply (e.g. a swap with no target) is a safe no-op
 and is reported as skipped, never an error.
 """
 
+import re
+
 from django.db import transaction
 
 from ..models import AgentProposalBatch
@@ -61,21 +63,71 @@ def _parsed_bits(cell):
     }
 
 
+_SETS_HEAD = re.compile(r"^(\s*(?:up\s+to\s+)?)\d+(?=\s*[x×])", re.IGNORECASE)
+_LOAD_SEGMENT = re.compile(
+    r"^(\s*)(\d+(?:,\d{3})*(?:\.\d+)?)\s*(%|lbs?|kgs?|kilos?)?(\s*)$"
+)
+# A comma is a segment break unless it is a thousands separator (``1,000 lbs``).
+_SEGMENT_SPLIT = re.compile(r"(,(?!\d{3}(?![\d]|\.\d))|@)")
+
+
+def _swap_in_place(first_line, component, value):
+    """``first_line`` with one component's token replaced, spelling untouched.
+
+    ``3x5 @ 225`` + load ``230`` → ``3x5 @ 230`` (not ``3 x 5, 230``): only the
+    sets count or the load number changes, so separators, spacing and the
+    coach's ``x``/``@`` choice survive. ``None`` when the token can't be found
+    (a cell with no load yet) — the caller falls back to canonical composition.
+    """
+    pieces = _SEGMENT_SPLIT.split(first_line)
+    for i in range(0, len(pieces), 2):
+        segment = pieces[i]
+        if component == "sets":
+            head = _SETS_HEAD.match(segment)
+            if head:
+                pieces[i] = f"{head.group(1)}{value}{segment[head.end() :]}"
+                return "".join(pieces)
+        else:
+            load = _LOAD_SEGMENT.match(segment)
+            if load and not _SETS_HEAD.match(segment):
+                lead, _, unit, trail = load.groups()
+                # A bare new number inherits the cell's own unit/percent suffix.
+                bare = re.fullmatch(r"\d+(?:\.\d+)?", str(value))
+                suffix = unit if (unit and bare) else ""
+                pieces[i] = f"{lead}{value}{suffix}{trail}"
+                return "".join(pieces)
+    return None
+
+
 def recomposed_text(cell, component, value):
     """``cell``'s text with one component (``sets``/``load``) replaced, or ``None``.
 
     The pure half of ``_rewrite_cell`` — also what the review card shows as the
     "after" of a progress/volume proposal, so the card and the apply can never
-    disagree about the value. ``None`` for a cell whose non-empty text yields no
-    structure (never overwrite notation the parser can't read).
+    disagree. The coach's own notation wins (#608 605.9c): the token is swapped
+    inside the cell's first line, later lines (notes) are kept, and only a cell
+    with no such token yet (no load to replace) is composed canonically.
+    ``None`` for a cell whose non-empty text yields no structure (never
+    overwrite notation the parser can't read).
     """
     if not value:
         return None
     bits = _parsed_bits(cell)
     if bits is None:
         return None
+    lines = cell.text.split("\n")
+    swapped = _swap_in_place(lines[0], component, str(value))
+    if swapped is not None:
+        swapped = swapped.strip()  # the card shows the line stripped; so does the cell
+    if swapped is None and component == "load" and not bits["load"]:
+        # No load yet: append one in the line's own style, keeping every
+        # qualifier on the line and every note line below it.
+        joiner = ", " if ("," in lines[0] or "@" in lines[0]) else " @ "
+        swapped = f"{lines[0].rstrip()}{joiner}{value}"
+    if swapped is not None:
+        return "\n".join([swapped, *lines[1:]])
     bits[component] = str(value)
-    return compose_prescription_text(**bits)
+    return "\n".join([compose_prescription_text(**bits), *lines[1:]])
 
 
 def _rewrite_cell(change, component, value):
@@ -114,11 +166,10 @@ def _apply_volume(change):
     cells = list(change.session.cells())
     rewritten = 0
     for cell in cells:
-        bits = _parsed_bits(cell)
-        if bits is None:
+        text = recomposed_text(cell, "sets", sets)
+        if text is None:
             continue
-        bits["sets"] = str(sets)
-        cell.text = compose_prescription_text(**bits)
+        cell.text = text
         cell.save(update_fields=["text"])
         rewritten += 1
     if not rewritten:

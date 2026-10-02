@@ -584,6 +584,11 @@ class TestPercentAwarePrompt:
         assert "%" in client.SYSTEM_PROMPT
         assert "1RM" in client.SYSTEM_PROMPT
 
+    def test_system_prompt_tells_the_model_to_keep_the_coachs_notation(self):
+        # 605.9c: the proposal is written in the coach's spelling.
+        assert "3x5 @ 230" in client.SYSTEM_PROMPT
+        assert "never '3 x 5, 230'" in client.SYSTEM_PROMPT
+
     def test_new_load_tool_field_mentions_percent(self):
         props = client.PROPOSE_TOOL["input_schema"]["properties"]
         new_load = props["changes"]["items"]["properties"]["new_load"]
