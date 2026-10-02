@@ -158,10 +158,7 @@ def _assert_aligned(page, where):
                 f"{where}: Exercise column of day {i + 1} at {left}, "
                 f"scroller at {g['scrollerLeft']} (sticky lost)"
             )
-        # `slack=1`: at max scroll the 100cqw-wide header is clamped by the card's
-        # CONTENT box (inside its 1px border), so it ends up 1px left of the
-        # scroller edge. Known 1px cosmetic nit, reported in the PR notes.
-        assert _at_scroller_edge(d["headerLeft"], g, slack=1), (
+        assert _at_scroller_edge(d["headerLeft"], g), (
             f"{where}: day {i + 1} title row at {d['headerLeft']}, "
             f"scroller at {g['scrollerLeft']} (sticky lost)"
         )
@@ -221,17 +218,13 @@ def _focused(page):
 def _assert_focus_visible(page, where):
     f = _focused(page)
     assert f["testid"], f"{where}: focus is not on a testid'd element: {f}"
-    # Playwright's WebKit does not honour scroll-padding when focus scrolls a
-    # cell into view, in either direction (a Wk cell can sit under the Exercise
-    # column after Shift+Tab, or past the right edge after Tab). Chromium, the
-    # engine we ship against, is held to the strict bounds; WebKit only has to
-    # keep the focused cell inside the scroller box.
-    chromium = _ENGINE["name"] == "chromium"
-    left_floor = f["scrollerLeft"] + (EXERCISE_COL - 1 if chromium else 0)
+    # Chromium honours scroll-padding on focus-scroll; WebKit doesn't, so
+    # MesoTable nudges the scroller itself — the same strict bounds hold in both.
+    left_floor = f["scrollerLeft"] + EXERCISE_COL - 1
     assert f["left"] >= left_floor, (
         f"{where}: {f['testid']} hidden under the sticky Exercise column: {f}"
     )
-    right_slack = 1 if chromium else 250
+    right_slack = 1
     assert f["right"] <= f["scrollerRight"] + right_slack, (
         f"{where}: {f['testid']} sticks out of the right edge: {f}"
     )

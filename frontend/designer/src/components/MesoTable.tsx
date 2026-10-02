@@ -1300,6 +1300,24 @@ function TableDayBlock({
   );
 }
 
+// Keyboard focus into a week column must not land under the sticky Exercise
+// column (or past the right edge). `scroll-padding-left` does this where it's
+// honoured (Chromium); WebKit's focus-scroll ignores it, so nudge the shared
+// scroller ourselves. Cells inside the sticky column itself are left alone.
+function keepFocusClearOfStickyColumn(event: FocusEvent<HTMLElement>) {
+  const target = event.target as HTMLElement;
+  // Anything pinned to the scroller's left (the Exercise column, a day's title row
+  // and add bar) is always visible: scrolling for it would throw the table back.
+  if (target.closest(".meso-table-row-name-col, .meso-table-exercise-col, .meso-table-day-header, .meso-table-add-row-group")) return;
+  const scroller = event.currentTarget;
+  const view = scroller.getBoundingClientRect();
+  const box = target.getBoundingClientRect();
+  const hiddenLeft = view.left + COL_WIDTHS.exercise - box.left;
+  const hiddenRight = box.right - view.right;
+  if (hiddenLeft > 0) scroller.scrollLeft -= hiddenLeft;
+  else if (hiddenRight > 0) scroller.scrollLeft += hiddenRight;
+}
+
 export function MesoTable(props: MesoTableProps) {
   const {
     grid,
@@ -1444,7 +1462,7 @@ export function MesoTable(props: MesoTableProps) {
             keep in sync (no scroll-event feedback loops, one scrollbar, native
             focus/keyboard scroll-into-view), and the sticky Exercise column and
             the dnd-kit overlay (no live transform) need no change. */}
-        <div className="meso-table-scroll" style={{ scrollPaddingLeft: COL_WIDTHS.exercise }}>
+        <div className="meso-table-scroll" style={{ scrollPaddingLeft: COL_WIDTHS.exercise }} onFocus={keepFocusClearOfStickyColumn}>
           <div className="meso-table-days" style={{ width: tableWidthFor(grid.weeks.length) }}>
         <SortableContext items={grid.days.map((d) => tableDayDragId(d.session_slot_id))} strategy={verticalListSortingStrategy}>
           {grid.days.map((day) => (
