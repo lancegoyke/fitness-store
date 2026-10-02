@@ -5069,6 +5069,8 @@ def prescription_patch(request, plan_id, pk):
                 slot_fields.append("exercise")
             if slot_fields:
                 slot.save(update_fields=slot_fields)
+                # #715: the row's new identity has no stored 1RM yet.
+                meso_one_rm.refresh_after_identity_change(plan, [slot])
             _touch_plan(plan)
     # Row-level reply + refreshed history: this endpoint records an undo action
     # but doesn't re-serialize the plan, so without `history` the client's undo
