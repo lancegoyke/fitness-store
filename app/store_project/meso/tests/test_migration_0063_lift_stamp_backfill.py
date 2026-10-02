@@ -5,10 +5,10 @@ before them from the slot they resolve to today (``exercise_slot``, else the
 slot of ``prescription``) and leaves every other row alone. Portable: runs on
 SQLite (default) and Postgres (``TEST_DATABASE_URL``).
 
-The database is at ``0062`` for the data step, and ``0063`` changes data only,
-so the schema there equals the current models': rows are built with the
-current models and the stamp is cleared with queryset ``update()`` (which
-skips ``save()``'s stamping), the way old code left it.
+The ``LoggedSet`` rows are inserted and read through the ``0062`` historical
+model, not the current one, so a later migration that adds a column to the
+table can't break this test (as #708's own columns broke the 0060 test's
+current-model insert). The surrounding plan is built with the factories.
 """
 
 import pytest
@@ -16,7 +16,6 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 
 from store_project.exercises.factories import ExerciseFactory
-from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.models import LoggedSet
 from store_project.meso.tests.test_parse_at_commit import seed
@@ -26,8 +25,11 @@ MESO_0063 = ("meso", "0063_backfill_loggedset_lift_stamp_708")
 
 
 def _stamp(pk):
-    ls = LoggedSet.objects.get(pk=pk)
-    return ls.exercise_id, ls.exercise_name
+    return (
+        LoggedSet.objects.filter(pk=pk)
+        .values_list("exercise_id", "exercise_name")
+        .get()
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -45,23 +47,31 @@ def test_backfill_stamps_unstamped_rows_and_leaves_stamped_ones():
         slot.save(update_fields=["exercise"])
         log = SessionLogFactory(session=s.session, athlete=s.athlete)
 
+        HistoricalLoggedSet = executor.loader.project_state([MESO_0062]).apps.get_model(
+            "meso", "LoggedSet"
+        )
+
         def make(n):
-            return LoggedSetFactory(
-                session_log=log, prescription=s.squat, set_number=n
+            # The historical model has no ``save()`` override, so the stamp
+            # starts NULL, the way old code left it.
+            return HistoricalLoggedSet.objects.create(
+                session_log_id=log.pk,
+                prescription_id=s.squat.pk,
+                exercise_slot_id=slot.pk,
+                set_number=n,
+                reps="5",
+                load="100",
             ).pk
 
         anchored = make(1)  # (a) exercise_slot set, stamp NULL
         via_cell = make(2)  # (b) exercise_slot NULL, prescription set
         stamped = make(3)  # (c) already stamped with a different lift
         orphan = make(4)  # (d) nothing to resolve from
-        LoggedSet.objects.filter(pk__in=[anchored, via_cell, orphan]).update(
-            exercise=None, exercise_name=None
-        )
-        LoggedSet.objects.filter(pk=via_cell).update(exercise_slot=None)
-        LoggedSet.objects.filter(pk=orphan).update(
+        HistoricalLoggedSet.objects.filter(pk=via_cell).update(exercise_slot=None)
+        HistoricalLoggedSet.objects.filter(pk=orphan).update(
             exercise_slot=None, prescription=None
         )
-        LoggedSet.objects.filter(pk=stamped).update(
+        HistoricalLoggedSet.objects.filter(pk=stamped).update(
             exercise=None, exercise_name="Deadlift"
         )
         assert _stamp(anchored) == (None, None)
@@ -76,7 +86,12 @@ def test_backfill_stamps_unstamped_rows_and_leaves_stamped_ones():
         assert _stamp(stamped) == (None, "Deadlift")
         assert _stamp(orphan) == (None, None)
         # The backfill only fills the stamp; the anchors are as they were.
-        assert LoggedSet.objects.get(pk=via_cell).exercise_slot_id is None
+        assert (
+            LoggedSet.objects.filter(pk=via_cell)
+            .values_list("exercise_slot_id", flat=True)
+            .get()
+            is None
+        )
 
         # Idempotent: reverse is a no-op and a second pass changes nothing.
         executor = MigrationExecutor(connection)

@@ -81,15 +81,22 @@ class LiftIndex:
             self._by_name[norm_name(item_lift.name)].append(entry)
 
     def matching(self, target):
-        """Items whose lift is :func:`same_lift` as ``target``, in input order."""
-        named = self._by_name.get(norm_name(target.name), [])
-        if target.exercise_id is None:
-            hits = named
-        else:
-            hits = self._by_fk.get(target.exercise_id, []) + [
-                entry for entry in named if entry[1].exercise_id is None
-            ]
-        return [item for _, _, item in sorted(hits, key=lambda entry: entry[0])]
+        """Items whose lift is :func:`same_lift` as ``target``, in input order.
+
+        The buckets only narrow the search (every match shares the target's FK
+        or its name); :func:`same_lift` decides, so the rule lives in one place.
+        """
+        candidates = {}
+        for entry in self._by_name.get(norm_name(target.name), []):
+            candidates[entry[0]] = entry
+        if target.exercise_id is not None:
+            for entry in self._by_fk.get(target.exercise_id, []):
+                candidates[entry[0]] = entry
+        return [
+            item
+            for position, item_lift, item in sorted(candidates.values())
+            if same_lift(item_lift, target)
+        ]
 
 
 def representatives(lifts):
