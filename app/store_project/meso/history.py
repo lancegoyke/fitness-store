@@ -36,8 +36,13 @@ now); if the athlete's own flag is already set, their current line wins. The
 mirror snapshot undo/redo records (``serialize_plan_snapshot(restoring=...)``)
 marks the coach row it takes in exchange with ``"reclaim_if_text"``: a redo may
 take the line back again, but only if its text still equals what the undo
-handed back (compare-and-set — the athlete hasn't touched it since). Athlete
-data is never reverted or destroyed. Snapshots recorded before this change
+handed back (compare-and-set — the athlete hasn't touched it since; text
+only, so a line edited and then edited back counts as untouched, which is
+harmless because no ``LoggedSet`` is ever written here). Athlete data is
+never reverted or destroyed. The athlete's CURRENT line always wins: if a
+coach blanks an athlete's line and the athlete then types on the freed line,
+undoing the blank skips that cell (the earlier text is not recoverable
+through undo; any set parsed from it survives as a ``LoggedSet``). Snapshots recorded before this change
 carry neither key and still restore a rewritten line as coach-owned (no
 backfill). ``_cell_disposition`` is the single predicate the serializer and
 the restorer both use, so they cannot disagree about which rows hand back or
@@ -879,9 +884,11 @@ def restore_plan_snapshot(plan, snapshot):
     # ``athlete_authored`` STAYS in the candidate filter, and is re-checked
     # under the lock as well. Both halves are deliberate.
     #
-    # It has to stay in the filter because an athlete-authored cell is never
-    # captured in a snapshot (``serialize_plan_snapshot`` excludes them), so
-    # it is never in ``cell_pks`` — dropping the exclusion would make EVERY
+    # It has to stay in the filter because an athlete-authored cell is
+    # captured in a snapshot only as a #703 handback row (a cell a coach write
+    # was about to reclaim); every other one is excluded by
+    # ``serialize_plan_snapshot``, so it is not in ``cell_pks`` — dropping the
+    # exclusion would make EVERY
     # athlete-authored cell in every live slot × live week of the plan a
     # candidate, and this ``FOR UPDATE`` would then lock all of them on every
     # single undo and redo. Those are precisely the rows a logging athlete is

@@ -5932,10 +5932,11 @@ def cell_line_write(request, plan_id, slot_id):
         # LOCK ORDER (#562) — the Plan row before any Prescription of it, per
         # ``docs/meso/decisions.md`` ("Row-lock order"). `record_plan_action`
         # below takes this same lock (a no-op re-acquire once it's held), so
-        # this line exists purely to move the acquisition AHEAD of the reclaim
-        # write under it: `existing.save(...)` UPDATEs a Prescription row, and
-        # taking that before the Plan row made this endpoint the one path that
-        # ran Prescription→Plan. Harmless while `athlete_cell_write` also
+        # this line exists purely to move the acquisition AHEAD of any
+        # Prescription write under it. Before #703 a reclaim UPDATEd the cell
+        # (`existing.save(...)`) ahead of `record_plan_action`, and taking that
+        # before the Plan row made this endpoint the one path that ran
+        # Prescription→Plan. Harmless while `athlete_cell_write` also
         # reached a cell before the Plan row; a deadlock the moment that path
         # was corrected to take Plan first (#562), because the cell in question
         # is precisely the athlete-authored one an athlete may be blurring.
