@@ -2158,3 +2158,17 @@ describe("UAT2 designer fixes (#636 #652 #653)", () => {
     expect(onWriteCellLine).not.toHaveBeenCalled();
   });
 });
+
+// --- #608 605.7: ONE shared horizontal scroll for every day -----------------
+describe("shared horizontal scroll", () => {
+  it("puts every day table inside a single .meso-table-scroll container", () => {
+    const g = grid({
+      days: [day({ session_slot_id: 1, day_number: 1 }), day({ session_slot_id: 2, day_number: 2 })],
+    });
+    const { container } = render(<MesoTable {...baseProps({ grid: g })} />);
+    const scrollers = container.querySelectorAll(".meso-table-scroll");
+    expect(scrollers).toHaveLength(1);
+    expect(scrollers[0]!.querySelectorAll("table.meso-table")).toHaveLength(2);
+    expect(scrollers[0]!.querySelectorAll(".meso-table-day")).toHaveLength(2);
+  });
+});

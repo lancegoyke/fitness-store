@@ -82,7 +82,10 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  overflow: hidden;
+  /* clip, not hidden: hidden makes the card a scroll container, which would
+     hijack the Exercise column's (and header's) sticky-left from the shared
+     scroller. Older engines without clip lose only the corner rounding. */
+  overflow: clip;
   margin-bottom: 15px;
   box-shadow: 0 1px 2px rgba(16, 18, 22, 0.03);
 }
@@ -95,10 +98,33 @@
   border-bottom: 1px solid var(--line-2);
 }
 
-/* Horizontally scrollable inside its own container — a mesocycle can have
-   many week columns, but the page body must never scroll sideways. */
+/* ONE horizontal scroll container for ALL the day cards (605.7). A mesocycle
+   can have many week columns, but the page body must never scroll sideways —
+   and Day 1's "Wk 1" must stay above Day 2's "Wk 1", so the days scroll
+   together instead of each owning a scrollbar. The container is a size
+   container so a day's header / add-row bar can pin to the visible width
+   (100cqw) while the tables slide under them. */
 .meso-table-scroll {
   overflow-x: auto;
+  container-type: inline-size;
+}
+/* The shared canvas: as wide as the table (explicit inline width), never
+   narrower than the viewport so a short table still fills its card. */
+.meso-table-days {
+  min-width: 100%;
+  box-sizing: border-box;
+}
+/* A day's own title row and its "+ Add exercise" bar stay put while the
+   columns scroll sideways: sticky to the scroller's left, one viewport wide. */
+.meso-table-day-header,
+.meso-table-add-row-group {
+  position: sticky;
+  left: 0;
+  /* Two px short of the viewport: the card's 1px border sits inside the
+     sticky containing block, and a box wider than that is pushed left at the
+     far end of the scroll. */
+  width: calc(100cqw - 2px);
+  box-sizing: border-box;
 }
 
 .meso-table {
