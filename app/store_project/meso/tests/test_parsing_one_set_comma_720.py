@@ -9,8 +9,13 @@ import json
 
 import pytest
 
+from store_project.meso.models import LoggedSet
+from store_project.meso.models import Prescription
 from store_project.meso.parsing import parse_performed
 from store_project.meso.parsing import reads_as_one_set
+from store_project.meso.tests.test_parse_at_commit import coach_write
+from store_project.meso.tests.test_parse_at_commit import seed
+from store_project.meso.tests.test_parse_at_commit import write_cell
 
 
 def _norm(value):
@@ -90,3 +95,31 @@ def test_strict_default_still_false(text):
 )
 def test_unchanged_shapes(text, expected):
     assert _norm(parse_performed(text)) == expected
+
+
+@pytest.mark.django_db
+def test_athlete_line_logs_225_not_one_pound(client):
+    s = seed()
+    client.force_login(s.athlete)
+    assert (
+        write_cell(client, s.session, s.squat, 1, "1x5, 225, RPE 8").status_code == 200
+    )
+    row = LoggedSet.objects.get(session_log__athlete=s.athlete)
+    assert (row.load, row.reps, row.rpe) == ("225", "5", "8")
+
+
+@pytest.mark.django_db
+def test_coach_new_line_defaults_to_a_set_once_started(client):
+    # #709's strict default refused this text only because it read as 1 lb.
+    s = seed()
+    client.force_login(s.athlete)
+    write_cell(client, s.session, s.squat, 1, "225 x 5")
+    client.force_login(s.coach)
+    resp = coach_write(client, s, "1x5, 225", line=2, intent="new")
+    assert resp.status_code == 200
+    cell = Prescription.objects.get(
+        exercise_slot=s.squat.exercise_slot, week=s.week, line=2
+    )
+    assert cell.is_coach_set
+    row = LoggedSet.objects.get(source_line=cell)
+    assert (row.load, row.reps) == ("225", "5")
