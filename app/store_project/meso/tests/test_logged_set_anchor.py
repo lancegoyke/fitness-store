@@ -34,7 +34,6 @@ run and output).
 import importlib
 import json
 from decimal import Decimal
-from unittest import mock
 
 import pytest
 from django.db import connection
@@ -58,9 +57,7 @@ from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import Prescription
-from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
-from store_project.meso.models import SessionSlot
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
 from store_project.meso.tests.test_parse_at_commit import seed
@@ -106,7 +103,7 @@ class TestCoachUndoHardDeleteIsDefenseInDepth:
         cell = Prescription.objects.get(exercise_slot=slot, week=week, line=0)
 
         client.force_login(athlete)
-        assert _log_one_set(client, session, cell).status_code == 200
+        _log_one_set(athlete, session, cell)
         row = LoggedSet.objects.get(
             session_log__session=session, session_log__athlete=athlete
         )
@@ -968,175 +965,6 @@ class TestModelInvariantClosesTheAdminPath:
             "the real LoggedSetInline POST, with no exercise_slot field in "
             "the payload at all, must still derive the anchor from "
             "prescription via LoggedSet.save()"
-        )
-
-
-# -- 11. athlete_log_session: the anchor map survives a mid-request race -----
-
-
-class TestAthleteLogSessionAnchorsThroughTheRace:
-    """Item A: the anchor map must not depend on trainability.
-
-    ``_clean_logged_sets`` validates the payload against
-    ``session.trainable_cells()`` BEFORE ``athlete_log_session`` takes its
-    lock; the view re-reads ``trainable_cells()`` a SECOND time inside the
-    transaction, to build the ``exercise_slot`` map ``bulk_create`` uses. A
-    coach's ``prescription_skip``/``prescription_delete`` committing in that
-    gap can make a validated cell non-trainable by the second read.
-
-    A single 200 POST to ``athlete_log_session`` actually calls
-    ``trainable_cells()`` THREE times, not two: ``_clean_logged_sets``
-    (validation, before the lock), the anchor-map build below (in-transaction,
-    what this race targets), and ``refresh_one_rms``'s lift list (also
-    in-transaction, after ``bulk_create``, unconditional on every save). This
-    patches ``Session.trainable_cells`` to answer differently ONLY across the
-    first two — full on the first (validation), missing the posted cell on
-    the second (the anchor map) — to simulate that race directly, without
-    needing a second real request to land mid-transaction. The patch is
-    scoped to leave the THIRD call untouched (the real, unfiltered list),
-    because stripping the posted cell from ``refresh_one_rms`` too would be a
-    second, unrelated side effect this test isn't about and doesn't assert on.
-
-    Deleting the fallback query item A adds to ``athlete_log_session`` (the
-    ``Prescription.objects.filter(pk__in=missing)`` lookup) makes this fail:
-    the posted set would persist with ``exercise_slot_id = None``.
-    """
-
-    def test_a_cell_that_stops_being_trainable_mid_request_still_anchors(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        real_trainable_cells = Session.trainable_cells
-        calls = {"n": 0}
-
-        def flaky_trainable_cells(self):
-            calls["n"] += 1
-            cells = list(real_trainable_cells(self))
-            if calls["n"] == 2:
-                # The in-transaction anchor-map re-read (views.py ~1663), and
-                # ONLY that one — the posted cell just stopped being
-                # trainable (a skip/delete landed in the gap). The third call
-                # (~2051, refresh_one_rms's lift list) is deliberately left
-                # alone; see the class docstring.
-                cells = [c for c in cells if c.pk != s.squat.pk]
-            return cells
-
-        with mock.patch.object(Session, "trainable_cells", flaky_trainable_cells):
-            resp = client.post(
-                reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
-                data=json.dumps(
-                    {
-                        "sets": [
-                            {
-                                "prescription": s.squat.pk,
-                                "set_number": 1,
-                                "reps": "5",
-                                "load": "225",
-                            }
-                        ]
-                    }
-                ),
-                content_type="application/json",
-            )
-
-        assert resp.status_code == 200, resp.content
-        assert calls["n"] == 3, (
-            "the test must actually exercise all three reads — validation, "
-            "the anchor map, and the 1RM refresh — or it isn't proving what "
-            "the class docstring says it proves"
-        )
-        row = LoggedSet.objects.get(
-            session_log__session=s.session, session_log__athlete=s.athlete
-        )
-        assert row.prescription_id == s.squat.pk
-        assert row.exercise_slot_id == s.squat.exercise_slot_id, (
-            "a cell that stopped being trainable mid-request must still get "
-            "a real exercise_slot, not a NULL anchor"
-        )
-
-    def test_a_cell_whose_slot_moves_to_another_day_mid_request_still_anchors(
-        self, client
-    ):
-        """RED against scoping the fallback query by day/week (round 2's mistake).
-
-        A coach's ``prescription_move`` re-homes an ``ExerciseSlot`` onto a
-        DIFFERENT day's ``SessionSlot`` with a plain
-        ``ExerciseSlot.objects.filter(pk=...).update(session_slot_id=...)`` —
-        no lock shared with this session's ``athlete_log_session`` request.
-        If that commits in the same validated-but-not-yet-locked gap the
-        other test above exercises, the in-transaction re-read of
-        ``trainable_cells()`` naturally stops returning the posted cell too
-        (``cells()`` joins ``exercise_slot__session_slot=self.session_slot``),
-        landing it in ``missing`` — but this time the cell's row still
-        physically exists, just filed under another day. A fallback query
-        scoped to ``week=session.week, exercise_slot__session_slot=
-        session.session_slot`` filters on the day the slot USED to be on and
-        matches nothing, so it must fail this test (NULL anchor); the
-        unscoped fallback still finds the cell by its own pk and passes.
-
-        Unlike the previous test's synthetic per-call list filtering, the
-        move here is a REAL, persisted ``.update()`` — fired once, between
-        the first call (validation) and the second (the anchor map), mirroring
-        exactly when ``prescription_move`` could actually land. It is not
-        undone afterward, so the THIRD ``trainable_cells()`` call
-        (``refresh_one_rms``'s lift list, ~2051) naturally reflects the same
-        moved state too — an honest consequence of a real mutation, not a
-        hidden side effect of this patch, and this test makes no assertion
-        about that refresh either way.
-        """
-        s = seed()
-        client.force_login(s.athlete)
-        other_session_slot = SessionSlot.objects.create(
-            mesocycle=s.week.mesocycle,
-            day_number=99,
-            name="Upper",
-            bias="",
-            order=99,
-        )
-        real_trainable_cells = Session.trainable_cells
-        calls = {"n": 0}
-
-        def flaky_trainable_cells(self):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                # The gap: a coach's prescription_move commits here, once,
-                # re-homing the slot onto another day. No list-comprehension
-                # filtering — the real query, re-run below (and by every
-                # later call in this request), naturally excludes the cell
-                # once its exercise_slot really points at another day's
-                # SessionSlot.
-                ExerciseSlot.objects.filter(pk=s.squat.exercise_slot_id).update(
-                    session_slot_id=other_session_slot.pk
-                )
-            return list(real_trainable_cells(self))
-
-        with mock.patch.object(Session, "trainable_cells", flaky_trainable_cells):
-            resp = client.post(
-                reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
-                data=json.dumps(
-                    {
-                        "sets": [
-                            {
-                                "prescription": s.squat.pk,
-                                "set_number": 1,
-                                "reps": "5",
-                                "load": "225",
-                            }
-                        ]
-                    }
-                ),
-                content_type="application/json",
-            )
-
-        assert resp.status_code == 200, resp.content
-        assert calls["n"] == 3, "the test must actually exercise all three reads"
-        row = LoggedSet.objects.get(
-            session_log__session=s.session, session_log__athlete=s.athlete
-        )
-        assert row.prescription_id == s.squat.pk
-        assert row.exercise_slot_id == s.squat.exercise_slot_id, (
-            "a cell whose slot moved to another day mid-request must still "
-            "get its own real exercise_slot, not a NULL anchor — the day it "
-            "currently sits on is irrelevant to which slot IS its anchor"
         )
 
 

@@ -4,17 +4,17 @@ The derive-on-read engine (``personal_records``) shipped in 4b with no UI. This
 slice surfaces its ``new_records_in`` detector at the two moments a new best
 matters:
 
-- **athlete** — ``athlete_log_session`` returns ``new_records`` for a just-logged
-  session, so the logger can celebrate a PR the instant it's logged;
+- **athlete** — ``athlete_cell_write`` returns ``new_records`` for a just-typed
+  line, so the page can celebrate a PR the instant it's logged (the log endpoint
+  no longer returns any, #578 stage 4);
 - **coach** — ``session_results`` surfaces the same PRs for the session, both as a
   ``summary["new_records"]`` list and a per-row ``pr`` flag.
 
-Both read the structured ``LoggedSet`` performed record (D4) and reuse the pinned
-Epley e1RM. **5a (plan §7) relaxed the athlete host to LIVE, not DONE-only**:
-``new_records_in`` itself dropped its DONE gate, so ``athlete_log_session`` now
-reports a PR off a PENDING "Save progress" too (the same live read that also
-powers ``athlete_cell_write``'s optimistic toast — pinned in
-``test_parse_at_commit.py``). The **coach** host stays DONE-only in effect —
+Both read the ``LoggedSet`` performed record (D4) and reuse the pinned Epley
+e1RM. **5a (plan §7) relaxed the athlete host to LIVE, not DONE-only**:
+``new_records_in`` itself dropped its DONE gate, so a typed line on a PENDING log
+reports a PR too (the optimistic toast on ``athlete_cell_write`` — also pinned
+in ``test_parse_at_commit.py``). The **coach** host stays DONE-only in effect —
 not because ``new_records_in`` gates on it anymore, but because
 ``session_results`` only ever fetches the athlete's DONE ``SessionLog`` in the
 first place (a pending draft "is not feedback yet", see its docstring) — so
@@ -123,28 +123,23 @@ def log_done(
     return sl
 
 
-def squat_set(pk, reps, load, rpe="8"):
-    return {
-        "prescription": pk,
-        "set_number": 1,
-        "reps": reps,
-        "load": load,
-        "rpe": rpe,
-    }
+def type_line(client, s, text, line=1):
+    """Log a set by typing a sub-line under the squat (``athlete_cell_write``)."""
+    return client.post(
+        reverse("meso:athlete_cell_write", kwargs={"pk": s.session.pk}),
+        data=json.dumps({"exercise_id": s.squat.pk, "line": line, "text": text}),
+        content_type="application/json",
+    )
 
 
-# -- athlete: the log endpoint returns new PRs -----------------------------
+# -- athlete: a typed line returns new PRs ----------------------------------
 
 
-class TestAthleteLogNewRecords:
-    def test_done_first_log_is_a_pr(self, client):
+class TestAthleteTypedLineNewRecords:
+    def test_first_typed_set_is_a_pr(self, client):
         s = seed()
         client.force_login(s.athlete)
-        resp = post_log(
-            client,
-            s.session,
-            {"status": "done", "sets": [squat_set(s.squat.pk, "5", "120")]},
-        )
+        resp = type_line(client, s, "120 x 5, RPE 8")
         assert resp.status_code == 200
         prs = resp.json()["new_records"]
         assert len(prs) == 1
@@ -155,33 +150,28 @@ class TestAthleteLogNewRecords:
         assert pr["value"] == "140"  # 120 * (1 + 5/30) = 140
         assert pr["unit"] == "kg"
 
-    def test_pending_save_still_reports_a_live_pr(self, client):
-        # 5a (plan §7): relaxed from DONE-only — ``new_records_in`` now counts
-        # PENDING sets too, so a "Save progress" (not just "Log session") can
-        # surface the same optimistic toast. (Was `test_pending_save_is_not_a_pr`,
-        # pinning the DONE-only gate this slice deliberately dropped for live
-        # reads — see ``personal_records.py``'s module docstring.)
+    def test_a_typed_set_on_a_done_log_still_reports_a_live_pr(self, client):
         s = seed()
         client.force_login(s.athlete)
-        resp = post_log(
-            client,
-            s.session,
-            {"status": "pending", "sets": [squat_set(s.squat.pk, "5", "120")]},
-        )
-        assert resp.status_code == 200
-        prs = resp.json()["new_records"]
+        assert post_log(client, s.session, {"status": "done"}).status_code == 200
+        prs = type_line(client, s, "120 x 5, RPE 8").json()["new_records"]
         assert len(prs) == 1
         assert prs[0]["is_first"] is True
-        assert prs[0]["value"] == "140"  # 120 * (1 + 5/30) = 140
+        assert prs[0]["value"] == "140"
+
+    def test_the_finish_post_reports_no_records(self, client):
+        # The page-top PR card is gone: a PR is marked on its typed line, so the
+        # log endpoint no longer returns ``new_records`` at all.
+        s = seed()
+        client.force_login(s.athlete)
+        type_line(client, s, "120 x 5, RPE 8")
+        body = post_log(client, s.session, {"status": "done"}).json()
+        assert "new_records" not in body
 
     def test_athlete_override_flows_through_the_lb_pr_toast(self, client):
         s = seed(athlete_unit=Unit.POUNDS)
         client.force_login(s.athlete)
-        resp = post_log(
-            client,
-            s.session,
-            {"status": "done", "sets": [squat_set(s.squat.pk, "5", "120")]},
-        )
+        resp = type_line(client, s, "120 x 5, RPE 8")
 
         assert resp.status_code == 200
         assert resp.json()["new_records"][0]["unit"] == Unit.POUNDS
@@ -195,12 +185,7 @@ class TestAthleteLogNewRecords:
             other, s.athlete, other_squat, [("5", "120", "8")], when=date(2026, 6, 20)
         )
         client.force_login(s.athlete)
-        resp = post_log(
-            client,
-            s.session,
-            {"status": "done", "sets": [squat_set(s.squat.pk, "5", "150")]},
-        )
-        prs = resp.json()["new_records"]
+        prs = type_line(client, s, "150 x 5, RPE 8").json()["new_records"]
         assert len(prs) == 1
         assert prs[0]["is_first"] is False
         assert prs[0]["previous"] == "140"
@@ -215,12 +200,7 @@ class TestAthleteLogNewRecords:
             other, s.athlete, other_squat, [("5", "150", "8")], when=date(2026, 6, 20)
         )
         client.force_login(s.athlete)
-        resp = post_log(
-            client,
-            s.session,
-            {"status": "done", "sets": [squat_set(s.squat.pk, "5", "120")]},
-        )
-        assert resp.json()["new_records"] == []
+        assert type_line(client, s, "120 x 5, RPE 8").json()["new_records"] == []
 
 
 # -- coach: the results screen surfaces the same PRs -----------------------
@@ -335,19 +315,14 @@ class TestWholeUnitRecords:
     def test_sub_unit_gain_has_zero_delta_and_no_plus_zero_label(self):
         """A real PR (116.67 -> 117.25) rounds to one whole number.
 
-        The delta is "0" and no surface may print "(+0)" (#688 review).
+        The delta is "0" and the results banner may not print "(+0)" (#688
+        review; the athlete page no longer prints a PR label of its own).
         """
-        from pathlib import Path
-
         from django.template.loader import get_template
 
         from store_project.meso.serializers import serialize_new_record
 
         assert serialize_new_record(self._record(117.25, 116.67))["delta"] == "0"
-        root = Path(__file__).resolve().parents[2]
-        js = (root / "static/js/meso_athlete.js").read_text()
-        label = js[js.index("prLabel(pr)") : js.index("rowFilled(r)")]
-        assert 'pr.delta === "0"' in label
         html = get_template("meso/results.html").template.source
         assert '{% elif pr.delta != "0" %}' in html
 

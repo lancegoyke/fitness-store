@@ -1,8 +1,8 @@
 """Athlete journey: log a set with no signal, then reconnect (issue #506, third slice).
 
 Athletes log in gyms with bad signal, and a set lost offline is the worst
-failure the athlete app can have. `meso_athlete.js` queues a "Log session" /
-"Save progress" that can't reach the server: `save()` stashes its payload in
+failure the athlete app can have. `meso_athlete.js` queues a "Finish session"
+that can't reach the server: `finish()` stashes its payload in
 `localStorage["meso-log-queue"]` and `flushQueue()` replays it on the window
 `online` event. The first test drives that queue in a real browser with the
 network really cut (`context.set_offline`).
@@ -22,6 +22,9 @@ from playwright.sync_api import expect
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Prescription
 from store_project.meso.models import SessionLog
+
+from e2e._coach_nav import assert_completion
+from e2e._coach_nav import open_latest_results
 
 pytestmark = pytest.mark.django_db
 
@@ -49,7 +52,23 @@ def _online_watcher(page):
     )
 
 
-def test_athlete_logs_a_set_offline_and_it_syncs(
+def _next_field(page, lines, i, count):
+    """The field a phone user taps to blur line ``i`` of ``count``.
+
+    The squat has exactly ``count`` lines, so the last one blurs by tapping
+    into the RDL's first line instead.
+    """
+    if i + 1 < count:
+        return lines.nth(i + 1)
+    return (
+        page.get_by_test_id("exercise-card")
+        .filter(has_text="RDL")
+        .get_by_test_id("sub-line-input")
+        .first
+    )
+
+
+def test_athlete_finishes_the_session_offline_and_it_syncs(
     page, context, viewport, shot, press, login, delivered_plan
 ):
     login(delivered_plan.athlete)
@@ -59,43 +78,26 @@ def test_athlete_logs_a_set_offline_and_it_syncs(
 
     context.set_offline(True)
 
-    # Fill the Box Squat's first Set row (the structured path `save()`
-    # actually POSTs) — scoped to its card, `.first()` picks set 1.
-    card = _box_squat_card(page)
-    load_input = card.get_by_placeholder("load").first
-    reps_input = card.get_by_placeholder("reps").first
-    press(load_input)
-    load_input.fill("100")
-    press(reps_input)
-    reps_input.fill("5")
-
-    press(page.get_by_test_id("session-log"))
+    press(page.get_by_test_id("session-finish"))
 
     offline_msg = page.get_by_text(SAVED_OFFLINE_TEXT)
     expect(offline_msg).to_be_visible()
-    # "Log session" flips the local badge at once, offline or not (save()'s
-    # `if (markDone) this.status = "done"` runs before the fetch attempt).
+    # "Finish session" flips the local badge at once, offline or not.
     expect(page.get_by_test_id("session-status")).to_have_text("Logged")
+    expect(page.get_by_test_id("session-finish")).to_be_hidden()
     shot("01-offline-queued")
 
     queue = page.evaluate("JSON.parse(localStorage.getItem('meso-log-queue') || '[]')")
     assert len(queue) == 1
     body = queue[0]["body"]
     assert body["status"] == "done"
-    assert any(s["load"] == "100" and s["reps"] == "5" for s in body["sets"]), body[
-        "sets"
-    ]
+    assert "sets" not in body, body
 
     # Nothing has reached the server yet — the queue is the only copy.
     assert not SessionLog.objects.filter(
         session=delivered_plan.session,
         athlete=delivered_plan.athlete,
         status=SessionLog.Status.DONE,
-    ).exists()
-    assert not LoggedSet.objects.filter(
-        session_log__session=delivered_plan.session,
-        session_log__athlete=delivered_plan.athlete,
-        load="100",
     ).exists()
 
     context.set_offline(False)
@@ -105,30 +107,94 @@ def test_athlete_logs_a_set_offline_and_it_syncs(
     page.wait_for_function(
         "() => JSON.parse(localStorage.getItem('meso-log-queue') || '[]').length === 0"
     )
-    # `flushQueue` sets `saved = true` in the same synchronous block that
-    # empties the queue (before its own 2.4s auto-hide `setTimeout`), so it's
-    # still up right after the queue-empty wait above resolves.
     expect(page.get_by_text(SAVED_TEXT)).to_be_visible()
     shot("02-synced")
 
+    log = SessionLog.objects.get(
+        session=delivered_plan.session, athlete=delivered_plan.athlete
+    )
+    assert log.status == SessionLog.Status.DONE
+
     page.reload()
     expect(page.get_by_test_id("session-status")).to_have_text("Logged")
-    card = _box_squat_card(page)
-    expect(card.get_by_placeholder("load").first).to_have_value("100")
-    expect(card.get_by_placeholder("reps").first).to_have_value("5")
     shot("03-reloaded")
 
-    log = (
-        SessionLog.objects.filter(
-            session=delivered_plan.session, athlete=delivered_plan.athlete
-        )
-        .order_by("-created_at")
-        .first()
+
+def test_three_sets_typed_offline_sync_on_reconnect(
+    page, context, viewport, shot, press, login, new_page, delivered_plan
+):
+    """Three sets typed with no signal: header waits, then confirms after sync.
+
+    The "N of M sets logged" header counts what the server has confirmed, so
+    it stays at 0 while the lines are only queued, then reads 3 of 6 once the
+    replay lands. Lines are blurred one at a time so each queues on its own.
+    """
+    page.add_init_script(INFLIGHT_JS)
+    login(delivered_plan.athlete)
+    page.goto(reverse("meso:athlete_session", kwargs={"pk": delivered_plan.session.pk}))
+    expect(page.get_by_test_id("session-status")).to_have_text("To do")
+    progress = page.get_by_test_id("set-progress")
+    assert progress.inner_text().strip() == "0 of 6 sets logged"
+    _online_watcher(page)
+
+    context.set_offline(True)
+
+    card = _box_squat_card(page)
+    sub_lines = card.get_by_test_id("sub-line-input")
+    texts = ["70 x 6", "70 x 6", "70 x 5"]
+    for i, text in enumerate(texts):
+        line = sub_lines.nth(i)
+        press(line)
+        line.fill(text)
+        # Blur by moving to the next field (Tab on desktop, a tap on phone).
+        if viewport["is_phone"]:
+            _next_field(page, sub_lines, i, len(texts)).tap()
+        else:
+            line.press("Tab")
+        expect(
+            line.locator("xpath=..").get_by_test_id("sub-line-queued")
+        ).to_be_visible()
+    expect(
+        card.get_by_test_id("sub-line-queued").locator("visible=true")
+    ).to_have_count(3)
+    expect(
+        card.get_by_test_id("sub-line-save-error").locator("visible=true")
+    ).to_have_count(0)
+    # Nothing is confirmed yet, so the count has not moved.
+    assert progress.inner_text().strip() == "0 of 6 sets logged"
+    shot("01-offline-typed")
+
+    context.set_offline(False)
+    page.wait_for_function("() => window.__e2eOnlineFired === true", timeout=5000)
+    page.wait_for_function(
+        "() => JSON.parse(localStorage.getItem('meso-log-queue') || '[]').length === 0"
     )
-    assert log is not None
+    page.wait_for_function("() => window.__e2eInflight === 0")
+    expect(
+        card.get_by_test_id("sub-line-queued").locator("visible=true")
+    ).to_have_count(0)
+    expect(progress).to_have_text("3 of 6 sets logged")
+    shot("02-synced")
+
+    press(page.get_by_test_id("session-finish"))
+    expect(page.get_by_test_id("session-status")).to_have_text("Logged")
+    page.wait_for_function("() => window.__e2eInflight === 0")
+    assert progress.inner_text().strip() == "3 of 6 sets logged"
+
+    log = SessionLog.objects.get(
+        session=delivered_plan.session, athlete=delivered_plan.athlete
+    )
     assert log.status == SessionLog.Status.DONE
-    logged_sets = list(log.sets.all())
-    assert any(s.load == "100" and s.reps == "5" for s in logged_sets), logged_sets
+    assert (
+        LoggedSet.objects.filter(session_log=log, source_line__isnull=False).count()
+        == 3
+    )
+
+    coach_page = new_page(desktop=True)
+    login(delivered_plan.coach, on=coach_page)
+    open_latest_results(coach_page)
+    assert_completion(coach_page, 50, "3 of 6 sets logged")
+    shot("03-coach-results", on=coach_page, viewport_id="desktop")
 
 
 # Counts the page's fetches still in flight. Added before the page loads, so
@@ -187,7 +253,7 @@ def test_typed_line_offline_survives_reconnect(
     expect(second_line_row.get_by_test_id("sub-line-save-error")).to_be_hidden()
     shot("00-offline-line-queued")
 
-    press(page.get_by_test_id("session-log"))
+    press(page.get_by_test_id("session-finish"))
     expect(page.get_by_text(SAVED_OFFLINE_TEXT)).to_be_visible()
     expect(page.get_by_text(SAVED_TEXT)).to_be_hidden()
     shot("01-offline")
@@ -251,7 +317,7 @@ def test_typed_line_offline_syncs_on_next_visit(
     The athlete closes the page while still offline, so the page's `online`
     listener never gets to run. Opening the session again later, online, is
     what recovers it: `init()` shows the queued text on its line and flushes
-    it, with nobody pressing "Log session".
+    it, with nobody pressing "Finish session".
     """
     context.add_init_script(INFLIGHT_JS)  # covers this page AND the next one
     login(delivered_plan.athlete)
@@ -301,7 +367,7 @@ def test_typed_line_offline_syncs_on_next_visit(
         load="100",
         reps="5",
     ).exists()
-    # Nobody ever pressed "Log session" — only the cell write replayed.
+    # Nobody ever pressed "Finish session" — only the cell write replayed.
     log = SessionLog.objects.get(
         session=delivered_plan.session, athlete=delivered_plan.athlete
     )
@@ -353,7 +419,7 @@ def test_typed_line_retyped_offline_syncs_last_text(
     assert len(cell_entries) == 1, cell_entries
     assert cell_entries[0]["body"]["text"] == "110 x 5", cell_entries
 
-    press(page.get_by_test_id("session-log"))
+    press(page.get_by_test_id("session-finish"))
     expect(page.get_by_text(SAVED_OFFLINE_TEXT)).to_be_visible()
 
     context.set_offline(False)

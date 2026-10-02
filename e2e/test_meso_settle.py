@@ -1,7 +1,7 @@
 """Settle journey: a quietly-abandoned typed log settles to Logged (5b, #506 third slice).
 
 Sets up a PENDING log the way the athlete's own UI creates one — a typed
-sub-line cell write (`meso:athlete_cell_write`), "Log session" never
+sub-line cell write (`meso:athlete_cell_write`), "Finish session" never
 pressed — then calls `settle.settle_log` exactly as the hourly sweep
 (`settle_quiet_logs`, settle.py ~:210) does, and checks that both the
 athlete's own page and the coach's results page read the settled log exactly
@@ -26,7 +26,7 @@ pytestmark = pytest.mark.django_db
 def test_a_settled_log_reads_as_logged(
     page, viewport, shot, press, login, new_page, delivered_plan
 ):
-    # --- setup: type a set the way the athlete's UI does, never tap "Log session" ---
+    # --- setup: type a set the way the athlete's UI does, never tap "Finish session" ---
     setup_client = Client()
     setup_client.force_login(delivered_plan.athlete)
     cell_response = setup_client.post(

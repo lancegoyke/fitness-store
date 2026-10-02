@@ -2,8 +2,9 @@
 
 The athlete's delivered session screen becomes the interactive logger:
 ``POST /meso/api/me/session/<id>/log/`` upserts the athlete's own ``SessionLog``
-and its ``LoggedSet`` rows (reps/load/rpe per set), flips the session done, and
-stamps the date. These are the first *real* logged rows — the ones
+(status, date, notes), flips the session done, and stamps the date. Sets are no
+longer posted here (#578 stage 4): they are typed lines saved by
+``athlete_cell_write``, so these tests log sets through that path. These are the first *real* logged rows — the ones
 ``serialize_recent_logs`` grounds the agent on (every log before this slice was
 fabricated in tests).
 
@@ -92,6 +93,17 @@ def session_url(session):
     return reverse("meso:athlete_session", kwargs={"pk": session.pk})
 
 
+def type_line(client, s, exercise, line, text):
+    """Log a set the only way left: type it on a sub-line (``athlete_cell_write``)."""
+    resp = client.post(
+        reverse("meso:athlete_cell_write", kwargs={"pk": s.session.pk}),
+        data=json.dumps({"exercise_id": exercise.pk, "line": line, "text": text}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200, resp.content
+    return resp
+
+
 def post(client, session, payload):
     return client.post(
         log_url(session),
@@ -156,226 +168,99 @@ class TestLogAccessControl:
 
 
 class TestLogWrite:
-    def test_logs_sets_creates_done_log(self, client):
+    def test_posting_creates_done_log(self, client):
         s = seed()
         client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "6",
-                        "load": "72.5",
-                        "rpe": "8",
-                    },
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 2,
-                        "reps": "6",
-                        "load": "72.5",
-                        "rpe": "8.5",
-                    },
-                ]
-            },
-        )
+        resp = post(client, s.session, {})
         assert resp.status_code == 200
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
         assert log.status == SessionLog.Status.DONE
-        # Logging stamps today's date when none is given.
+        # Finishing stamps today's date when none is given.
         assert log.date == timezone.localdate()
-        sets = list(log.sets.order_by("set_number"))
-        assert len(sets) == 2
-        assert sets[0].prescription_id == s.squat.pk
-        assert sets[0].reps == "6"
-        assert sets[0].load == "72.5"
-        assert sets[1].rpe == "8.5"
+        assert log.sets.count() == 0
 
     def test_skipping_a_logged_row_preserves_its_logged_sets(self, client):
         # A coach marks a row skipped AFTER the athlete logged it. The row drops
-        # from the logger (trainable_cells), so the next save posts only the
-        # remaining rows — and must NOT wipe the skipped row's logged history.
+        # out of the trainable cells, and a later "Finish session" must NOT wipe
+        # the skipped row's logged history.
         s = seed()
         client.force_login(s.athlete)
-        post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "6",
-                        "load": "70",
-                        "rpe": "7",
-                    },
-                    {
-                        "prescription": s.rdl.pk,
-                        "set_number": 1,
-                        "reps": "8",
-                        "load": "80",
-                        "rpe": "8",
-                    },
-                ]
-            },
-        )
+        type_line(client, s, s.squat, 1, "70 x 6, RPE 7")
+        type_line(client, s, s.rdl, 1, "80 x 8, RPE 8")
         assert LoggedSet.objects.filter(prescription=s.squat).count() == 1
 
         s.squat.skipped = True
         s.squat.save(update_fields=["skipped"])
 
-        # The logger now only renders/posts the RDL; the re-save must leave the
-        # squat's logged history intact.
-        resp = post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.rdl.pk,
-                        "set_number": 1,
-                        "reps": "8",
-                        "load": "82",
-                        "rpe": "8",
-                    },
-                ]
-            },
-        )
+        resp = post(client, s.session, {"status": "done"})
         assert resp.status_code == 200
         assert LoggedSet.objects.filter(prescription=s.squat).count() == 1
-        assert LoggedSet.objects.filter(prescription=s.rdl, load="82").count() == 1
-
-    def test_skipped_row_is_not_a_valid_log_target(self, client):
-        # A skipped cell isn't rendered by the logger, so posting a set against it
-        # is a 400 (the same guard as a foreign prescription).
-        s = seed()
-        s.squat.skipped = True
-        s.squat.save(update_fields=["skipped"])
-        client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {"sets": [{"prescription": s.squat.pk, "reps": "6", "load": "70"}]},
-        )
-        assert resp.status_code == 400
+        assert LoggedSet.objects.filter(prescription=s.rdl, load="80").count() == 1
 
     def test_response_echoes_saved_log(self, client):
         s = seed()
         client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "100",
-                        "rpe": "9",
-                    }
-                ]
-            },
-        )
-        data = resp.json()
+        type_line(client, s, s.squat, 1, "100 x 5, RPE 9")
+        data = post(client, s.session, {"status": "done", "notes": "good"}).json()
         assert data["ok"] is True
         assert data["log"]["status"] == "done"
-        assert data["log"]["sets"][0]["load"] == "100"
-        assert data["log"]["sets"][0]["prescription"] == s.squat.pk
+        assert data["log"]["notes"] == "good"
+        assert data["log"]["date"] == timezone.localdate().isoformat()
+        assert "sets" not in data["log"]
+        assert "new_records" not in data
+        assert data["progress"]["logged"] == 1
 
     def test_relog_updates_same_log(self, client):
-        """Re-logging the same session updates the one log — no duplicate rows."""
+        """Finishing the same session twice updates the one log -- no duplicate rows."""
         s = seed()
         client.force_login(s.athlete)
-        post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "6",
-                        "load": "70",
-                        "rpe": "7",
-                    }
-                ]
-            },
-        )
-        post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "6",
-                        "load": "80",
-                        "rpe": "9",
-                    }
-                ]
-            },
-        )
+        type_line(client, s, s.squat, 1, "70 x 6, RPE 7")
+        post(client, s.session, {"status": "pending"})
+        post(client, s.session, {"status": "done"})
         assert (
             SessionLog.objects.filter(session=s.session, athlete=s.athlete).count() == 1
         )
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
-        sets = list(log.sets.all())
-        # The old set row is replaced, not appended.
-        assert len(sets) == 1
-        assert sets[0].load == "80"
+        assert log.status == SessionLog.Status.DONE
+        # The typed set is neither replaced nor duplicated by the log posts.
+        assert log.sets.count() == 1
 
     def test_accepts_explicit_status_pending(self, client):
         s = seed()
         client.force_login(s.athlete)
-        post(client, s.session, {"status": "pending", "sets": []})
+        post(client, s.session, {"status": "pending"})
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
         assert log.status == SessionLog.Status.PENDING
 
     def test_accepts_explicit_date(self, client):
         s = seed()
         client.force_login(s.athlete)
-        post(client, s.session, {"date": "2026-06-20", "sets": []})
+        post(client, s.session, {"date": "2026-06-20"})
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
         assert log.date == datetime.date(2026, 6, 20)
 
     def test_relog_without_date_keeps_original_date(self, client):
-        """Editing a set later (no date sent) must not move the workout to today."""
+        """A later finish (no date sent) must not move the workout to today."""
         s = seed()
         client.force_login(s.athlete)
-        # Logged as having trained on the 20th...
-        post(
-            client,
-            s.session,
-            {
-                "date": "2026-06-20",
-                "sets": [{"prescription": s.squat.pk, "set_number": 1, "reps": "6"}],
-            },
-        )
-        # ...then a later edit that omits the date entirely.
-        post(
-            client,
-            s.session,
-            {"sets": [{"prescription": s.squat.pk, "set_number": 1, "reps": "5"}]},
-        )
+        post(client, s.session, {"date": "2026-06-20"})
+        # ...then a later post that omits the date entirely.
+        post(client, s.session, {"status": "done"})
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
         assert log.date == datetime.date(2026, 6, 20)  # not today
 
     def test_saves_notes(self, client):
         s = seed()
         client.force_login(s.athlete)
-        post(client, s.session, {"notes": "Knee felt great.", "sets": []})
+        post(client, s.session, {"notes": "Knee felt great."})
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
         assert log.notes == "Knee felt great."
 
-    def test_empty_sets_marks_done(self, client):
+    def test_an_empty_body_marks_done(self, client):
         """An athlete can mark a session done without logging every set."""
         s = seed()
         client.force_login(s.athlete)
-        resp = post(client, s.session, {"sets": []})
+        resp = post(client, s.session, {})
         assert resp.status_code == 200
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
         assert log.status == SessionLog.Status.DONE
@@ -403,17 +288,6 @@ class TestLogValidation:
         )
         assert resp.status_code == 400
 
-    def test_sets_must_be_list(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        assert post(client, s.session, {"sets": {"nope": 1}}).status_code == 400
-
-    def test_set_must_be_object(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        assert post(client, s.session, {"sets": ["nope"]}).status_code == 400
-        assert SessionLog.objects.count() == 0
-
     def test_bad_status(self, client):
         s = seed()
         client.force_login(s.athlete)
@@ -426,101 +300,6 @@ class TestLogValidation:
             post(client, s.session, {"date": "not-a-date", "sets": []}).status_code
             == 400
         )
-
-    def test_foreign_prescription_rejected(self, client):
-        """A set pointing at a prescription from another session is a 400 — no write."""
-        s = seed()
-        other = seed()  # an unrelated plan/session/prescription
-        client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {"sets": [{"prescription": other.squat.pk, "set_number": 1, "reps": "5"}]},
-        )
-        assert resp.status_code == 400
-        assert SessionLog.objects.count() == 0
-        assert LoggedSet.objects.count() == 0
-
-    def test_missing_prescription_rejected(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        assert (
-            post(
-                client, s.session, {"sets": [{"set_number": 1, "reps": "5"}]}
-            ).status_code
-            == 400
-        )
-
-    def test_non_int_prescription_rejected(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        resp = post(client, s.session, {"sets": [{"prescription": "x", "reps": "5"}]})
-        assert resp.status_code == 400
-
-    def test_non_string_field_rejected(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {
-                "sets": [{"prescription": s.squat.pk, "reps": 5}]
-            },  # reps must be a string
-        )
-        assert resp.status_code == 400
-        assert SessionLog.objects.count() == 0
-
-    def test_overlong_field_rejected(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {
-                "sets": [{"prescription": s.squat.pk, "load": "x" * 40}]
-            },  # load max_length 32
-        )
-        assert resp.status_code == 400
-
-    def test_bad_set_number_rejected(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {"sets": [{"prescription": s.squat.pk, "set_number": 0, "reps": "5"}]},
-        )
-        assert resp.status_code == 400
-
-    def test_excessive_set_number_rejected(self, client):
-        """A wild set_number can't be stored — it would balloon the next render."""
-        s = seed()
-        client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {"sets": [{"prescription": s.squat.pk, "set_number": 10_000, "reps": "5"}]},
-        )
-        assert resp.status_code == 400
-        assert SessionLog.objects.count() == 0
-
-    def test_duplicate_set_key_rejected(self, client):
-        """Two sets with the same (prescription, set_number) are ambiguous — 400."""
-        s = seed()
-        client.force_login(s.athlete)
-        resp = post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {"prescription": s.squat.pk, "set_number": 1, "reps": "6"},
-                    {"prescription": s.squat.pk, "set_number": 1, "reps": "5"},
-                ]
-            },
-        )
-        assert resp.status_code == 400
-        assert SessionLog.objects.count() == 0
-        assert LoggedSet.objects.count() == 0
 
 
 # -- ownership isolation ---------------------------------------------------
@@ -589,21 +368,8 @@ class TestLogFeedsBack:
     def test_logged_session_survives_reload(self, client):
         s = seed()
         client.force_login(s.athlete)
-        post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "6",
-                        "load": "92.5",
-                        "rpe": "8",
-                    }
-                ]
-            },
-        )
+        type_line(client, s, s.squat, 1, "92.5 x 6, RPE 8")
+        post(client, s.session, {"status": "done"})
         # Reloading the session screen reflects what was logged.
         body = client.get(session_url(s.session)).content.decode()
         assert "92.5" in body
@@ -613,21 +379,8 @@ class TestLogFeedsBack:
     def test_logged_session_grounds_the_agent(self, client):
         s = seed()
         client.force_login(s.athlete)
-        post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "105",
-                        "rpe": "9",
-                    }
-                ]
-            },
-        )
+        type_line(client, s, s.squat, 1, "105 x 5, RPE 9")
+        post(client, s.session, {"status": "done"})
         # The very rows the agent's grounding reads (serialize_recent_logs).
         recent = serialize_recent_logs(s.plan)
         assert len(recent) == 1

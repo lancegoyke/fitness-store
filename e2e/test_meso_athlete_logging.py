@@ -1,10 +1,10 @@
-"""Athlete journey: type a set, reload, Log session (issue #506, first slice).
+"""Athlete journey: type a set, reload, Finish session (issue #506, first slice).
 
 Cookie-logs in as the athlete (the real login form is `test_login.py`'s job)
 and drives the delivered "Lower" session the way an athlete would: focus a
 sub-line, type a performed set, blur it (parse-at-commit — 5a — turns it into
 a silent `LoggedSet`), reload to prove the line and its parsed set survived,
-then "Log session" and prove the badge sticks through another reload.
+then "Finish session" and prove the badge sticks through another reload.
 """
 
 import pytest
@@ -77,7 +77,7 @@ def test_athlete_logs_a_typed_set(page, viewport, shot, press, login, delivered_
     with page.expect_response(
         lambda r: r.request.method == "POST" and "/log/" in r.url
     ) as log_response_info:
-        press(page.get_by_test_id("session-log"))
+        press(page.get_by_test_id("session-finish"))
     assert log_response_info.value.ok
     expect(page.get_by_test_id("session-status")).to_have_text("Logged")
     expect(page.get_by_test_id("log-instruction")).not_to_be_visible()

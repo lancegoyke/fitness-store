@@ -538,7 +538,7 @@ class TestSubLinePresenter:
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
         assert row["sub_lines"][0]["warn"] is True
 
-    def test_athlete_session_set_rows_exclude_parsed_sets(self, client):
+    def test_athlete_session_logged_readonly_excludes_parsed_sets(self, client):
         # No double-display (5a §6): a LoggedSet derived from a sub-line
         # (source_line set) must render only as that sub-line's text, never
         # also as a phantom structured set-input row.
@@ -574,13 +574,15 @@ class TestSubLinePresenter:
         assert row["sub_lines"] == [
             {"line": 1, "text": "225 x 5", "warn": False, "warn_reason": ""}
         ]
-        # ...and never a second time as a filled/"done" structured set row.
-        assert all(not r["done"] for r in row["set_rows"])
-        assert all(r["reps"] == "" and r["load"] == "" for r in row["set_rows"])
+        # ...and never a second time as a read-only history row.
+        assert row["logged_readonly"] == []
 
-    def test_athlete_session_set_rows_include_structured_sets(self, client):
-        # A structured-logger set (source_line NULL) still hydrates set_rows —
-        # only the parsed-derivative channel is excluded.
+    def test_athlete_session_logged_readonly_includes_legacy_structured_sets(
+        self, client
+    ):
+        # A legacy structured set (source_line NULL, written by the retired
+        # logger) shows as read-only history — only the parsed-derivative
+        # channel is excluded.
         from store_project.meso.factories import LoggedSetFactory
         from store_project.meso.factories import SessionLogFactory
         from store_project.meso.models import SessionLog
@@ -599,10 +601,9 @@ class TestSubLinePresenter:
         )
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        done_rows = [r for r in row["set_rows"] if r["done"]]
-        assert len(done_rows) == 1
-        assert done_rows[0]["reps"] == "6"
-        assert done_rows[0]["load"] == "70"
+        assert len(row["logged_readonly"]) == 1
+        label = row["logged_readonly"][0]["label"]
+        assert "70" in label and "6" in label
 
     def test_athlete_session_target_is_prescription_only(self, client):
         # The now-editable sub-line stack must not double-display inside the
