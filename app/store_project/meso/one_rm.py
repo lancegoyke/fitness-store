@@ -24,7 +24,7 @@ default are built on. ``personal_records.py`` (5a, docs/meso/
 parse-at-commit-plan.md §7) deliberately went the other way for its **live**
 reads: it counts PENDING parse-at-commit sets too, so the records panel/PR
 toast are live and self-healing. The two modules now intentionally disagree —
-this one stays DONE-only because a pending "Save progress" draft is not a
+this one stays DONE-only because a pending draft (lines typed, session not finished) is not a
 finished performance to permanently write down; 5b's 24 h quiet-period settle
 is what eventually promotes a live best into this module's confirmed record.
 """
@@ -68,7 +68,7 @@ def epley_one_rm(load, reps):
 def derive_one_rm_values(athlete, *, keys=None, unit=None):
     """Best Epley 1RM per lift identity from the athlete's *completed* logged sets.
 
-    One query over the athlete's ``DONE`` logged sets (a pending "Save progress"
+    One query over the athlete's ``DONE`` logged sets (a pending
     draft is not a finished performance — the results/"last" surfaces treat it the
     same). Returns ``{key: float}`` — the maximum implied 1RM across every set of
     that lift. ``keys``, when given, restricts the scan to those lift identities

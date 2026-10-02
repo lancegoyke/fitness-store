@@ -43,10 +43,32 @@ from playwright.sync_api import expect
 from store_project.meso.models import LoggedSet
 from store_project.meso.tests._helpers import day
 
-from e2e.test_meso_reclaim_restore import _blur_first_sub_line
-from e2e.test_meso_reclaim_restore import _box_squat_card
-
 pytestmark = pytest.mark.django_db
+
+
+def _box_squat_card(page):
+    return page.get_by_test_id("exercise-card").filter(has_text="Box Squat")
+
+
+def _blur_first_sub_line(page, viewport, card, text):
+    """Type ``text`` into Box Squat's first sub-line and blur it for real.
+
+    Tab on desktop, tap the next field on phone — a real user's way of moving
+    focus off the line, which is what fires the save. Awaits the resulting
+    ``/cell/`` POST and asserts it succeeded.
+    """
+    sub_lines = card.get_by_test_id("sub-line-input")
+    first_line = sub_lines.first
+    first_line.fill(text)
+    with page.expect_response(
+        lambda r: r.request.method == "POST" and "/cell/" in r.url
+    ) as cell_response_info:
+        if viewport["is_phone"]:
+            sub_lines.nth(1).tap()
+        else:
+            first_line.press("Tab")
+    assert cell_response_info.value.ok
+
 
 # Counts the page's fetches still in flight (mirrors test_meso_athlete_offline.py's
 # INFLIGHT_JS). Added before the page loads, so it wraps every request

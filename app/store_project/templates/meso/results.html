@@ -26,7 +26,7 @@
     <div class="meso-grid meso-grid--3 meso-stats" style="margin-bottom:14px;">
       <div class="meso-card meso-card--pad">
         <div style="font-size:26px;font-weight:800;letter-spacing:-0.025em;">{{ summary.completion }}%</div>
-        <div class="meso-row-meta">sets completed</div>
+        <div class="meso-row-meta">{% if summary.logged_state %}{{ summary.progress_label }}{% else %}sets completed{% endif %}</div>
       </div>
       <div class="meso-card meso-card--pad">
         <div style="font-size:26px;font-weight:800;letter-spacing:-0.025em;" class="meso-mono">{{ summary.avg_rpe_delta }}</div>

@@ -470,7 +470,7 @@ def logged_plan(delivered_plan):
     """`delivered_plan` with the athlete's Box Squat logged as "1×5 @ 100 kg".
 
     Logged through the exact endpoints the athlete's own UI calls (the cell
-    write, then "Log session"), not by writing rows directly. Shared by the
+    write, then "Finish session"), not by writing rows directly. Shared by the
     coach-results journey (#506) and `coach_workspace` below (#508).
     """
     client = Client()
@@ -485,7 +485,7 @@ def logged_plan(delivered_plan):
     assert cell_response.status_code == 200
     log_response = client.post(
         reverse("meso:athlete_log_session", kwargs={"pk": delivered_plan.session.pk}),
-        data=json.dumps({"status": "done", "sets": []}),
+        data=json.dumps({"status": "done"}),
         content_type="application/json",
     )
     assert log_response.status_code == 200

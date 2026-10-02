@@ -230,7 +230,7 @@ def test_athlete_log_session_waits_for_the_plan_lock():
         try:
             response = client.post(
                 reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
-                data=json.dumps({"sets": []}),
+                data=json.dumps({"status": "done"}),
                 content_type="application/json",
             )
             result["status"] = response.status_code
@@ -324,7 +324,7 @@ def test_restore_and_athlete_log_session_serialize_on_plan(monkeypatch):
         try:
             response = client.post(
                 reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
-                data=json.dumps({"sets": []}),
+                data=json.dumps({"status": "done"}),
                 content_type="application/json",
             )
             statuses["athlete"] = response.status_code
@@ -388,7 +388,7 @@ def test_athlete_log_session_returns_404_if_locked_session_vanished(monkeypatch)
 
     response = client.post(
         reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
-        data=json.dumps({"sets": []}),
+        data=json.dumps({"status": "done"}),
         content_type="application/json",
     )
 

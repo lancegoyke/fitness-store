@@ -2,12 +2,13 @@
 
 **Why.** 5a let a typed sub-line ("what you did") create a PENDING
 ``SessionLog`` with structured ``LoggedSet`` rows (``athlete_cell_write`` ->
-``_upsert_parsed_set``, views.py), alongside the pre-existing structured "Save
-progress"/"Log session" path (``athlete_log_session``). But most Meso reads
+``_upsert_parsed_set``, views.py), and the athlete finishes a session by tapping
+"Finish session" (``athlete_log_session``, which writes status/date/notes only
+and no longer any sets). But most Meso reads
 are **DONE-only by design** — adherence, the persisted ``AthleteOneRm``,
 coach ``session_results``, and the agent's grounding all filter on
 ``status=DONE``. A session the athlete actually did, but only ever typed into
-sub-lines and never tapped "Log session", was invisible to every one of those
+sub-lines and never tapped "Finish session", was invisible to every one of those
 — counted nowhere but the athlete's own page. This module is the fix: an
 hourly sweep that promotes a PENDING log to DONE once it has gone quiet, on
 the theory that "no more edits for a day" is as good a signal of "this
@@ -16,9 +17,10 @@ workout is finished" as the athlete tapping a button.
 **What settles.** A ``SessionLog`` that is, ALL of:
 
 1. ``status == PENDING``;
-2. has at least one ``LoggedSet`` — parsed (typed) or structured ("Save
-   progress"/"Log session"), the two are treated identically here, exactly as
-   every DONE-only reader already treats them once a log is DONE;
+2. has at least one ``LoggedSet`` — parsed (typed) or structured (legacy
+   history from the retired Set-row logger), the two are treated identically
+   here, exactly as every DONE-only reader already treats them once a log is
+   DONE;
 3. ``last_activity_at <= now - MESO_SETTLE_QUIET_HOURS`` (bumped by both
    athlete write paths on a real edit — see their own docstrings/comments);
 4. is the **newest** log for its ``(session, athlete)`` pair, by
@@ -49,8 +51,9 @@ rule once both locks are held; a stale candidate simply declines.
 - no notification (push/email) telling the athlete/coach a session settled;
 - no persisted "confirmed" snapshot distinct from ``SessionLog``/``LoggedSet``
   themselves (e.g. a ``PersonalRecord`` row) — PRs are still derived on read;
-- retiring the structured logger ("Save progress"/"Log session") now that
-  typed-then-quiet also counts — out of scope, a UX decision for later.
+- (The structured Set-row logger this once left in place was retired in #578
+  stage 4; typed-then-quiet and "Finish session" are the two ways a log
+  completes.)
 """
 
 import logging
@@ -149,7 +152,7 @@ def settle_log(pk, *, cutoff):
         # Re-read and re-verify EVERY settleable_logs() condition now that the
         # lock is held. The candidate list was built outside any transaction,
         # so anything could have happened to this exact row in the meantime: a
-        # blur bumped `last_activity_at`, "Log session" already completed it,
+        # blur bumped `last_activity_at`, "Finish session" already completed it,
         # a newer log for this (session, athlete) pair now exists, or its sets
         # were cleared. Any of those means "not settleable, right now" — leave
         # the row exactly as it is and let the next hourly pass re-judge it on

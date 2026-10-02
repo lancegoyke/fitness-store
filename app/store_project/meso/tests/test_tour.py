@@ -1540,7 +1540,7 @@ class TestSelfActionGoalLoadedCopy:
         results = _step(tour.build_config(coach, "self"), "results")
         assert results["loaded"] is False
         assert "Log your own sets" in results["body"]
-        assert "Log session" in results["body"]
+        assert "Finish session" in results["body"]
 
         s = _self_plan(coach, delivered=True)
         SessionLog.objects.create(
@@ -1565,7 +1565,7 @@ class TestSelfActionGoalLoadedCopy:
         assert "Log your own sets" in results["body"]
         # Typed lines (5a) also leave a pending log, so the copy must name the
         # button that finishes the step.
-        assert "Log session" in results["body"]
+        assert "Finish session" in results["body"]
 
 
 class TestActionSiteAutoAdvance:
@@ -1617,7 +1617,7 @@ class TestActionSiteAutoAdvance:
 
         client.post(
             reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
-            data=json.dumps({"sets": []}),
+            data=json.dumps({}),
             content_type="application/json",
         )
 
@@ -1633,7 +1633,7 @@ class TestActionSiteAutoAdvance:
 
         client.post(
             reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
-            data=json.dumps({"sets": [], "status": "pending"}),
+            data=json.dumps({"status": "pending"}),
             content_type="application/json",
         )
 

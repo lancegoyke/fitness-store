@@ -34,6 +34,7 @@ from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import ExerciseSlot
+from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.models import SessionSlot
@@ -923,17 +924,20 @@ class TestSoftDeletedRowsHidden:
         assert "Ghost Curl" not in body
         assert "Box Squat" in body
 
-    def test_logging_a_soft_deleted_prescription_is_rejected(self, client):
+    def test_typing_on_a_soft_deleted_prescription_is_rejected(self, client):
         s = seed()
         ghost = make_presc(s.session, name="Ghost Curl")
         ghost.exercise_slot.soft_delete()
         client.force_login(s.athlete)
-        resp = self._log_post(
-            client,
-            s.session,
-            {"sets": [{"prescription": ghost.pk, "reps": "8", "load": "60"}]},
+        resp = client.post(
+            reverse("meso:athlete_cell_write", kwargs={"pk": s.session.pk}),
+            data=json.dumps({"exercise_id": ghost.pk, "line": 1, "text": "60 x 8"}),
+            content_type="application/json",
         )
+        # `athlete_cell_write` only accepts this session's live line-0 cells
+        # (`session.cells()`), so a soft-deleted row is a 400 that writes nothing.
         assert resp.status_code == 400
+        assert not LoggedSet.objects.filter(prescription=ghost).exists()
         assert SessionLog.objects.count() == 0
 
     def test_one_rm_on_a_soft_deleted_prescription_is_rejected(self, client):
@@ -950,31 +954,22 @@ class TestSoftDeletedRowsHidden:
         )
         assert resp.status_code == 400
 
-    def test_resave_preserves_a_hidden_prescriptions_logged_sets(self, client):
+    def test_finishing_preserves_a_hidden_prescriptions_logged_sets(self, client):
         s = seed()
         ghost = make_presc(s.session, name="Ghost Curl")
         client.force_login(s.athlete)
-        resp = self._log_post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {"prescription": s.presc.pk, "reps": "6", "load": "70"},
-                    {"prescription": ghost.pk, "reps": "8", "load": "40"},
-                ]
-            },
-        )
-        assert resp.status_code == 200
+        for exercise, text in ((s.presc, "70 x 6"), (ghost, "40 x 8")):
+            resp = client.post(
+                reverse("meso:athlete_cell_write", kwargs={"pk": s.session.pk}),
+                data=json.dumps({"exercise_id": exercise.pk, "line": 1, "text": text}),
+                content_type="application/json",
+            )
+            assert resp.status_code == 200
 
-        # The coach removes Ghost Curl; the logger no longer shows it, so the
-        # athlete's next save posts only the surviving lift. The hidden row's
-        # already-logged set must NOT be wiped by the save's replace step.
+        # The coach removes Ghost Curl; finishing the session afterwards must
+        # not wipe the hidden row's already-logged set.
         ghost.exercise_slot.soft_delete()
-        resp = self._log_post(
-            client,
-            s.session,
-            {"sets": [{"prescription": s.presc.pk, "reps": "5", "load": "75"}]},
-        )
+        resp = self._log_post(client, s.session, {"status": "done"})
         assert resp.status_code == 200
 
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
@@ -983,4 +978,4 @@ class TestSoftDeletedRowsHidden:
         assert ghost_sets.get().reps == "8"
         live_sets = log.sets.filter(prescription=s.presc)
         assert live_sets.count() == 1
-        assert live_sets.get().reps == "5"
+        assert live_sets.get().reps == "6"

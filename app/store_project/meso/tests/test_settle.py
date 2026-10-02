@@ -1,13 +1,13 @@
 """24-hour settle sweep (5b, ``settle.py``) — flips a quiet PENDING log to DONE.
 
 5a made the athlete's typed "what you did" sub-lines create a PENDING
-``SessionLog`` with structured ``LoggedSet`` rows (parse-at-commit,
-``athlete_cell_write``), alongside the pre-existing structured "Save
-progress"/"Log session" path (``athlete_log_session``). Lots of Meso reads are
+``SessionLog`` with ``LoggedSet`` rows (parse-at-commit, ``athlete_cell_write``).
+The structured "Save progress"/"Log session" path is retired (#578 stage 4), but
+its legacy rows remain in the database. Lots of Meso reads are
 DONE-only (adherence, persisted 1RM, coach results, agent grounding), so a
 typed-then-abandoned session never counted anywhere but the athlete's own
 page. The sweep here promotes a PENDING log with at least one logged set (of
-either origin) to DONE once it has gone quiet — no athlete activity — for
+either origin: typed, or legacy structured) to DONE once it has gone quiet — no athlete activity — for
 ``MESO_SETTLE_QUIET_HOURS``.
 
 Reuses ``seed()``/``write_cell()``/``log_post()``/``the_log()``/``sub_cell()``
@@ -117,27 +117,26 @@ class TestSettleableLogs:
         log.refresh_from_db()
         assert log.status == SessionLog.Status.DONE
 
-    def test_settles_a_structured_only_save_progress_log(self, client):
+    def test_settles_a_legacy_structured_only_log(self, client):
         s = seed()
-        client.force_login(s.athlete)
-        log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "100",
-                        "rpe": "8",
-                    }
-                ],
-            },
+        # A pending log whose only set is a legacy structured row (source_line
+        # NULL) -- the retired Set-row logger wrote these, and the sweep still
+        # has to count them as "a logged set of either origin".
+        log = SessionLog.objects.create(
+            session=s.session,
+            athlete=s.athlete,
+            status=SessionLog.Status.PENDING,
+            date=timezone.localdate(),
         )
-        log = the_log(s.session, s.athlete)
-        assert log.status == SessionLog.Status.PENDING
+        LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            source_line=None,
+            set_number=1,
+            reps="5",
+            load="100",
+            rpe="8",
+        )
         assert log.sets.filter(source_line__isnull=True).exists()
         set_activity(log, quiet_since())
 
@@ -151,7 +150,7 @@ class TestSettleableLogs:
         log_post(
             client,
             s.session,
-            {"status": "pending", "notes": "felt off, skipped everything", "sets": []},
+            {"status": "pending", "notes": "felt off, skipped everything"},
         )
         log = the_log(s.session, s.athlete)
         assert log.sets.count() == 0
@@ -164,21 +163,8 @@ class TestSettleableLogs:
     def test_never_touches_done_logs(self, client):
         s = seed()
         client.force_login(s.athlete)
-        log_post(
-            client,
-            s.session,
-            {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "100",
-                    }
-                ],
-            },
-        )
+        write_cell(client, s.session, s.squat, 1, "100 x 5")
+        log_post(client, s.session, {"status": "done"})
         log = the_log(s.session, s.athlete)
         assert log.status == SessionLog.Status.DONE
         set_activity(log, quiet_since())
@@ -224,23 +210,8 @@ class TestSettleLeavesDataAlone:
     def test_does_not_change_date_notes_activity_or_any_logged_set(self, client):
         s = seed()
         client.force_login(s.athlete)
-        log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "notes": "left knee tight",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "100",
-                        "rpe": "8",
-                    }
-                ],
-            },
-        )
+        write_cell(client, s.session, s.squat, 1, "100 x 5, RPE 8")
+        log_post(client, s.session, {"status": "pending", "notes": "left knee tight"})
         log = the_log(s.session, s.athlete)
         stamp = quiet_since()
         set_activity(log, stamp)
@@ -517,7 +488,7 @@ class TestEndToEndWithWritePaths:
         set_activity(log, quiet_since())
         assert settle.settle_quiet_logs() == 1
 
-        log_post(client, s.session, {"status": "pending", "sets": []})
+        log_post(client, s.session, {"status": "pending"})
 
         log.refresh_from_db()
         assert log.status == SessionLog.Status.DONE
@@ -595,17 +566,17 @@ class TestActivityBumps:
     def test_log_session_bumps_for_both_pending_and_done(self, client):
         s = seed()
         client.force_login(s.athlete)
-        log_post(client, s.session, {"status": "pending", "sets": []})
+        log_post(client, s.session, {"status": "pending"})
         log = the_log(s.session, s.athlete)
         old = timezone.now() - timedelta(hours=10)
 
         set_activity(log, old)
-        log_post(client, s.session, {"status": "pending", "sets": []})
+        log_post(client, s.session, {"status": "pending"})
         log.refresh_from_db()
         assert log.last_activity_at > old + timedelta(hours=9)
 
         set_activity(log, old)
-        log_post(client, s.session, {"status": "done", "sets": []})
+        log_post(client, s.session, {"status": "done"})
         log.refresh_from_db()
         assert log.last_activity_at > old + timedelta(hours=9)
 
@@ -613,7 +584,7 @@ class TestActivityBumps:
         s = seed()
         client.force_login(s.athlete)
         before = timezone.now()
-        log_post(client, s.session, {"status": "pending", "sets": []})
+        log_post(client, s.session, {"status": "pending"})
         after = timezone.now()
 
         log = the_log(s.session, s.athlete)
@@ -695,20 +666,19 @@ class TestVisibleSurfacesAfterSettle:
         assert "Logged session" in body
 
     def test_first_log_hint_hides_after_a_settle(self, client):
+        # The first-log coachmark lives on the home page (the session page
+        # teaches logging inline), and keys on a COMPLETED log: a pending
+        # typed-only log keeps it, the settle that flips it DONE retires it.
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "100 x 5")
         log = the_log(s.session, s.athlete)
 
-        body = client.get(
-            reverse("meso:athlete_session", kwargs={"pk": s.session.pk})
-        ).content.decode()
-        assert 'data-coachmark-key="firstlog-session"' in body
+        body = client.get(reverse("meso:athlete_home")).content.decode()
+        assert 'data-coachmark-key="firstlog-home"' in body
 
         set_activity(log, quiet_since())
         settle.settle_quiet_logs()
 
-        body = client.get(
-            reverse("meso:athlete_session", kwargs={"pk": s.session.pk})
-        ).content.decode()
-        assert 'data-coachmark-key="firstlog-session"' not in body
+        body = client.get(reverse("meso:athlete_home")).content.decode()
+        assert 'data-coachmark-key="firstlog-home"' not in body

@@ -50,7 +50,6 @@ from store_project.meso.tests.test_deliver import deliver_url
 from store_project.meso.tests.test_deliver import seed_plan as deliver_seed_plan
 from store_project.meso.tests.test_parse_at_commit import log_post
 from store_project.meso.tests.test_parse_at_commit import seed as cell_seed
-from store_project.meso.tests.test_parse_at_commit import sub_cell
 from store_project.meso.tests.test_parse_at_commit import the_log
 from store_project.meso.tests.test_parse_at_commit import write_cell
 from store_project.meso.tests.test_plan_create import _aged_link
@@ -554,77 +553,27 @@ class TestSetLoggedTypedEvent:
 # ---------------------------------------------------------------------------
 
 
-class TestSetLoggedStructuredEvent:
-    def test_first_save_with_three_sets_gives_three_events(self, client):
-        s = log_seed()
-        client.force_login(s.athlete)
-        payload = {
-            "sets": sets_payload(s.squat, ("5", "225"), ("5", "225"), ("5", "225"))
-        }
-
-        resp = post_log(client, s.session, payload)
-        assert resp.status_code == 200
-
-        log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
-        rows = events(EventName.SET_LOGGED)
-        assert len(rows) == 3
-        assert all(r.props == {"via": "log"} for r in rows)
-        assert all(r.subject_id == str(log.pk) for r in rows)
-        assert all(r.subject_type == log._meta.label_lower for r in rows)
-        assert all(r.actor == s.athlete for r in rows)
-
-    def test_identical_resave_gives_no_more(self, client):
-        s = log_seed()
-        client.force_login(s.athlete)
-        payload = {"sets": sets_payload(s.squat, ("5", "225"))}
-        post_log(client, s.session, payload)
-
-        post_log(client, s.session, payload)
-
-        assert len(events(EventName.SET_LOGGED)) == 1
-
-    def test_one_extra_set_gives_one_more(self, client):
-        s = log_seed()
-        client.force_login(s.athlete)
-        post_log(client, s.session, {"sets": sets_payload(s.squat, ("5", "225"))})
-
-        post_log(
-            client,
-            s.session,
-            {"sets": sets_payload(s.squat, ("5", "225"), ("5", "230"))},
-        )
-
-        assert len(events(EventName.SET_LOGGED)) == 2
-
-    def test_reposting_a_typed_set_gives_no_more(self, client):
-        # Type a line (typed path creates it), then "Log session" with that
-        # exact set in the payload, the way the client would.
+class TestSetLoggedStructuredEventIsRetired:
+    def test_a_legacy_sets_payload_gives_no_set_logged_event(self, client):
+        # An old client replaying a queued "Log session" still posts ``sets``.
+        # The endpoint ignores them (no row, no ``set_logged``) and records one
+        # ``legacy_sets_ignored`` instead.
         s = cell_seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert len(events(EventName.SET_LOGGED)) == 1
-        cell = sub_cell(s.squat, 1)
-        typed_row = LoggedSet.objects.get(source_line=cell)
 
-        payload = {
-            "sets": [
-                {
-                    "prescription": s.squat.pk,
-                    "set_number": typed_row.set_number,
-                    "reps": typed_row.reps,
-                    "load": typed_row.load,
-                    "rpe": typed_row.rpe,
-                }
-            ]
-        }
+        payload = {"sets": sets_payload(s.squat, ("5", "225"))}
         resp = log_post(client, s.session, payload)
 
         assert resp.status_code == 200
         assert len(events(EventName.SET_LOGGED)) == 1
+        assert LoggedSet.objects.count() == 1
+        assert len(events(EventName.LEGACY_SETS_IGNORED)) == 1
 
 
 # ---------------------------------------------------------------------------
-# session_completed — structured "log" path
+# session_completed — the "log" path (Finish session)
 # ---------------------------------------------------------------------------
 
 
@@ -632,7 +581,7 @@ class TestSessionCompletedLogEvent:
     def test_log_session_gives_one_event(self, client):
         s = log_seed()
         client.force_login(s.athlete)
-        payload = {"sets": sets_payload(s.squat, ("5", "225"))}  # status defaults done
+        payload = {}  # status defaults done
 
         resp = post_log(client, s.session, payload)
         assert resp.status_code == 200
@@ -649,7 +598,7 @@ class TestSessionCompletedLogEvent:
     def test_repeat_log_session_gives_no_more(self, client):
         s = log_seed()
         client.force_login(s.athlete)
-        payload = {"sets": sets_payload(s.squat, ("5", "225"))}
+        payload = {}
         post_log(client, s.session, payload)
 
         post_log(client, s.session, payload)
@@ -659,15 +608,12 @@ class TestSessionCompletedLogEvent:
     def test_pending_save_gives_no_event_then_done_gives_one(self, client):
         s = log_seed()
         client.force_login(s.athlete)
-        pending = {
-            "status": "pending",
-            "sets": sets_payload(s.squat, ("5", "225")),
-        }
+        pending = {"status": "pending"}
 
         post_log(client, s.session, pending)
         assert events(EventName.SESSION_COMPLETED) == []
 
-        done = {"status": "done", "sets": sets_payload(s.squat, ("5", "225"))}
+        done = {"status": "done"}
         post_log(client, s.session, done)
 
         assert len(events(EventName.SESSION_COMPLETED)) == 1
@@ -747,7 +693,7 @@ class TestSessionCompletedSettleEvent:
         assert settle.settle_log(log.pk, cutoff=self._cutoff()) is True
         assert len(events(EventName.SESSION_COMPLETED)) == 1
 
-        resp = log_post(client, s.session, {"sets": []})
+        resp = log_post(client, s.session, {})
 
         assert resp.status_code == 200
         assert len(events(EventName.SESSION_COMPLETED)) == 1

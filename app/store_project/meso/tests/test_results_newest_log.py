@@ -32,9 +32,13 @@ pytestmark = pytest.mark.django_db
 
 
 def _athlete_set_rows(ctx, prescription):
-    """The non-blank (reps, load) pairs ``athlete_session`` shows for one row."""
+    """The read-only logged-set labels ``athlete_session`` shows for one row.
+
+    These fixtures build source-less (legacy structured) sets, which the page
+    lists as read-only history under the newest log.
+    """
     row = next(e for e in ctx["exercises"] if e["id"] == prescription.pk)
-    return [(r["reps"], r["load"]) for r in row["set_rows"] if r["reps"] or r["load"]]
+    return [r["label"] for r in row["logged_readonly"]]
 
 
 def _coach_logged_label(ctx, name):
@@ -94,7 +98,7 @@ class TestSessionResultsAgreesWithAthletePage:
         SessionLog.objects.filter(pk=log_b.pk).update(created_at=now)
 
         athlete_ctx = presenters.athlete_session(s.session, s.athlete)
-        assert _athlete_set_rows(athlete_ctx, s.squat) == [("3", "140")]
+        assert _athlete_set_rows(athlete_ctx, s.squat) == ["Set 1 · 140 kg × 3 · RPE 7"]
 
         coach_ctx = presenters.session_results(s.session)
         assert _coach_logged_label(coach_ctx, "Box Squat") == "1×3 @ 140 kg"
@@ -146,7 +150,7 @@ class TestSessionResultsAgreesWithAthletePage:
         )
 
         athlete_ctx = presenters.athlete_session(s.session, s.athlete)
-        assert _athlete_set_rows(athlete_ctx, s.squat) == [("3", "140")]
+        assert _athlete_set_rows(athlete_ctx, s.squat) == ["Set 1 · 140 kg × 3 · RPE 7"]
 
         coach_ctx = presenters.session_results(s.session)
         assert _coach_logged_label(coach_ctx, "Box Squat") == "1×3 @ 140 kg"

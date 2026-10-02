@@ -406,6 +406,17 @@ def post_one_rm(client, session, payload):
     )
 
 
+def type_line(client, session, exercise, line, text):
+    """Log a set the only way left: type it on a sub-line (``athlete_cell_write``)."""
+    resp = client.post(
+        reverse("meso:athlete_cell_write", kwargs={"pk": session.pk}),
+        data=json.dumps({"exercise_id": exercise.pk, "line": line, "text": text}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200, resp.content
+    return resp
+
+
 class TestLogEndpointRefreshesOneRm:
     def test_done_log_writes_the_estimate(self, client):
         athlete = UserFactory()
@@ -414,22 +425,10 @@ class TestLogEndpointRefreshesOneRm:
             prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         client.force_login(athlete)
-        resp = post_log(
-            client,
-            session,
-            {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": squat.pk,
-                        "set_number": 1,
-                        "reps": "1",
-                        "load": "150",
-                        "rpe": "9",
-                    }
-                ],
-            },
-        )
+        type_line(client, session, squat, 1, "150 x 1, RPE 9")
+        # A typed set alone leaves the log PENDING, so nothing is derived yet.
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+        resp = post_log(client, session, {"status": "done"})
         assert resp.status_code == 200
         row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
         assert row.value == Decimal("150.00")
@@ -440,22 +439,8 @@ class TestLogEndpointRefreshesOneRm:
             athlete, prescriptions=[{"name": "Back Squat"}]
         )
         client.force_login(athlete)
-        resp = post_log(
-            client,
-            session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": squat.pk,
-                        "set_number": 1,
-                        "reps": "3",
-                        "load": "120",
-                        "rpe": "8",
-                    }
-                ],
-            },
-        )
+        type_line(client, session, squat, 1, "120 x 3, RPE 8")
+        resp = post_log(client, session, {"status": "pending"})
         assert resp.status_code == 200
         assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
 
@@ -464,26 +449,17 @@ class TestLogEndpointRefreshesOneRm:
         # already-DONE log no longer downgrades it (the sweep can now flip a log
         # to DONE server-side, and a tab left open across that settle, or a
         # replayed offline-queued save, must not silently undo it; see
-        # ``athlete_log_session``'s docstring). This test used to pin the OLD
-        # behaviour (a downgrade cleared the estimate) — it now pins the
-        # opposite: the log stays DONE and the estimate survives.
+        # ``athlete_log_session``'s docstring). The log stays DONE and the
+        # estimate survives.
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
         )
         client.force_login(athlete)
-        sets = [
-            {
-                "prescription": squat.pk,
-                "set_number": 1,
-                "reps": "1",
-                "load": "150",
-                "rpe": "9",
-            }
-        ]
-        post_log(client, session, {"status": "done", "sets": sets})
+        type_line(client, session, squat, 1, "150 x 1, RPE 9")
+        post_log(client, session, {"status": "done"})
         assert AthleteOneRm.objects.filter(athlete=athlete).exists()
-        post_log(client, session, {"status": "pending", "sets": sets})
+        post_log(client, session, {"status": "pending"})
         log = SessionLog.objects.get(session=session, athlete=athlete)
         assert log.status == SessionLog.Status.DONE
         assert AthleteOneRm.objects.filter(athlete=athlete).exists()
@@ -494,40 +470,12 @@ class TestLogEndpointRefreshesOneRm:
             athlete, prescriptions=[{"name": "Back Squat"}]
         )
         client.force_login(athlete)
-        post_log(
-            client,
-            session,
-            {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": squat.pk,
-                        "set_number": 1,
-                        "reps": "1",
-                        "load": "150",
-                        "rpe": "9",
-                    }
-                ],
-            },
-        )
-        # The athlete corrects the log to a lighter set (the single log is replaced),
-        # so the recomputed estimate drops with it.
-        post_log(
-            client,
-            session,
-            {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": squat.pk,
-                        "set_number": 1,
-                        "reps": "1",
-                        "load": "120",
-                        "rpe": "8",
-                    }
-                ],
-            },
-        )
+        type_line(client, session, squat, 1, "150 x 1, RPE 9")
+        post_log(client, session, {"status": "done"})
+        # The athlete corrects the line to a lighter set (it replaces the row
+        # on that line), so the recomputed estimate drops with it.
+        type_line(client, session, squat, 1, "120 x 1, RPE 8")
+        post_log(client, session, {"status": "done"})
         row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
         assert row.value == Decimal("120.00")
 

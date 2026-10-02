@@ -57,8 +57,12 @@ from store_project.meso.models import SessionSlot
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
 from store_project.meso.one_rm import refresh_one_rms
+from store_project.meso.parsing import MAX_LOGGED_FIELD
 from store_project.meso.parsing import compose_prescription_text
+from store_project.meso.parsing import parse_performed
 from store_project.meso.parsing import parse_prescription
+from store_project.meso.parsing import performed_reps_text
+from store_project.meso.parsing import performed_text_shows
 from store_project.users.models import User
 
 DEFAULT_COACH_EMAIL = "lancegoyke@gmail.com"
@@ -1200,26 +1204,222 @@ def build_block(mesocycle, block_spec):
     return weeks_by_index
 
 
-def _logged_sets_from_cells(log, prescriptions):
-    """``LoggedSet`` rows derived from each cell's parsed prescription text.
+# Mirror of ``views.MAX_CELL_LINE`` (the deepest line a cell write accepts).
+# Not imported: ``views`` imports ``demo``, which imports this module, so a
+# module-level import here would be a cycle. ``test_demo_typed_origin`` pins the
+# two together.
+MAX_CELL_LINE = 20
 
-    Best-effort, mirroring ``parsing.parse_prescription``'s own contract (never
-    raises): a cell that doesn't fully parse still logs one set with whatever
-    reps/load/rpe *did* parse (blank where it didn't) rather than crashing — a
-    %1RM load token (``"72%"``, no absolute bar weight) logs with a blank load.
 
-    ``parse_prescription`` only classifies a cell's line 0 (see its own
-    docstring) — but the generator's cells (``_week_cell``) split RPE off
-    line 0 onto its own line-1 sub-line, so a generated cell's line 0 alone
-    never carries an RPE. Without recovering it from the sub-line, every
-    auto-logged set for a generated (non-hand-authored) cell would silently
-    log a blank RPE — the regression this sub-line lookup exists to fix.
+def sample_log_items(prescriptions):
+    """``SAMPLE_LOG`` as ``log_typed_sets`` items: ``(cell, [typed text, ...])``.
+
+    ``prescriptions`` maps exercise name -> line-0 cell (``session.cells()``);
+    an exercise the plan doesn't carry is left out, and so is a row the coach
+    skipped — a real blur on a skipped row writes no set
+    (``_upsert_parsed_set`` bails on ``skipped``). E.g. Box Squat's sets become
+    ``"70 x 6, RPE 7"`` x3 and ``"70 x 6, RPE 8.5"``; Standing Calf Raise
+    ``"60 x 15"``.
+    """
+    return [
+        (
+            prescriptions[name],
+            [typed_set_text(*triple) for triple in sets],
+        )
+        for name, sets in SAMPLE_LOG["sets"].items()
+        if name in prescriptions and not prescriptions[name].skipped
+    ]
+
+
+def typed_set_text(reps, load, rpe):
+    """The line an athlete would type for one performed set.
+
+    ``"70 x 6, RPE 7"``, ``"60 x 15"``, ``"BW x 12"``, ``"72% x 8, RPE 7"`` —
+    the shape ``parsing.parse_performed`` reads back as a ``set``. A blank
+    ``load`` with reps is a bodyweight set (``BW x reps``), because a bare
+    ``"8"`` parses as a *load* and ``"x 8"`` does not parse at all: ``BW`` is
+    the only typed spelling of reps-only. Reps-less sets keep just the load
+    (``"72%"``). Returns ``""`` when there is neither reps nor load.
+    """
+    reps = str(reps or "").strip()
+    load = str(load or "").strip()
+    rpe = str(rpe or "").strip()
+    if not reps and not load:
+        return ""
+    if reps:
+        text = f"{load or 'BW'} x {reps}"
+    else:
+        text = load
+    return f"{text}, RPE {rpe}" if rpe else text
+
+
+def log_typed_sets(log, items):
+    """Write sets the way an athlete's TYPED lines do (#578 stage 4).
+
+    ``items`` is an iterable of ``(line_zero_cell, [typed_text, ...])``. For
+    each text this creates what ``views._upsert_parsed_set`` creates for a
+    real blur — so the demo's logged sessions look like a real athlete's log
+    in the designer's athlete-line marker, the coach's results, and the
+    athlete page (the Set-row logger that used to write structured-origin rows
+    is retired; the athlete logs by typing a line):
+
+    * a sub-line cell ``Prescription(exercise_slot=<line-0 slot>,
+      week=<line-0 week>, line=L >= 1, text=<typed>, athlete_authored=True)``;
+    * a ``LoggedSet(session_log=log, prescription=<line-0 cell>,
+      exercise_slot_id=<line-0 slot>, source_line=<that cell>, set_number=L,
+      unit=<plan unit>, reps/load/rpe=<re-parsed from the text>)``. The three
+      values come from ``parse_performed`` on the text, exactly like the real
+      path, so ``performed_text_shows`` holds by construction (checked; a
+      mismatch raises rather than seeding an unshown stray row).
+
+    Athlete lines take the lowest line numbers >= 1 that are *free* for the
+    ``(exercise_slot, week)``: no cell there, a blank one, or one already
+    ``athlete_authored`` (so a rerun reuses its own lines). A non-blank
+    coach-authored sub-line — the generator's RPE cue on line 1 — is never
+    overwritten. Lines stop at ``MAX_CELL_LINE``; a text that is not a ``set``
+    with reps or load (the typed path writes no ``LoggedSet`` for it) gets
+    neither a cell nor a set. ``set_number`` is the line number unless the log
+    already holds that number for the prescription, in which case it takes the
+    next free one, as the typed path's ``_first_free_set_number`` does.
+
+    Call it on a log that holds no sets for these cells yet — every caller
+    gates on ``log.sets.exists()`` (or deletes them first). Unlike a re-blur,
+    a second call does not replace the rows the first one wrote; it appends.
+
+    Query cost is constant in the number of items (one read of the existing
+    sub-lines, one bulk write each for new cells / reused cells / sets), so the
+    history loop stays cheap. Returns the created ``LoggedSet`` list.
+    """
+    items = [(cell, texts) for cell, texts in items if texts]
+    if not items:
+        return []
+    unit = log.session.week.mesocycle.plan.unit
+
+    keys = {(cell.exercise_slot_id, cell.week_id) for cell, _ in items}
+    existing = {}
+    for sub in Prescription.objects.filter(
+        exercise_slot_id__in={k[0] for k in keys},
+        week_id__in={k[1] for k in keys},
+        line__gte=1,
+    ):
+        existing.setdefault((sub.exercise_slot_id, sub.week_id), {})[sub.line] = sub
+
+    taken_by_prescription = {}
+    for prescription_id, set_number in log.sets.filter(
+        prescription_id__in=[cell.pk for cell, _ in items]
+    ).values_list("prescription_id", "set_number"):
+        taken_by_prescription.setdefault(prescription_id, set()).add(set_number)
+
+    to_create = []
+    to_update = []
+    planned = []  # (line_zero, line, text, values)
+    for line_zero, texts in items:
+        cells = existing.setdefault((line_zero.exercise_slot_id, line_zero.week_id), {})
+        free_lines = (
+            line
+            for line in range(1, MAX_CELL_LINE + 1)
+            if line not in cells
+            or not cells[line].text.strip()
+            or cells[line].athlete_authored
+        )
+        for text in texts:
+            parsed = parse_performed(text)
+            if not (
+                parsed
+                and parsed.get("kind") == "set"
+                and (parsed.get("reps") or parsed.get("load"))
+            ):
+                continue
+            values = (
+                performed_reps_text(parsed),
+                str(parsed.get("load", "")),
+                str(parsed.get("rpe", "")),
+            )
+            if not performed_text_shows(
+                text, reps=values[0], load=values[1], rpe=values[2]
+            ) or any(len(v) > MAX_LOGGED_FIELD for v in values):
+                raise ValueError(f"typed seed text {text!r} does not round-trip")
+            line = next(free_lines, None)
+            if line is None:
+                break
+            cell = cells.get(line)
+            if cell is None:
+                cell = Prescription(
+                    exercise_slot_id=line_zero.exercise_slot_id,
+                    week_id=line_zero.week_id,
+                    line=line,
+                    text=text,
+                    athlete_authored=True,
+                )
+                to_create.append(cell)
+                cells[line] = cell
+            else:
+                cell.text = text
+                cell.athlete_authored = True
+                to_update.append(cell)
+            planned.append((line_zero, cell, values))
+
+    if to_create:
+        Prescription.objects.bulk_create(to_create)
+        # Re-read for pks: not every backend returns them from bulk_create.
+        pks = {
+            (sub.exercise_slot_id, sub.week_id, sub.line): sub.pk
+            for sub in Prescription.objects.filter(
+                exercise_slot_id__in={c.exercise_slot_id for c in to_create},
+                week_id__in={c.week_id for c in to_create},
+                line__gte=1,
+            )
+        }
+        for cell in to_create:
+            cell.pk = pks[(cell.exercise_slot_id, cell.week_id, cell.line)]
+    if to_update:
+        Prescription.objects.bulk_update(to_update, ["text", "athlete_authored"])
+
+    rows = []
+    for line_zero, cell, (reps, load, rpe) in planned:
+        taken = taken_by_prescription.setdefault(line_zero.pk, set())
+        set_number = cell.line
+        while set_number in taken:
+            set_number += 1
+        taken.add(set_number)
+        rows.append(
+            LoggedSet(
+                session_log=log,
+                prescription=line_zero,
+                # #578 C1: written alongside `prescription`, not instead of it
+                # — see `LoggedSet.exercise_slot`'s model comment.
+                exercise_slot_id=line_zero.exercise_slot_id,
+                source_line=cell,
+                set_number=set_number,
+                reps=reps,
+                load=load,
+                unit=unit,
+                rpe=rpe,
+            )
+        )
+    return LoggedSet.objects.bulk_create(rows)
+
+
+def _typed_set_texts_from_cells(prescriptions):
+    """Per cell, the lines an athlete following the prescription would type.
+
+    Returns ``[(prescription, [text, ...]), ...]`` for ``log_typed_sets`` —
+    one text per prescribed set, built from the cell's parsed line 0 with
+    ``typed_set_text``. Best-effort, mirroring ``parsing.parse_prescription``'s
+    never-raises contract: reps are the parsed reps, else the LOWER bound of a
+    reps range; the load is the parsed load *including* a ``%`` token (an
+    athlete following ``72%`` types ``72% x 8``); a cell with neither reps nor
+    load yields nothing.
+
+    ``parse_prescription`` only classifies a cell's line 0 — but the
+    generator's cells (``_week_cell``) split RPE off line 0 onto its own
+    line-1 sub-line, so a generated cell's line 0 alone never carries an RPE.
+    Without recovering it from the sub-line the typed set would drop it.
     Hand-authored cells that still pack RPE inline on line 0 are unaffected
     (line 0's RPE wins when present). One query fetches every prescription's
     sub-lines up front, keyed by ``(exercise_slot_id, week_id)``, instead of
     one query per cell (N+1).
     """
-    unit = log.session.week.mesocycle.plan.unit
     sub_lines_by_cell = {}
     if prescriptions:
         slot_ids = {p.exercise_slot_id for p in prescriptions}
@@ -1231,19 +1431,15 @@ def _logged_sets_from_cells(log, prescriptions):
             key = (sub_line.exercise_slot_id, sub_line.week_id)
             sub_lines_by_cell.setdefault(key, []).append(sub_line)
 
-    rows = []
+    out = []
     for prescription in prescriptions:
         parsed = parse_prescription(prescription.text) or {}
         sets_count = parsed.get("sets") or 1
         reps = parsed.get("reps")
         if reps is None:
             reps_range = parsed.get("reps_range")
-            reps_text = f"{reps_range[0]}-{reps_range[1]}" if reps_range else ""
-        else:
-            reps_text = str(reps)
+            reps = reps_range[0] if reps_range else ""
         load = parsed.get("load") or ""
-        if load.endswith("%"):
-            load = ""  # a %1RM token isn't a bar weight — leave blank, not crash
         rpe = parsed.get("rpe") or ""
         if not rpe:
             # Line 0 didn't carry one — fall through to the sub-lines
@@ -1254,22 +1450,10 @@ def _logged_sets_from_cells(log, prescriptions):
                 if sub_rpe:
                     rpe = sub_rpe
                     break
-        for set_number in range(1, sets_count + 1):
-            rows.append(
-                LoggedSet(
-                    session_log=log,
-                    prescription=prescription,
-                    # #578 C1: written alongside `prescription`, not instead
-                    # of it — see `LoggedSet.exercise_slot`'s model comment.
-                    exercise_slot_id=prescription.exercise_slot_id,
-                    set_number=set_number,
-                    reps=reps_text,
-                    load=load,
-                    unit=unit,
-                    rpe=rpe,
-                )
-            )
-    return rows
+        text = typed_set_text(reps, load, rpe)
+        if text:
+            out.append((prescription, [text] * sets_count))
+    return out
 
 
 class Command(BaseCommand):
@@ -1614,9 +1798,8 @@ class Command(BaseCommand):
                 if not created and log.sets.exists():
                     continue
                 log.sets.all().delete()
-                LoggedSet.objects.bulk_create(
-                    _logged_sets_from_cells(log, prescriptions)
-                )
+                # Typed-origin, like a real athlete's log (#578 stage 4).
+                log_typed_sets(log, _typed_set_texts_from_cells(prescriptions))
 
         if logged_prescriptions:
             refresh_one_rms(athlete, logged_prescriptions, plan.unit)
@@ -1634,7 +1817,9 @@ class Command(BaseCommand):
         Idempotent: the week is delivered once (the coach workflow's step
         order, not a gate — 2d), and the ``SessionLog`` + ``LoggedSet`` rows are
         created only if absent, so a reseed never duplicates or clobbers a hand-
-        edited log. Returns None if the plan's hierarchy isn't present.
+        edited log. The sets are written typed-origin (``log_typed_sets``): the
+        athlete logs by typing a line (#578 stage 4), so the sample session is
+        athlete-authored sub-line cells plus the ``LoggedSet`` each one derives. Returns None if the plan's hierarchy isn't present.
         """
         session = (
             Session.objects.filter(
@@ -1669,28 +1854,7 @@ class Command(BaseCommand):
             self.stdout.write("  - sample logged session present; left intact")
         else:
             log.sets.all().delete()
-            rows = []
-            for name, sets in SAMPLE_LOG["sets"].items():
-                prescription = prescriptions.get(name)
-                if prescription is None:
-                    continue
-                for set_number, (reps, load, rpe) in enumerate(sets, start=1):
-                    rows.append(
-                        LoggedSet(
-                            session_log=log,
-                            prescription=prescription,
-                            # #578 C1: written alongside `prescription`, not
-                            # instead of it — see `LoggedSet.exercise_slot`'s
-                            # model comment.
-                            exercise_slot_id=prescription.exercise_slot_id,
-                            set_number=set_number,
-                            reps=reps,
-                            load=load,
-                            unit=plan.unit,
-                            rpe=rpe,
-                        )
-                    )
-            LoggedSet.objects.bulk_create(rows)
+            log_typed_sets(log, sample_log_items(prescriptions))
             self.stdout.write(
                 f"  - logged sample session '{session.name}' for {athlete.name}"
             )

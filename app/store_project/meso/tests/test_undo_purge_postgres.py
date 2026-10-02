@@ -180,7 +180,7 @@ class TestPurgeSparesACellALoggedSetCommitsMidUndo:
             # so flipping it here would spare the cell on its own and this
             # test would pass whether or not the `LoggedSet` re-check under
             # the lock works — the one thing it exists to prove. Text-only is
-            # also a real shape: `athlete_log_session`'s reclaim writes a
+            # also a real shape: a coach's reclaim (`cell_line_write`) writes a
             # sub-line's text while leaving it coach-owned (#541), with the
             # set's link the only thing naming the cell. With the flag out of
             # play, the ONLY thing that can save this cell is the purge
@@ -329,8 +329,8 @@ class TestPlanLockSerializesARealAthleteWriteAgainstThePurge:
 
         def athlete_plan_then_session_lock_then_log_and_commit():
             # Thread A: the REAL shape this time — Plan, then Session, then
-            # the `LoggedSet` insert. This is `athlete_log_session`'s
-            # shape specifically: the cell itself is never written at all,
+            # the `LoggedSet` insert. This is the typed path's
+            # (`athlete_cell_write` -> `_upsert_parsed_set`) shape specifically: the cell itself is never written at all,
             # only pointed at by the set's `source_line`/`prescription` —
             # proof that it's the outer Plan lock doing the serializing here,
             # not an incidental lock on the cell row itself (there isn't

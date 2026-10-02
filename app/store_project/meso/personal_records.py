@@ -101,9 +101,9 @@ def _live_logged_sets(athlete, *, unit):
 
     Unlike ``one_rm.derive_one_rm_values``'s query (which this used to mirror
     exactly, DONE-only), this one is deliberately **not** status-filtered
-    (5a, plan §7): a PENDING "Save progress"/parse-at-commit draft counts
-    toward the *live* best, because there is no "I'm done" button anymore —
-    only a 24 h settle (5b) that later promotes a live best into the
+    (5a, plan §7): a PENDING (typed, not yet finished) draft counts
+    toward the *live* best, because an athlete need never tap "Finish
+    session" — a 24 h settle (5b) later promotes a live best into the
     persisted, confirmed ``AthleteOneRm``. A bare logged load is still
     denominated in its plan's unit, so kg and lb sets for one lift must never
     pool — that scoping is unchanged.

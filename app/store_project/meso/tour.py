@@ -175,7 +175,7 @@ STEPS = [
         "self": {
             "title": "What actually happened",
             "body": "Log your own sets from your phone at /meso/me/, then tap "
-            "Log session. Sets, adherence, and estimated 1RM flow back here "
+            "Finish session. Sets, adherence, and estimated 1RM flow back here "
             "the moment you do.",
             "body_done": "Your session is logged — here are the sets, adherence, "
             "and estimated 1RM flowing back.",
@@ -544,8 +544,8 @@ _SELF_LOADED_BY_STEP = {
 
 #: self step key → the completion predicate its action-completion advance must
 #: gate on. ``plan_deliver`` / ``athlete_log_session`` are also hit when a coach
-#: delivers/logs for the athletes they *coach* (not their own self plan), and the
-#: logger can save a ``pending`` draft — so the advance may only fire once the
+#: delivers/logs for the athletes they *coach* (not their own self plan), and a
+#: typed line saves a ``pending`` log before "Finish session" — so the advance may only fire once the
 #: coach's *own* step data exists, matching the ``loaded`` display (Codex #441
 #: P3-5). Steps whose action can only produce the coach's own data
 #: (welcome/designer/agent) need no gate — their endpoint implies it.

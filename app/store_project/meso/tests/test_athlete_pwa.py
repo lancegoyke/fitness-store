@@ -179,7 +179,7 @@ class TestOfflineReplayIsIdempotent:
 
     The client's offline queue stashes failed saves and flushes them on
     reconnect; if the same save was also retried online, the endpoint sees the
-    payload twice. Re-posting must converge to one log with the replayed sets.
+    payload twice. Re-posting must converge to one log with the replayed status and date.
     """
 
     def test_double_post_yields_one_log(self, client):
@@ -189,22 +189,6 @@ class TestOfflineReplayIsIdempotent:
         payload = {
             "status": "done",
             "date": "2026-06-20",
-            "sets": [
-                {
-                    "prescription": presc.pk,
-                    "set_number": 1,
-                    "reps": "6",
-                    "load": "72",
-                    "rpe": "8",
-                },
-                {
-                    "prescription": presc.pk,
-                    "set_number": 2,
-                    "reps": "6",
-                    "load": "72",
-                    "rpe": "8",
-                },
-            ],
         }
         first = client.post(
             url, data=json.dumps(payload), content_type="application/json"
@@ -220,4 +204,3 @@ class TestOfflineReplayIsIdempotent:
         log = logs.get()
         assert log.status == SessionLog.Status.DONE
         assert log.date.isoformat() == "2026-06-20"
-        assert log.sets.count() == 2

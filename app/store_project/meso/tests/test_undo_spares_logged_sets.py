@@ -52,6 +52,7 @@ from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
+from store_project.meso.models import SessionLog
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests.test_parse_at_commit import reclaim
 from store_project.meso.tests.test_parse_at_commit import seed
@@ -95,24 +96,31 @@ def _write_line(client, plan, slot, week, *, line, text):
     )
 
 
-def _log_one_set(client, session, cell):
-    return client.post(
-        reverse("meso:athlete_log_session", kwargs={"pk": session.pk}),
-        data=json.dumps(
-            {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": cell.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "225",
-                        "rpe": "8",
-                    }
-                ],
-            }
-        ),
-        content_type="application/json",
+def _log_one_set(athlete, session, cell):
+    """A DONE log with one legacy structured set filed under ``cell``.
+
+    The retired Set-row logger wrote exactly this shape (``source_line`` NULL,
+    ``prescription`` = the line-0 cell); such rows are legacy data still in the
+    database. The typed path files a set under the same cell but ALSO points
+    ``source_line`` at the sub-line, which the purge spares through a different
+    clause (``parsed_sets``) -- so only a legacy row exercises the
+    ``logged_sets`` clause these tests are about.
+    """
+    log, _ = SessionLog.objects.get_or_create(
+        session=session,
+        athlete=athlete,
+        defaults={"status": SessionLog.Status.DONE, "date": timezone.localdate()},
+    )
+    return LoggedSet.objects.create(
+        session_log=log,
+        prescription=cell,
+        exercise_slot_id=cell.exercise_slot_id,
+        source_line=None,
+        reclaimed_line=None,
+        set_number=1,
+        reps="5",
+        load="225",
+        rpe="8",
     )
 
 
@@ -137,7 +145,7 @@ class TestUndoSparesACellALoggedSetPointsAt:
         cell = Prescription.objects.get(exercise_slot=slot, week=week, line=0)
 
         client.force_login(athlete)
-        assert _log_one_set(client, session, cell).status_code == 200
+        _log_one_set(athlete, session, cell)
         row = LoggedSet.objects.get(
             session_log__session=session, session_log__athlete=athlete
         )
@@ -199,7 +207,7 @@ class TestUndoSparesACellALoggedSetPointsAt:
             exercise_slot=other, week=week, line=0, text="3 x 10"
         )
         client.force_login(athlete)
-        assert _log_one_set(client, session, other_cell).status_code == 200
+        _log_one_set(athlete, session, other_cell)
         kept = LoggedSet.objects.get(prescription=other_cell)
 
         before_the_cell = history.serialize_plan_snapshot(plan)

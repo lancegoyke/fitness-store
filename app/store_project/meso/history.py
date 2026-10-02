@@ -175,7 +175,7 @@ def _cells_athlete_data_points_at(pks):
     the line-0 cell every logged set is filed under, whatever its origin,
     #577), ``source_line`` (``parsed_sets`` — the sub-line a typed set was
     parsed from, 5a), or ``reclaimed_line`` (``reclaimed_sets`` — #541's hint
-    linking a structured "Log session" copy back to the sub-line it replaced).
+    linking a structured copy, left by the retired Set-row logger, back to the sub-line it replaced).
     ``athlete_authored`` is deliberately NOT folded in here: it is a plain
     field on the cell itself, cheaper for each caller to read directly off an
     instance it already has (or to re-check separately, alongside this call,
@@ -622,14 +622,15 @@ def restore_plan_snapshot(plan, snapshot):
     # RECLAIMED sub-line is ``athlete_authored=False``, so undoing back past its
     # creation hard-deleted it — and ``LoggedSet.source_line`` is SET_NULL, so
     # the athlete's derived set survived as a source-LESS row. That strips the
-    # protection the link carries (the structured logger's replace-delete spares
-    # a parsed row it didn't post for, but cannot recognise one whose link is
-    # gone), and the next ordinary save destroyed an earned performance. Undo
+    # protection the link carries (the structured logger's replace-delete — since
+    # retired, #578 stage 4 — spared a parsed row it didn't post for, but could
+    # not recognise one whose link was gone), and the next ordinary save
+    # destroyed an earned performance. Undo
     # already refuses to touch athlete data; a cell some athlete data POINTS AT
     # is the same promise one join away.
     #
     # ``reclaimed_sets`` (#541) is that same promise for a THIRD kind of
-    # pointer: a structured copy a "Log session" left behind still names this
+    # pointer: a structured copy the retired Set-row logger left behind still names this
     # cell via ``reclaimed_line``, with no ``source_line`` of its own — a cell
     # a structured copy still answers to is athlete data pointing at it too.
     #
@@ -654,7 +655,7 @@ def restore_plan_snapshot(plan, snapshot):
     # depends on: losing ``source_line`` breaks how a re-blur of a sub-line
     # finds and replaces its own derived row rather than minting a twin
     # (a *present* ``source_line`` is what the lookup keys on), and a missing
-    # ``reclaimed_line`` loses #541's hint linking a structured "Log session"
+    # ``reclaimed_line`` loses #541's hint linking a structured (legacy)
     # copy back to the sub-line it replaced. Losing either is a live bug in
     # the write path itself, wholly apart from whether the set still counts —
     # so this clause is defense in depth for ``logged_sets`` now, not the

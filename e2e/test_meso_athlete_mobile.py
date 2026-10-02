@@ -136,41 +136,36 @@ def test_athlete_opens_a_session_from_home(
     _assert_tap_targets(page, viewport)
 
     # iOS Safari zooms the page when an input under 16px takes focus. Every
-    # input here — the %1RM box, the typed sub-lines, load/reps/rpe — is 16px.
+    # input here — the typed "what you did" lines, the %1RM box — is 16px.
     sizes = page.evaluate(INPUT_FONT_SIZES_JS)
-    kinds = {s["label"] for s in sizes}
-    assert {"load", "reps", "rpe"} <= kinds and len(sizes) > 10, sizes
+    assert len(sizes) > 3, sizes
     small_inputs = [s for s in sizes if s["size"] < 16]
     assert small_inputs == [], f"inputs that make iOS zoom on focus: {small_inputs}"
 
-    # A realistic set typed into the first row stays readable: every value is
-    # fully visible in its box, and the %1RM estimate it produces (Back Squat
-    # is prescribed at 70%) fits beside or below the row without pushing
-    # anything off screen.
-    first_set = squat.locator(".meso-set-row").first
-    for placeholder, value in (("load", "102.5"), ("reps", "10"), ("rpe", "8.5")):
-        first_set.get_by_placeholder(placeholder).fill(value)
-    expect(first_set.get_by_text("1RM ≈")).to_be_visible()
-    hidden_text = first_set.locator("input").evaluate_all(
-        "(inputs) => inputs.filter((el) => el.scrollWidth > el.clientWidth)"
-        ".map((el) => `${el.placeholder}: ${el.value}`)"
-    )
-    assert hidden_text == [], f"typed values cut off in their boxes: {hidden_text}"
+    # The Set rows are retired: the only way to log is a typed line.
+    expect(page.locator(".meso-set-row")).to_have_count(0)
+
+    # A realistic typed line stays readable: the whole value is visible in its
+    # box, and nothing is pushed off screen.
+    first_line = squat.get_by_test_id("sub-line-input").nth(1)
+    first_line.fill("102.5 x 10, RPE 8.5")
+    cut_off = first_line.evaluate("(el) => el.scrollWidth > el.clientWidth")
+    assert not cut_off, "typed line is cut off in its box"
     shot("02-set-typed")
     _assert_fits_down_to_320(page, viewport)
 
-    # "Log session" is a full-size button the athlete can actually reach:
+    # "Finish session" is a full-size button the athlete can actually reach:
     # tall enough to hit, and nothing is laid over it once it's scrolled to.
-    log_button = page.get_by_test_id("session-log")
+    log_button = page.get_by_test_id("session-finish")
     log_button.scroll_into_view_if_needed()
     box = log_button.bounding_box()
     if viewport["is_phone"]:
-        assert box["height"] >= MIN_TAP, f"Log session is {box['height']}px tall"
+        assert box["height"] >= MIN_TAP, f"Finish session is {box['height']}px tall"
     on_top = page.evaluate(
         """([x, y]) => {
           const el = document.elementFromPoint(x, y);
-          return !!el && !!el.closest('[data-testid="session-log"]');
+          return !!el && !!el.closest('[data-testid="session-finish"]');
         }""",
         [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2],
     )
-    assert on_top, "something covers the Log session button"
+    assert on_top, "something covers the Finish session button"

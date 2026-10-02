@@ -471,64 +471,6 @@ def diff_week_snapshots(current, previous):
     }
 
 
-def serialize_session_log(log, client_ids=None):
-    """The athlete's saved log for a session, in the shape the log endpoint returns.
-
-    Echoes back what was persisted (status/date/notes + the logged sets) so the
-    athlete's logger can confirm the write and the page can re-hydrate on reload.
-
-    **Visible rows only.** This is the structured logger's own view of itself:
-    the client's ``syncFromLog`` maps each set onto a ``(prescription,
-    set_number)`` input row. A parse-at-commit set (5a) that still renders as
-    its sub-line's text would make the logger mark a set done that nobody
-    posted, and let the next save persist a blank duplicate on top of it — the
-    same no-double-display rule ``athlete_session`` applies to ``set_rows``
-    (plan §6), enforced on the write path's response too.
-
-    Excluded via ``models.parsed_set_is_hidden`` — the one predicate shared
-    with the presenter and the logger's replace-delete. Once the source line
-    stops showing a performance (the coach reclaims and rewrites it), that set
-    is a real logged row again and belongs in the logger. Computed set-wise
-    (``models.hidden_parsed_set_pks``, #561) rather than per row: a coach undo
-    can leave a row displayed only through ``reclaimed_line``, and the
-    one-row-per-line ranking that answers for a copy needs every row that
-    could be displayed by the same line, not just this one.
-
-    ``client_ids`` (#567, row identity): an optional ``{LoggedSet.pk:
-    client_id}`` map for the rows THIS save created from a posted
-    ``client_id`` — a grid row the client minted locally because it had no
-    server row yet. Round-tripping it back is how that row learns the id it
-    must post from now on, without a full reload; every other read of this
-    serializer (a plain page load, a save that named the row by its own
-    existing ``id``) has nothing to report and leaves it ``None``, same as any
-    row this save's map doesn't mention.
-    """
-    rows = list(
-        log.sets.select_related("source_line", "reclaimed_line").order_by("set_number")
-    )
-    hidden_pks = models.hidden_parsed_set_pks(rows)
-    client_ids = client_ids or {}
-    return {
-        "id": log.pk,
-        "status": log.status,
-        "date": log.date.isoformat() if log.date else None,
-        "notes": log.notes,
-        "sets": [
-            {
-                "id": s.pk,
-                "prescription": s.prescription_id,
-                "set_number": s.set_number,
-                "reps": s.reps,
-                "load": s.load,
-                "rpe": s.rpe,
-                "client_id": client_ids.get(s.pk),
-            }
-            for s in rows
-            if s.pk not in hidden_pks
-        ],
-    }
-
-
 def serialize_new_record(record):
     """A ``personal_records.NewRecord`` as the display dict the PR surface reads.
 
@@ -685,7 +627,7 @@ def last_logged_labels(plan, prescriptions, unit):
 
     For every rendered prescription, find the athlete's most recent *completed*
     logged sets for that lift (by exercise identity) anywhere on this plan and
-    summarize them. Only ``DONE`` logs count — a pending "Save progress" draft is
+    summarize them. Only ``DONE`` logs count — a pending draft (lines typed, session not finished) is
     a partial session, not the athlete's last performance (the results screen
     treats it the same way). One query over the plan's logged sets — no per-row
     lookups; a lift the athlete has never logged is simply absent from the map.
@@ -1070,7 +1012,7 @@ def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
     unit, else the plan's.
 
     A set stands behind a line by the same rule as ``models.display_line_id``
-    (its ``source_line``, else the ``reclaimed_line`` a "Log session" left,
+    (its ``source_line``, else the ``reclaimed_line`` the retired Set-row logger left,
     #665), so the line needs ``parsed_sets`` and ``reclaimed_sets`` prefetched.
     ``log_id`` is the cell session's newest ``SessionLog`` (see
     ``models.newest_session_log_ids``): sets from any older log are ignored.

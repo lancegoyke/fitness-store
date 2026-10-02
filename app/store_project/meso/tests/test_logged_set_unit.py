@@ -53,19 +53,12 @@ def test_logged_set_unit_is_stamped_and_survives_a_plan_unit_change(client):
     fixture = logged_session()
     client.force_login(fixture.link.athlete)
     response = client.post(
-        reverse("meso:athlete_log_session", kwargs={"pk": fixture.session.pk}),
+        reverse("meso:athlete_cell_write", kwargs={"pk": fixture.session.pk}),
         data=json.dumps(
             {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": fixture.cell.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": fixture.load,
-                        "rpe": "8",
-                    }
-                ],
+                "exercise_id": fixture.cell.pk,
+                "line": 1,
+                "text": f"{fixture.load} x 5, RPE 8",
             }
         ),
         content_type="application/json",

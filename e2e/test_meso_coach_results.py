@@ -1,8 +1,8 @@
 """Coach journey: the athlete's logged set shows up on the results page (#506).
 
 The log is produced through the exact endpoints the athlete's own UI calls —
-POST the cell, then POST the log exactly as "Log session" sends it (`{status:
-"done", sets: []}`, no structured set rows filled) — via the Django test
+POST the cell, then POST the log exactly as "Finish session" sends it
+(`{status: "done"}`) — via the Django test
 client logged in as the athlete, not by driving the athlete's browser a
 second time (`test_meso_athlete_logging.py` already covers that journey).
 Real server code produces the data either way; this keeps the coach

@@ -213,62 +213,22 @@ class TestParsedSetUpsert:
 # -- collision between the two write paths -----------------------------------
 
 
-class TestStructuredAndFreeformCollision:
-    def test_freeform_then_structured_save_survives(self, client):
+class TestLegacyStructuredAndFreeformCoexist:
+    def test_legacy_structured_then_freeform_write_survives(self, client):
         s = seed()
         client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-        cell = sub_cell(s.squat, 1)
-        parsed_pk = LoggedSet.objects.get(source_line=cell).pk
-
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.rdl.pk,
-                        "set_number": 1,
-                        "reps": "8",
-                        "load": "80",
-                        "rpe": "8",
-                    }
-                ]
-            },
-        )
-        assert resp.status_code == 200
-
-        log = the_log(s.session, s.athlete)
-        # The parsed set survives untouched...
-        parsed = LoggedSet.objects.get(pk=parsed_pk)
-        assert parsed.source_line_id == cell.pk
-        assert parsed.load == "225"
-        # ...the structured set was created alongside it, no duplicate.
-        structured = LoggedSet.objects.get(source_line__isnull=True, session_log=log)
-        assert structured.prescription_id == s.rdl.pk
-        assert LoggedSet.objects.filter(session_log=log).count() == 2
-
-    def test_structured_then_freeform_write_survives(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        log_post(
-            client,
-            s.session,
-            {
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "6",
-                        "load": "70",
-                        "rpe": "7",
-                    }
-                ]
-            },
-        )
-        log = the_log(s.session, s.athlete)
-        structured_pk = LoggedSet.objects.get(
-            session_log=log, source_line__isnull=True
+        # A legacy structured row (source_line NULL): the retired logger wrote
+        # these, and they are still in the database.
+        log = SessionLog.objects.create(session=s.session, athlete=s.athlete)
+        structured_pk = LoggedSet.objects.create(
+            session_log=log,
+            prescription=s.squat,
+            exercise_slot_id=s.squat.exercise_slot_id,
+            source_line=None,
+            set_number=1,
+            reps="6",
+            load="70",
+            rpe="7",
         ).pk
 
         resp = write_cell(client, s.session, s.rdl, 1, "80 x 8")
@@ -284,19 +244,17 @@ class TestStructuredAndFreeformCollision:
         assert parsed.reps == "8"
         assert LoggedSet.objects.filter(session_log=log).count() == 2
 
-    def test_structured_save_progress_does_not_wipe_parsed_sets(self, client):
-        # The critical regression this stage guards against: the structured
-        # logger's delete used to be scoped to ``prescription_id__in=trainable
-        # cells`` only — and a parsed set's ``prescription`` IS a trainable
-        # line-0 cell, so an unrelated "Save progress" would silently wipe it.
+    def test_a_status_only_log_post_does_not_wipe_parsed_sets(self, client):
+        # The log endpoint no longer touches sets at all (#578 stage 4); it used
+        # to delete every row it could "see", and a parsed set's ``prescription``
+        # IS a trainable line-0 cell.
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
         cell = sub_cell(s.squat, 1)
         assert LoggedSet.objects.filter(source_line=cell).exists()
 
-        # A "Save progress" that doesn't even mention the squat.
-        resp = log_post(client, s.session, {"sets": [], "status": "pending"})
+        resp = log_post(client, s.session, {"status": "pending"})
         assert resp.status_code == 200
         assert LoggedSet.objects.filter(source_line=cell).exists()
 
@@ -533,55 +491,6 @@ class TestToleranceGuard:
 # -- Codex review follow-ups ---------------------------------------------------
 
 
-class TestParsedSetsStayOutOfTheStructuredLogger:
-    """A parsed set must not masquerade as a structured input row (plan §6).
-
-    ``athlete_session`` already excludes them from ``set_rows``; the log
-    endpoint's own response is the second surface that has to agree, because
-    the client's ``syncFromLog`` maps every set it receives onto a
-    ``(prescription, set_number)`` input.
-    """
-
-    def test_the_log_response_omits_parsed_sets(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-
-        resp = log_post(client, s.session, {"status": "pending", "sets": []})
-        assert resp.status_code == 200
-
-        returned = resp.json()["log"]["sets"]
-        cell = sub_cell(s.squat, 1)
-        parsed = LoggedSet.objects.get(source_line=cell)
-        assert parsed.pk not in {row["id"] for row in returned}, (
-            "the parsed set leaked into the structured logger's response — "
-            "syncFromLog would mark a set done that nobody posted"
-        )
-
-    def test_a_structured_save_still_echoes_its_own_sets(self, client):
-        # The filter must not swallow the logger's own rows.
-        s = seed()
-        client.force_login(s.athlete)
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "225",
-                        "rpe": "8",
-                    }
-                ],
-            },
-        )
-        assert resp.status_code == 200
-        assert len(resp.json()["log"]["sets"]) == 1
-
-
 class TestOptimisticToastIsScopedToThisBlur:
     def test_an_unrelated_blur_does_not_refire_an_earlier_pr(self, client):
         """Blurring a note must not re-celebrate a PR won on another line.
@@ -686,63 +595,26 @@ class TestReclaimLeavesAthleteDataAlone:
             "delete from treating this as one of its own rows"
         )
 
-    def test_a_reposted_reclaimed_set_is_replaced_not_duplicated(self, client):
-        """Once visible, the row is the logger's to replace — exactly once.
-
-        The logger renders the reclaimed row, so a save reposts it. If the
-        replace-delete skipped it (scoped to `source_line__isnull=True`), the
-        repost would `bulk_create` a SECOND row for the same prescription and
-        set number, double-counting the performance in coach results and
-        recent-log grounding.
-        """
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-
-        client.force_login(s.coach)
-        reclaim(client, s)
-
-        # The athlete's page now shows it, so their save carries it back.
-        client.force_login(s.athlete)
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "225",
-                        "rpe": "",
-                    }
-                ],
-            },
-        )
-        assert resp.status_code == 200
-        assert LoggedSet.objects.filter(prescription=s.squat).count() == 1
-
-    def test_a_hidden_parsed_set_is_still_untouchable_by_the_logger(self, client):
-        """The other half of the rule: what it can't see, it can't replace."""
+    def test_a_hidden_parsed_set_is_untouched_by_the_log_endpoint(self, client):
+        """The log endpoint writes no sets, so it can never replace a parsed one."""
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
         cell = sub_cell(s.squat, 1)
 
-        resp = log_post(client, s.session, {"status": "pending", "sets": []})
+        resp = log_post(client, s.session, {"status": "pending"})
         assert resp.status_code == 200
         assert LoggedSet.objects.filter(source_line=cell).exists()
 
     def test_the_reclaimed_set_becomes_visible_again(self, client):
-        """Its text no longer shows it, so it must render as a structured row."""
+        """Its text no longer shows it, so it must render as a read-only history row."""
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert all(r["load"] == "" for r in row["set_rows"]), (
+        assert row["logged_readonly"] == [], (
             "while athlete-authored it renders as its sub-line text only"
         )
 
@@ -751,37 +623,10 @@ class TestReclaimLeavesAthleteDataAlone:
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert any(r["load"] == "225" for r in row["set_rows"]), (
+        assert any("225" in r["label"] for r in row["logged_readonly"]), (
             "after the reclaim nothing else displays this performance, so "
             "suppressing it would hide a set that still counts"
         )
-
-    def test_the_reclaimed_set_reaches_the_logger_response(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-
-        client.force_login(s.coach)
-        reclaim(client, s)
-
-        client.force_login(s.athlete)
-        returned = log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "225",
-                        "rpe": "",
-                    }
-                ],
-            },
-        ).json()
-        assert [r["load"] for r in returned["log"]["sets"]] == ["225"]
 
 
 class TestSkippedRowsDoNotLog:
@@ -1328,8 +1173,9 @@ class TestParsedSetsGetDistinctSetNumbers:
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        loads = sorted(r["load"] for r in row["set_rows"] if r["load"])
-        assert loads == ["225", "235"], loads
+        labels = " | ".join(r["label"] for r in row["logged_readonly"])
+        assert len(row["logged_readonly"]) == 2, labels
+        assert "225" in labels and "235" in labels, labels
 
 
 class TestTheBlurPathOwnsOnlyAthleteLines:
@@ -1448,7 +1294,7 @@ class TestAnUntouchedCoachLineIsNotClaimed:
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert any(r["load"] == "225" for r in row["set_rows"])
+        assert any("225" in r["label"] for r in row["logged_readonly"])
 
     def test_a_real_edit_still_claims_the_line(self, client):
         # The guard must not freeze a coach line the athlete genuinely writes on.
@@ -1494,9 +1340,9 @@ class TestVisibilityFollowsTheDisplayedText:
         assert row["sub_lines"] == [
             {"line": 1, "text": "225 x 5", "warn": False, "warn_reason": ""}
         ]
-        assert all(r["load"] == "" for r in row["set_rows"]), (
-            "the sub-line still displays this set, so showing it again in "
-            "set_rows double-displays one performance"
+        assert row["logged_readonly"] == [], (
+            "the sub-line still displays this set, so listing it again as "
+            "read-only history double-displays one performance"
         )
 
     def test_a_reclaim_that_replaces_the_text_shows_the_set(self, client):
@@ -1509,13 +1355,13 @@ class TestVisibilityFollowsTheDisplayedText:
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert any(r["load"] == "225" for r in row["set_rows"]), (
+        assert any("225" in r["label"] for r in row["logged_readonly"]), (
             "nothing displays this performance any more, so hiding it would "
             "leave a counting set invisible to everyone"
         )
 
-    def test_a_still_displayed_set_is_not_reposted_or_duplicated(self, client):
-        """The delete must agree with visibility, or the two drift again."""
+    def test_a_still_displayed_set_is_not_duplicated_by_a_log_post(self, client):
+        """A status-only log post leaves a still-displayed set exactly as it was."""
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -1525,8 +1371,8 @@ class TestVisibilityFollowsTheDisplayedText:
         reclaim(client, s, text="225 x 5")
 
         client.force_login(s.athlete)
-        returned = log_post(client, s.session, {"status": "pending", "sets": []}).json()
-        assert returned["log"]["sets"] == []
+        returned = log_post(client, s.session, {"status": "pending"}).json()
+        assert "sets" not in returned["log"]
         assert LoggedSet.objects.filter(source_line=cell).count() == 1
 
 
@@ -1627,8 +1473,9 @@ class TestSetNumbersStayDistinctAcrossReclaims:
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        loads = sorted(r["load"] for r in row["set_rows"] if r["load"])
-        assert loads == ["225", "230"], loads
+        labels = " | ".join(r["label"] for r in row["logged_readonly"])
+        assert len(row["logged_readonly"]) == 2, labels
+        assert "225" in labels and "230" in labels, labels
 
     def test_an_ordinary_reblur_keeps_its_line_number(self, client):
         # The boundary: nothing else holds the number, so it stays stable.
@@ -1639,68 +1486,6 @@ class TestSetNumbersStayDistinctAcrossReclaims:
 
         row = LoggedSet.objects.get(prescription=s.squat)
         assert (row.set_number, row.load) == (2, "240")
-
-
-class TestStructuredSavesDoNotCollideWithHiddenRows:
-    def test_a_posted_set_number_pushes_the_hidden_row_aside(self, client):
-        """The mirror of round 21: the collision can come from either channel.
-
-        A hidden parsed row holding set 1 is invisible today, so a posted set 1
-        looks free — until a reclaim surfaces both and they collapse in
-        `athlete_session`'s (prescription, set_number) dict.
-        """
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-
-        log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "8",
-                        "load": "185",
-                        "rpe": "",
-                    }
-                ],
-            },
-        )
-
-        rows = LoggedSet.objects.filter(prescription=s.squat).order_by("set_number")
-        assert [(r.set_number, r.load) for r in rows] == [(1, "185"), (2, "225")]
-
-    def test_both_render_once_the_line_is_reclaimed(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-        log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "8",
-                        "load": "185",
-                        "rpe": "",
-                    }
-                ],
-            },
-        )
-
-        client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
-
-        ctx = presenters.athlete_session(s.session, s.athlete)
-        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        loads = sorted(r["load"] for r in row["set_rows"] if r["load"])
-        assert loads == ["185", "225"], loads
 
 
 class TestAnUnstorableSetTellsTheAthlete:
@@ -1994,7 +1779,7 @@ class TestAConcurrentSkipDoesNotDeleteAnExistingSet:
 # fixed; each test pins the behaviour the fix restores.
 
 
-class TestTheLoggerOnlyReplacesWhatTheClientHeld:
+class TestTheLogEndpointLeavesARewrittenSetAlone:
     """A save must not destroy a parsed set the page never showed the athlete.
 
     The replace-delete judged visibility from the CURRENT cell text, but the
@@ -2017,148 +1802,13 @@ class TestTheLoggerOnlyReplacesWhatTheClientHeld:
         assert reclaim(client, s, text="brace harder").status_code == 200
 
         client.force_login(s.athlete)
-        resp = log_post(client, s.session, {"status": "pending", "sets": []})
+        resp = log_post(client, s.session, {"status": "pending"})
         assert resp.status_code == 200
 
         assert LoggedSet.objects.filter(pk=row.pk).exists(), (
             "a save that posted nothing for this slot destroyed a performance "
             "the athlete had already logged"
         )
-
-    def test_a_save_that_restates_it_replaces_it(self, client):
-        """The client's proof it was looking: it posted the row back verbatim.
-
-        Round 3 tightened this from "posted that slot". A parsed row is numbered
-        by its sub-line while the structured grid numbers from 1, so the two
-        share a numbering space — an athlete typing a DIFFERENT set into
-        structured row 1 posted the same slot, which read as proof of seeing a
-        parsed row that also happened to be set 1, and the delete destroyed a
-        performance nobody had asked to change.
-        """
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-
-        client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
-
-        client.force_login(s.athlete)
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "225",
-                        "rpe": "",
-                    }
-                ],
-            },
-        )
-        assert resp.status_code == 200
-        rows = list(LoggedSet.objects.filter(session_log__session=s.session))
-        assert len(rows) == 1
-        assert (rows[0].load, rows[0].reps) == ("225", "5")
-
-    def test_an_unrelated_set_at_the_same_number_keeps_both(self, client):
-        """The collision case: a different performance, not an edit of this one.
-
-        The athlete typed into a blank structured row 1 while a parsed row was
-        also numbered 1. Both are real work, so both survive — and the parsed
-        one yields its number so the two can't collapse into one another.
-        """
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-
-        client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
-
-        client.force_login(s.athlete)
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "8",
-                        "load": "245",
-                        "rpe": "",
-                    }
-                ],
-            },
-        )
-        assert resp.status_code == 200
-        rows = sorted(
-            LoggedSet.objects.filter(session_log__session=s.session),
-            key=lambda r: r.set_number,
-        )
-        assert [(r.load, r.reps) for r in rows] == [("245", "8"), ("225", "5")], (
-            "the earned 225 x 5 was destroyed by an unrelated set at the same "
-            "set number"
-        )
-        assert len({r.set_number for r in rows}) == 2, "the two rows collapse"
-
-
-class TestAStaleRepostDoesNotCloneASurvivingSet:
-    """Undo can re-hide a row the client already saw — and then posted.
-
-    A reclaim makes a parsed row visible; the athlete's tab loads it into the
-    structured inputs; a coach undo restores the source text, hiding the row
-    again. The stale tab then posts its copy. Without value de-duplication the
-    save appends a source-less clone and one performance is logged twice.
-    """
-
-    def test_the_posted_copy_is_absorbed_by_the_survivor(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-        cell = sub_cell(s.squat, 1)
-        row = LoggedSet.objects.get(source_line=cell)
-
-        client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
-        undo = client.post(
-            reverse("meso:api_plan_undo", kwargs={"plan_id": s.plan.pk}),
-            content_type="application/json",
-        )
-        assert undo.status_code == 200
-        cell.refresh_from_db()
-        assert cell.text == "225 x 5", "undo should restore the athlete's text"
-
-        # The stale tab still holds the row it saw while the line was reclaimed.
-        client.force_login(s.athlete)
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "225",
-                        "rpe": "",
-                    }
-                ],
-            },
-        )
-        assert resp.status_code == 200
-
-        rows = list(LoggedSet.objects.filter(session_log__session=s.session))
-        assert len(rows) == 1, (
-            f"one performance became {len(rows)} rows: "
-            f"{[(r.pk, r.source_line_id, r.set_number) for r in rows]}"
-        )
-        assert rows[0].pk == row.pk, "the parsed row is the survivor"
 
 
 class TestTheDisplayTestIgnoresLoadCase:
@@ -2189,12 +1839,7 @@ class TestTheDisplayTestIgnoresLoadCase:
             "render as a structured row"
         )
         ctx = presenters.athlete_session(s.session, s.athlete)
-        rendered = [
-            r
-            for ex in ctx["exercises"]
-            for r in ex["set_rows"]
-            if (r.get("reps") or r.get("load"))
-        ]
+        rendered = [r for ex in ctx["exercises"] for r in ex["logged_readonly"]]
         assert rendered == [], "the performance is displayed twice"
 
 
@@ -2468,46 +2113,6 @@ class TestADurationHasManySpellings:
         assert parsed_set_is_hidden(row), (
             "the line still displays this timed performance, so it must not "
             "also render as a structured row"
-        )
-
-
-class TestARecordIsCelebratedOnce:
-    """The blur already celebrated it; a save that changed nothing must not."""
-
-    def test_a_save_does_not_recelebrate_a_blurs_record(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        first = write_cell(client, s.session, s.squat, 1, "120 x 5")
-        assert first.json()["new_records"], "the blur celebrates the first log"
-
-        second = log_post(client, s.session, {"status": "pending", "sets": []})
-        assert second.status_code == 200
-        assert second.json()["new_records"] == [], (
-            "the save re-celebrated a record the blur had already shown"
-        )
-
-    def test_a_save_still_celebrates_its_own_record(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "140",
-                        "rpe": "",
-                    }
-                ],
-            },
-        )
-        assert resp.status_code == 200
-        assert resp.json()["new_records"], (
-            "a structured save's own first log is still a PR"
         )
 
 

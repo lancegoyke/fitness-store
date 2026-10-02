@@ -1,16 +1,22 @@
-"""Restoring a reclaimed sub-line after "Log session" (#541).
+"""Restoring a reclaimed sub-line over a legacy structured copy (#541).
 
-The sequence, end to end through the real views:
+The sequence the retired "Log session" logger used to produce, end to end:
 
 1. the athlete types ``225 x 5`` on sub-line 1 (parsed row A, ``source_line``
    = that cell);
-2. the coach rewrites the line (``cell_line_write``), which reclaims it — A is
-   no longer shown by its line, so the structured logger renders it;
-3. the athlete taps "Log session" with that row unchanged — the save replaces A
-   with a source-less structured copy S;
+2. the coach rewrites the line (``cell_line_write``), which reclaims it -- A is
+   no longer shown by its line;
+3. a source-less copy S carrying ``reclaimed_line`` = sub-line 1 replaces A;
 4. the athlete types ``225 x 5`` back onto sub-line 1.
 
 One performance, so the session must end with one ``LoggedSet``.
+
+Step 3 is no longer reachable through ``athlete_log_session`` (it ignores
+sets, #578 stage 4), but the rows it wrote are legacy data that still exists
+in the database and that ``_upsert_parsed_set``'s ``reclaimed_line`` adoption,
+``line_displays`` and the undo purge still have to handle. So these tests
+build S directly with the ORM (``_log_session_as_legacy``) and exercise the
+surviving typed path against it.
 """
 
 import json
@@ -23,37 +29,42 @@ from store_project.analytics.models import Event
 from store_project.meso import presenters
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Prescription
-from store_project.meso.serializers import serialize_session_log
-from store_project.meso.tests.test_parse_at_commit import log_post
+from store_project.meso.models import SessionLog
 from store_project.meso.tests.test_parse_at_commit import reclaim
 from store_project.meso.tests.test_parse_at_commit import seed
 from store_project.meso.tests.test_parse_at_commit import sub_cell
-from store_project.meso.tests.test_parse_at_commit import the_log
 from store_project.meso.tests.test_parse_at_commit import write_cell
 
 pytestmark = pytest.mark.django_db
 
 
-def _log_session_as_rendered(client, s, status="done"):
-    """Tap "Log session" posting exactly the rows the logger re-hydrates from."""
-    rendered = serialize_session_log(the_log(s.session, s.athlete))["sets"]
-    return log_post(
-        client,
-        s.session,
-        {
-            "status": status,
-            "sets": [
-                {
-                    "prescription": row["prescription"],
-                    "set_number": row["set_number"],
-                    "reps": row["reps"],
-                    "load": row["load"],
-                    "rpe": row["rpe"],
-                }
-                for row in rendered
-            ],
-        },
-    )
+def _log_session_as_legacy(s):
+    """Replace every typed squat row with the copy the retired logger wrote.
+
+    Such rows are legacy data the retired logger wrote: ``source_line`` NULL,
+    ``reclaimed_line`` pointing at the sub-line the replaced row was typed on.
+    """
+    for row in list(
+        LoggedSet.objects.filter(
+            session_log__session=s.session,
+            session_log__athlete=s.athlete,
+            prescription=s.squat,
+            source_line__isnull=False,
+        )
+    ):
+        LoggedSet.objects.create(
+            session_log=row.session_log,
+            prescription=row.prescription,
+            exercise_slot_id=row.exercise_slot_id,
+            source_line=None,
+            reclaimed_line=row.source_line,
+            set_number=row.set_number,
+            reps=row.reps,
+            load=row.load,
+            rpe=row.rpe,
+            unit=row.unit,
+        )
+        row.delete()
 
 
 def _squat_rows(s):
@@ -72,14 +83,14 @@ def _reclaim_then_log(client, s):
     assert reclaim(client, s, text="brace harder").status_code == 200
 
     client.force_login(s.athlete)
-    # The page the athlete taps "Log session" on shows the reclaimed row in the
-    # structured logger AND the coach's text on sub-line 1.
+    # The page shows the coach's text on sub-line 1, and the reclaimed set as a
+    # read-only history row.
     ctx = presenters.athlete_session(s.session, s.athlete)
     squat = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-    assert any(r["load"] == "225" for r in squat["set_rows"])
     assert [line["text"] for line in squat["sub_lines"]][:1] == ["brace harder"]
+    assert any("225" in r["label"] for r in squat["logged_readonly"])
 
-    assert _log_session_as_rendered(client, s).status_code == 200
+    _log_session_as_legacy(s)
 
 
 class TestRestoringAfterLogSessionKeepsOneRow:
@@ -124,37 +135,10 @@ class TestRestoringAfterLogSessionKeepsOneRow:
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         squat = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert all(r["load"] == "" for r in squat["set_rows"]), (
+        assert squat["logged_readonly"] == [], (
             "the restored row must be hidden by sub-line 1's own text again, "
-            "not double-displayed as a structured row too"
+            "not double-displayed as a read-only history row too"
         )
-        assert serialize_session_log(the_log(s.session, s.athlete))["sets"] == []
-
-
-class TestTheLinkSurvivesRepeatedLogSessions:
-    def test_two_saves_before_the_retype_still_leave_one_row(self, client):
-        """The link is carried forward by ``athlete_log_session`` itself.
-
-        A second "Log session"/"Save progress" replaces ``S`` with a fresh
-        source-less copy before the athlete ever gets around to retyping the
-        sub-line — the ``reclaimed_line`` carry has to survive that resave, not
-        just the first one, or a tab left open across two saves loses the link
-        exactly like #541 did.
-        """
-        s = seed()
-        _reclaim_then_log(client, s)
-
-        # A "Save progress" ("pending") lands on top of the already-DONE log —
-        # status is sticky, but the sets are replaced exactly like a done save.
-        resp = _log_session_as_rendered(client, s, status="pending")
-        assert resp.status_code == 200
-
-        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
-        assert resp.status_code == 200
-
-        rows = _squat_rows(s)
-        assert len(rows) == 1, [(r.load, r.reps) for r in rows]
-        assert (rows[0].load, rows[0].reps) == ("225", "5")
 
 
 class TestADifferentValueDoesNotClaimTheLink:
@@ -175,71 +159,32 @@ class TestADifferentValueDoesNotClaimTheLink:
         assert pairs == [("225", "5"), ("230", "3")]
 
 
-class TestEditingTheStructuredCopyDropsTheLink:
-    def test_editing_then_retyping_the_original_adds_a_second_row(self, client):
-        """A repost with new values is an edit, not a restore — no carry.
-
-        Editing ``S`` inside the structured logger (still slot 1, new values)
-        must not leave the edited row still answering to sub-line 1's original
-        text: the carry dies with the edit, so retyping the original text
-        mints a fresh parsed row alongside it instead of silently rewriting
-        the athlete's edit.
-        """
-        s = seed()
-        _reclaim_then_log(client, s)
-
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "6",
-                        "load": "225",
-                        "rpe": "",
-                    }
-                ],
-            },
-        )
-        assert resp.status_code == 200
-
-        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
-        assert resp.status_code == 200
-
-        pairs = sorted((r.load, r.reps) for r in _squat_rows(s))
-        assert pairs == [("225", "5"), ("225", "6")]
-
-
 class TestASameValuedStructuredSetIsNotMergedByDefault:
     def test_no_reclaim_at_all_still_gives_two_rows(self, client):
         """Pin the normal case: no reclaim means no link, so no merge at all.
 
-        A structured set and a freeform-typed set that happen to share values
+        A legacy structured set and a freeform-typed set that happen to share values
         are an ordinary thing (225 x 5 twice) — matching by value alone would
         wrongly fold them into one performance.
         """
         s = seed()
         client.force_login(s.athlete)
-        resp = log_post(
-            client,
-            s.session,
-            {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "225",
-                        "rpe": "",
-                    }
-                ],
-            },
+        # A legacy structured row (source_line NULL, no reclaimed_line) -- the
+        # retired logger wrote these.
+        log = SessionLog.objects.create(
+            session=s.session, athlete=s.athlete, status="done"
         )
-        assert resp.status_code == 200
+        LoggedSet.objects.create(
+            session_log=log,
+            prescription=s.squat,
+            exercise_slot_id=s.squat.exercise_slot_id,
+            source_line=None,
+            reclaimed_line=None,
+            set_number=1,
+            reps="5",
+            load="225",
+            rpe="",
+        )
 
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert resp.status_code == 200
@@ -250,23 +195,11 @@ class TestASameValuedStructuredSetIsNotMergedByDefault:
         )
 
 
-class TestClearingTheStructuredCopyStillDeletesIt:
-    def test_posting_no_sets_deletes_the_carried_copy(self, client):
-        """Normal logger behavior is unaffected by the new carry machinery."""
-        s = seed()
-        _reclaim_then_log(client, s)
-
-        resp = log_post(client, s.session, {"status": "pending", "sets": []})
-        assert resp.status_code == 200
-
-        assert _squat_rows(s) == []
-
-
 class TestExactlyOneSetLoggedEventAcrossTheSequence:
     def test_the_whole_541_sequence_logs_one_event(self, client):
-        """Type, reclaim, Log session, restore — one performance, one event.
+        """Type, reclaim, legacy copy, restore — one performance, one event.
 
-        The Log session save nets zero (a resave replaces its own row) and the
+        The legacy copy is built with the ORM (no event) and the
         restore reuses ``S`` rather than creating, so ``set_logged`` only ever
         fires once, at the original typed blur.
         """
@@ -294,7 +227,7 @@ class TestASecondReclaimCycleStillEndsWithOneRow:
         assert reclaim(client, s, text="brace harder again").status_code == 200
 
         client.force_login(s.athlete)
-        assert _log_session_as_rendered(client, s).status_code == 200
+        _log_session_as_legacy(s)
 
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert resp.status_code == 200
@@ -309,7 +242,7 @@ class TestUndoSparesACellAStructuredCopyPointsAt:
 
     Modelled on ``TestUndoDoesNotOrphanASetsSourceCell``
     (test_parse_at_commit.py), but the surviving row here is the source-less
-    structured copy a "Log session" left behind. The stray-cell cleanup spared
+    legacy structured copy the retired logger left behind. The stray-cell cleanup spared
     only lines a parsed row points at, so an undo past the line's creation
     deleted it, the link went NULL, and the restore minted a twin again.
     """
@@ -328,7 +261,7 @@ class TestUndoSparesACellAStructuredCopyPointsAt:
         assert reclaim(client, s, text="brace harder", line=1).status_code == 200
 
         client.force_login(s.athlete)
-        assert _log_session_as_rendered(client, s).status_code == 200
+        _log_session_as_legacy(s)
         copy = LoggedSet.objects.get(prescription=s.squat, source_line__isnull=True)
         assert copy.reclaimed_line_id == cell.pk
 
@@ -368,11 +301,11 @@ class TestTheCopyIsOnlyReusedWhenTheLineShowedNoSetOfItsOwn:
     re-linking would fold two sets into one that a later clear then deletes.
     """
 
-    def test_with_log_session_a_correction_does_not_touch_the_structured_copy(
+    def test_with_a_legacy_copy_a_correction_does_not_touch_the_structured_copy(
         self, client
     ):
         s = seed()
-        _reclaim_then_log(client, s)  # A -> reclaim -> Log session -> S
+        _reclaim_then_log(client, s)  # A -> reclaim -> legacy copy S
 
         resp = write_cell(client, s.session, s.squat, 1, "230 x 3")  # R_B
         assert resp.status_code == 200
@@ -400,10 +333,10 @@ class TestTheCopyIsOnlyReusedWhenTheLineShowedNoSetOfItsOwn:
         assert rows[0].source_line_id is None, "the structured copy must survive"
         assert (rows[0].load, rows[0].reps) == ("225", "5")
 
-    def test_without_log_session_the_line_lookup_is_unchanged(self, client):
+    def test_without_a_legacy_copy_the_line_lookup_is_unchanged(self, client):
         """The older ``source_line`` lookup keeps its main-branch behavior.
 
-        With no "Log session" in between, the reclaimed row A still sits on
+        With no legacy copy in between, the reclaimed row A still sits on
         this line, so correcting the line's own set to A's values reuses A, as
         before #541. Gating that lookup the way the fallback is gated would
         leave A and a new twin on one line, both hidden by its text, and one
@@ -476,7 +409,7 @@ class TestTheSkipPathIsPinned:
         assert resp.status_code == 200
 
         client.force_login(s.athlete)
-        assert _log_session_as_rendered(client, s).status_code == 200
+        _log_session_as_legacy(s)
 
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert resp.status_code == 200
