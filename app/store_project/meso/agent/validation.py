@@ -232,7 +232,9 @@ def _fill_display(cleaned):
             after = authoritative_after = _first_line(new_text)
             if len(after) > 255:
                 # The card column can't hold the whole edit, so it can't show
-                # byte-for-byte what lands: start it Rejected, never truncated.
+                # byte-for-byte what lands: show nothing (never a truncation) and
+                # start it Rejected.
+                after = authoritative_after = ""
                 applicable = False
         else:
             applicable = False

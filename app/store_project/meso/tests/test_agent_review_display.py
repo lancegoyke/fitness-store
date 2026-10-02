@@ -192,3 +192,13 @@ def test_an_edit_too_long_for_the_card_starts_rejected_not_truncated():
     cell.save()
     cleaned = _clean(plan, _blank(prescription_id=cell.pk, new_load="230"))
     assert cleaned["status"] == ProposedChange.Status.REJECTED
+
+
+def test_overlong_edit_never_stores_a_truncated_after():
+    plan, _, cell = make_plan()
+    cell.text = "3x5 " + ("a" * 246) + " @ 225"
+    cell.save()
+    cleaned = _clean(
+        plan, _blank(prescription_id=cell.pk, new_load="230", after="3x5 @ 230")
+    )
+    assert cleaned["after"] == ""

@@ -68,7 +68,7 @@ _LOAD_SEGMENT = re.compile(
     r"^(\s*)(\d+(?:,\d{3})*(?:\.\d+)?)\s*(%|lbs?|kgs?|kilos?)?(\s*)$"
 )
 # A comma is a segment break unless it is a thousands separator (``1,000 lbs``).
-_SEGMENT_SPLIT = re.compile(r"(,(?!\d{3}(?!\d))|@)")
+_SEGMENT_SPLIT = re.compile(r"(,(?!\d{3}(?![\d]|\.\d))|@)")
 
 
 def _swap_in_place(first_line, component, value):
@@ -117,6 +117,8 @@ def recomposed_text(cell, component, value):
         return None
     lines = cell.text.split("\n")
     swapped = _swap_in_place(lines[0], component, str(value))
+    if swapped is not None:
+        swapped = swapped.strip()  # the card shows the line stripped; so does the cell
     if swapped is None and component == "load" and not bits["load"]:
         # No load yet: append one in the line's own style, keeping every
         # qualifier on the line and every note line below it.
