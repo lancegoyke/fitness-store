@@ -19,7 +19,7 @@ from django.urls import reverse
 
 from store_project.meso import presenters
 from store_project.meso.models import LoggedSet
-from store_project.meso.tests.test_parse_at_commit import reclaim
+from store_project.meso.tests.test_parse_at_commit import legacy_reclaim
 from store_project.meso.tests.test_parse_at_commit import seed
 from store_project.meso.tests.test_parse_at_commit import sub_cell
 from store_project.meso.tests.test_parse_at_commit import write_cell
@@ -53,7 +53,7 @@ def _rewrite_then_undo(client, s):
     cell = sub_cell(s.squat, 1)
 
     client.force_login(s.coach)
-    assert reclaim(client, s, text="brace harder").status_code == 200
+    legacy_reclaim(s, text="brace harder")
 
     client.force_login(s.athlete)
     squat = _squat_view(s)
@@ -118,7 +118,7 @@ class TestTheUndoWritesNoAthleteData:
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
         client.force_login(s.coach)
-        assert reclaim(client, s, text="brace harder").status_code == 200
+        legacy_reclaim(s, text="brace harder")
         fields = (
             "pk",
             "session_log_id",

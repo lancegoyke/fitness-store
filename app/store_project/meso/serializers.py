@@ -58,6 +58,7 @@ def serialize_prescription(cell, lines=(), *, include_athlete_authored=False):
         line_data = {"line": line.line, "text": line.text}
         if include_athlete_authored:
             line_data["athlete_authored"] = line.athlete_authored
+            line_data["entered_by_coach"] = line.entered_by_coach
         serialized_lines.append(line_data)
 
     data = {
@@ -1106,7 +1107,10 @@ def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
     ``models.newest_session_log_ids``): sets from any older log are ignored.
     With no numeric top set, a "BW" set is the summary.
     """
-    logged = [lc for lc in lines if lc.athlete_authored and lc.text.strip()]
+    # Athlete-ENTERED lines only (#709): a coach set line renders inline in the
+    # designer with its own chip, so folding it into this roll-up marker too
+    # would show it twice.
+    logged = [lc for lc in lines if lc.is_athlete_entered and lc.text.strip()]
     if not logged:
         return None
     best = {"abs": None, "pct": None}  # kind -> (value, load text, unit, rpe)
@@ -1163,6 +1167,82 @@ def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
     elif bodyweight:
         summary.update(load="BW", unit="")
     return summary
+
+
+def serialize_grid_cell(cell, lines, unit, log_id):
+    """One (exercise row x week) cell of the designer grid.
+
+    ``cell`` is the line-0 ``Prescription``, ``lines`` its sub-line cells (with
+    ``parsed_sets`` prefetched), ``log_id`` the cell's session's newest
+    ``SessionLog`` for the plan's athlete (None when the session hasn't been
+    started, which is also what ``session_started`` reports). The one builder
+    for the whole-grid payload and the single-cell write responses
+    (``grid_cell_for``), so the two can't drift.
+    """
+    return {
+        "prescription_id": cell.pk,
+        "text": cell.text,
+        "skipped": cell.skipped,
+        # Whether the athlete has a log on this cell's session: the designer
+        # offers "log as a set" only on a started session (#709).
+        "session_started": log_id is not None,
+        # The row's freeform sub-line stack for this week (Phase 2a): id
+        # included so the table can patch a sub-line by pk; blank sub-lines are
+        # kept here (unlike athlete-facing serialization) so the editor can show
+        # a cleared line in place rather than collapsing the stack.
+        "lines": [
+            {
+                "id": lc.pk,
+                "line": lc.line,
+                "text": lc.text,
+                "athlete_authored": lc.athlete_authored,
+                # Who typed a performance line (#709); only meaningful with
+                # athlete_authored.
+                "entered_by_coach": lc.entered_by_coach,
+                # Whether the text reads as a set, so the designer can offer
+                # the cue/set chip without re-implementing the parser.
+                "loggable": bool(parsing.performed_set_values(lc.text)),
+            }
+            for lc in lines
+        ],
+        # The designer collapses logged athlete lines to this one marker (#645);
+        # None when the athlete logged nothing.
+        "athlete_summary": athlete_line_summary(
+            lines, unit, log_id, (cell.parsed() or {}).get("reps")
+        ),
+    }
+
+
+def grid_cell_for(exercise_slot, week):
+    """The one (slot, week) grid cell, exactly as ``serialize_mesocycle_grid`` builds it.
+
+    For the cell-write responses, so the designer can replace a whole cell
+    (lines, kinds, summary) from the server's word instead of patching it.
+    ``None`` when the row has no line-0 cell for that week.
+    """
+    plan = exercise_slot.session_slot.mesocycle.plan
+    cells = list(
+        models.Prescription.objects.filter(exercise_slot=exercise_slot, week=week)
+        .select_related("exercise_slot")
+        .prefetch_related("parsed_sets")
+        .order_by("line")
+    )
+    line_zero = next((c for c in cells if c.line == 0), None)
+    if line_zero is None:
+        return None
+    session_ids = list(
+        models.Session.objects.filter(
+            week=week,
+            session_slot=exercise_slot.session_slot,
+            deleted_at__isnull=True,
+        ).values_list("pk", flat=True)
+    )
+    log_id = next(
+        iter(models.newest_session_log_ids(session_ids, plan.athlete).values()), None
+    )
+    return serialize_grid_cell(
+        line_zero, [c for c in cells if c.line >= 1], plan.unit, log_id
+    )
 
 
 def serialize_mesocycle_grid(mesocycle):
@@ -1251,37 +1331,15 @@ def serialize_mesocycle_grid(mesocycle):
                 cell = cells_by_key.get((exercise_slot.pk, week.pk))
                 if cell is None:
                     continue
-                cell_data = {
-                    "prescription_id": cell.pk,
-                    "text": cell.text,
-                    "skipped": cell.skipped,
-                    # The row's freeform sub-line stack for this week (Phase
-                    # 2a): id included so the table can patch a sub-line by pk;
-                    # blank sub-lines are kept here (unlike athlete-facing
-                    # serialization) so the editor can show a cleared line
-                    # in place rather than collapsing the stack.
-                    "lines": [
-                        {
-                            "id": lc.pk,
-                            "line": lc.line,
-                            "text": lc.text,
-                            "athlete_authored": lc.athlete_authored,
-                        }
-                        for lc in lines_by_key.get((exercise_slot.pk, week.pk), [])
-                    ],
-                    # The designer collapses logged athlete lines to this one
-                    # marker (#645); None when the athlete logged nothing.
-                    "athlete_summary": athlete_line_summary(
-                        lines_by_key.get((exercise_slot.pk, week.pk), []),
-                        plan.unit,
-                        newest_log_ids.get(
-                            sessions_by_slot.get(exercise_slot.session_slot_id, {}).get(
-                                week.pk
-                            )
-                        ),
-                        (cell.parsed() or {}).get("reps"),
-                    ),
-                }
+                session_id = sessions_by_slot.get(
+                    exercise_slot.session_slot_id, {}
+                ).get(week.pk)
+                cell_data = serialize_grid_cell(
+                    cell,
+                    lines_by_key.get((exercise_slot.pk, week.pk), []),
+                    plan.unit,
+                    newest_log_ids.get(session_id),
+                )
                 cells[str(week.pk)] = cell_data
             rows.append(
                 {

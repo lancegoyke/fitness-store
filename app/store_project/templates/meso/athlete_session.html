@@ -70,7 +70,7 @@
           <template x-for="r in (ex.logged_readonly || [])" :key="r.id">
             <div class="meso-row-meta meso-mono" data-testid="logged-set-readonly" style="color:var(--dim);margin-bottom:6px;" title="Logged earlier — read-only" x-text="r.label"></div>
           </template>
-          <template x-for="l in ex.sub_lines" :key="l.line">
+          <template x-for="l in ex.sub_lines" :key="l._k">
             <div class="meso-sub-line-row">
               {% comment %} The border/background go through --cell-line/--cell-bg so the
                  warn class can actually win: an inline `border`/`background`
@@ -83,6 +83,10 @@
               {% comment %} #527: a line whose write is waiting in the offline queue says so,
                  and says nothing else — its warn/PR state belongs to the text the
                  server last saved, not this one. It clears once the flush lands. {% endcomment %}
+              {% comment %} #709: the coach logged this set for the athlete. The input stays
+                 editable — an athlete edit makes the line theirs. Wraps under the input
+                 (the row is flex-wrap), so it can't squeeze it at 360px. {% endcomment %}
+              <span class="meso-row-meta meso-mono" data-testid="sub-line-by-coach" style="color:var(--dim);white-space:nowrap;" x-show="l.entered_by_coach" x-cloak>logged by coach</span>
               <span class="meso-row-meta meso-mono" data-testid="sub-line-queued" style="color:var(--dim);white-space:nowrap;" x-show="l.queued" x-cloak>saved offline — will sync</span>
               <span class="meso-row-meta meso-mono" data-testid="sub-line-save-error" style="color:var(--warn);white-space:nowrap;" x-show="l.saveError && !l.queued" x-cloak>couldn&#8217;t save</span>
               <span class="meso-row-meta meso-mono" data-testid="sub-line-warn" style="color:var(--warn);white-space:nowrap;" x-show="l.warn && !l.saveError && !l.queued" x-cloak title="Saved, but this doesn&#8217;t look like a complete set — it won&#8217;t count toward your records.">not logged as a set</span>
@@ -90,6 +94,11 @@
                  looking: a blur is a per-line act, so it earns a per-line mark. {% endcomment %}
               <span class="meso-row-meta meso-mono" data-testid="sub-line-pr" style="color:var(--accent-deep);white-space:nowrap;font-weight:700;" x-show="l.pr && !l.warn && !l.saveError && !l.queued" x-cloak :title="'A new best for this lift — ' + l.pr + ' estimated 1RM.'">&#127881; PR <span x-text="l.pr"></span></span>
             </div>
+          </template>
+          {% comment %} #709: typed text the stack has no free line for. Read-only, escaped
+             (x-text); its write stays queued and the server answers it honestly. {% endcomment %}
+          <template x-for="(u, ui) in (ex.unplaced || [])" :key="ui">
+            <div class="meso-row-meta meso-mono" data-testid="sub-line-unplaced" style="color:var(--warn);margin-bottom:6px;overflow-wrap:anywhere;" x-text="'Couldn\u2019t save \u2014 no free line left: ' + u.text"></div>
           </template>
           <button type="button" @click="addLine(ex)" :disabled="!nextFreeLine(ex)" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:12px;">+ add a line</button>
         </div>

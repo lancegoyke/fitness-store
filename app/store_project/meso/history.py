@@ -47,6 +47,36 @@ carry neither key and still restore a rewritten line as coach-owned (no
 backfill). ``_cell_disposition`` is the single predicate the serializer and
 the restorer both use, so they cannot disagree about which rows hand back or
 reclaim.
+
+Coach-logged sets (#709). A coach can log the athlete's set from the grid: a
+**coach set line** (``athlete_authored=True, entered_by_coach=True``) is part
+of the athlete's record — it counts, and derives ``LoggedSet`` rows through the
+same writer an athlete's line uses — but the COACH entered it. So "athlete
+data" above means what the athlete ENTERED: their own set lines
+(``is_athlete_entered``) and everything derived from them. A coach set line is
+the coach's own entry, and coach history treats it as one:
+
+- Plain capture includes it, as a row marked ``"entered_by_coach": True`` (not
+  ``"athlete_authored"``, which is #703's handback marker; an older server
+  reading the new row sees a plain coach row, which skips any
+  athlete-authored DB cell).
+- Restoring writes it back as a coach set line, and restoring a plain coach row
+  over one turns it back into a cue. Either way the line's derived sets are
+  re-derived by the shared writer (``views._upsert_parsed_set``) from the
+  restored text and kind: undoing "logged a set" removes the set, redo brings
+  it back, an undone cue↔set flip flips the sets with it. This is the one place
+  a coach undo writes ``LoggedSet`` rows, and it only ever touches sets derived
+  from a line the coach entered.
+- The moment the athlete edits a coach set line it becomes theirs
+  (``entered_by_coach=False``), and from then on every rule above protects it:
+  capture excludes it, and a restore skips it. The writer also never removes a
+  set from a skipped row (its read-only bail), so undoing a coach set on a row
+  skipped since leaves that set in place.
+
+Since #709 ``cell_line_write`` refuses (422) a changed write to a non-empty
+athlete-entered line, so new history can only take a BLANK athlete line; the
+handback/reclaim machinery above still covers that and every snapshot recorded
+before #709.
 """
 
 import logging
@@ -115,8 +145,14 @@ def _cell_disposition(row, db_cell):
     * ``_RECLAIM`` — a coach row carrying ``reclaim_if_text`` landing on an
       athlete-authored cell whose text still equals it: write it coach-owned.
     * ``_WRITE`` — an ordinary coach-row write (cell coach-owned or absent).
+      A coach row is a cue, or a coach set line when it carries
+      ``"entered_by_coach"`` (#709); either way it lands as exactly that.
+
+    "Athlete-authored" here means athlete-ENTERED (#709): a coach set line is
+    the coach's own entry, so it never makes a cell skip, and a coach row may
+    overwrite it like any coach cell.
     """
-    db_athlete = db_cell is not None and db_cell.athlete_authored
+    db_athlete = db_cell is not None and db_cell.is_athlete_entered
     if row.get("athlete_authored"):
         return _SKIP if db_athlete else _HANDBACK
     if db_athlete:
@@ -138,6 +174,8 @@ def _cell_row(c, *, athlete=False, reclaim_if_text=None):
     }
     if athlete:
         row["athlete_authored"] = True
+    elif c.is_coach_set:
+        row["entered_by_coach"] = True
     if reclaim_if_text is not None:
         row["reclaim_if_text"] = reclaim_if_text
     return row
@@ -174,11 +212,13 @@ def serialize_plan_snapshot(plan, *, athlete_cell_pks=(), restoring=None):
         session_slot__mesocycle__plan=plan
     )
     sessions = models.Session.objects.filter(week__mesocycle__plan=plan)
-    # Athlete-authored cells (Phase 4a) are invisible to the coach's undo/redo:
+    # Athlete-ENTERED cells (Phase 4a) are invisible to the coach's undo/redo:
     # the athlete's own tracking sub-lines record no ``PlanAction`` and must
-    # never be reverted by a coach undo, so they're excluded from capture.
-    cells = models.Prescription.objects.filter(
-        week__mesocycle__plan=plan, athlete_authored=False
+    # never be reverted by a coach undo, so they're excluded from capture. A
+    # coach set line (#709) is the coach's own entry and IS captured (see the
+    # module docstring), marked by ``_cell_row``.
+    cells = models.Prescription.objects.filter(week__mesocycle__plan=plan).exclude(
+        athlete_authored=True, entered_by_coach=False
     )
     cell_rows = {c.pk: _cell_row(c) for c in cells}
     athlete_pks = set(athlete_cell_pks)
@@ -205,7 +245,10 @@ def serialize_plan_snapshot(plan, *, athlete_cell_pks=(), restoring=None):
                 athlete_pks.add(db_cell.pk)
     if athlete_pks:
         for c in models.Prescription.objects.filter(
-            pk__in=athlete_pks, week__mesocycle__plan=plan, athlete_authored=True
+            pk__in=athlete_pks,
+            week__mesocycle__plan=plan,
+            athlete_authored=True,
+            entered_by_coach=False,
         ):
             cell_rows[c.pk] = _cell_row(c, athlete=True)
     return {
@@ -312,6 +355,69 @@ def _cells_athlete_data_points_at(pks):
         )
         .values_list("pk", flat=True)
     )
+
+
+def _as_blank_cue(cell):
+    """``cell`` as the purge is about to leave it: no text, not a set line.
+
+    In memory only — the purge deletes the row right after. The writer reads
+    the instance, so this is how it is told the line stops deriving anything.
+    """
+    cell.text = ""
+    cell.athlete_authored = False
+    cell.entered_by_coach = False
+    return cell
+
+
+def _rederive_coach_lines(plan, changes):
+    """Bring each changed coach set line's ``LoggedSet`` rows in line with it (#709).
+
+    ``changes`` is ``[(cell, text before the restore), ...]``: lines a restore
+    turned into, out of, or within a coach set line. Each goes through the
+    SAME writer an athlete's blur uses (``views._upsert_parsed_set``), with
+    the old text as ``previous_text`` — so the rows the line was showing are
+    replaced by whatever the restored text and kind derive (a cue derives
+    nothing), the athlete's log is created or reaped exactly as a write would,
+    and any other row on that line (history the line no longer shows) is left
+    alone. Imported lazily: ``views`` imports this module.
+
+    Nothing happens without a live session for the cell's day and week, or on
+    a plan without an athlete (a template): there is no log to write to, and
+    leaving sets alone is the safe side. No activity bump — an undo is not the
+    athlete working.
+    """
+    athlete = plan.athlete
+    if not changes or athlete is None:
+        return
+    from .views import _upsert_parsed_set
+
+    for cell, previous_text in changes:
+        if cell.line == 0:
+            continue
+        session_slot_id = (
+            models.ExerciseSlot.objects.filter(pk=cell.exercise_slot_id)
+            .values_list("session_slot_id", flat=True)
+            .first()
+        )
+        session = models.Session.objects.filter(
+            week_id=cell.week_id,
+            session_slot_id=session_slot_id,
+            deleted_at__isnull=True,
+        ).first()
+        line_zero = models.Prescription.objects.filter(
+            exercise_slot_id=cell.exercise_slot_id, week_id=cell.week_id, line=0
+        ).first()
+        if session is None or line_zero is None:
+            continue
+        _upsert_parsed_set(
+            session,
+            athlete,
+            line_zero,
+            cell,
+            previous_text=previous_text,
+            unit=plan.unit,
+            skipped_clears=True,
+        )
 
 
 def restore_plan_snapshot(plan, snapshot):
@@ -581,6 +687,12 @@ def restore_plan_snapshot(plan, snapshot):
             continue  # coordinate free, or already correctly occupied by pk itself
         occupant_pk, occupant_is_athlete_authored = occupant
         if occupant_is_athlete_authored:
+            # #709: this still spares a coach SET line occupant too (it is
+            # ``athlete_authored``), unlike the purge. Deliberately
+            # conservative: skipping a revive loses nothing, and a coach set
+            # occupant here is unreachable in practice — every coach write is
+            # recorded, which empties the redo stack this collision needs.
+            #
             # Spared WITHOUT being locked, and the omission is the point. The
             # purge below keeps ``athlete_authored`` in its candidate FILTER
             # precisely so it never takes ``FOR UPDATE`` on a cell the athlete
@@ -672,6 +784,9 @@ def restore_plan_snapshot(plan, snapshot):
             if occupant is not None and occupant[0] in spared_stray_pks:
                 colliding_pks_to_skip.add(pk)
 
+    # (cell, its text before this restore) for every line whose coach-set
+    # state or text this restore changes — see ``_rederive_coach_lines``.
+    rederive = []
     for pk, row in cell_rows.items():
         if pk in colliding_pks_to_skip:
             # A skip is otherwise a silent outcome: the endpoint answers
@@ -715,16 +830,33 @@ def restore_plan_snapshot(plan, snapshot):
                     pk,
                 )
             continue
+        # What the line was before this write, for the #709 re-derive below. A
+        # pk the purge already removed comes back from nothing.
+        before = (cell.text, cell.is_coach_set) if pk in existing_cells else ("", False)
         cell.exercise_slot_id = row["exercise_slot_id"]
         cell.week_id = row["week_id"]
         cell.line = row.get("line", 0)
         cell.text = row.get("text", "")
         cell.skipped = row["skipped"]
+        # A restored line is no longer the result of the new-line write that
+        # stamped it (#709 replay token): a late replay of that write must not
+        # find this cell and report it as where its text landed.
+        cell.client_token = ""
         if kind == _HANDBACK:
             cell.athlete_authored = True
-        elif kind == _RECLAIM:
-            cell.athlete_authored = False
+            cell.entered_by_coach = False
+        else:
+            # _WRITE or _RECLAIM: a coach row lands as exactly what it
+            # recorded, a cue or (#709) a coach set line.
+            coach_set = bool(row.get("entered_by_coach"))
+            cell.athlete_authored = coach_set
+            cell.entered_by_coach = coach_set
         cell.save()
+        if (before[1] or cell.is_coach_set) and before != (
+            cell.text,
+            cell.is_coach_set,
+        ):
+            rederive.append((cell, before[0]))
 
     # Rows of this plan created *after* the snapshot was taken are absent from
     # it — soft-delete them (never hard-delete: a later undo of an even-older
@@ -937,6 +1069,17 @@ def restore_plan_snapshot(plan, snapshot):
     # still runs there unmodified; the lock is only real on Postgres, which is
     # also the only place this race is expressible (see
     # ``test_undo_purge_postgres.py``).
+    #
+    # #709: "athlete_authored" in this filter and in the re-check below means
+    # athlete-ENTERED. A coach set line is the coach's own entry, so one the
+    # snapshot doesn't hold is a stray like any coach line; it can only exist
+    # if a recorded coach write made it, so the extra lock volume is a handful
+    # of rows, not the athlete's stack.
+    #
+    # First, every line this restore rewrote has its sets re-derived (see
+    # ``_rederive_coach_lines``), after the soft-deletes above so the session
+    # lookup sees the restored liveness.
+    _rederive_coach_lines(plan, rederive)
     candidate_pks = list(
         models.Prescription.objects.select_for_update(of=("self",))
         .filter(
@@ -945,11 +1088,26 @@ def restore_plan_snapshot(plan, snapshot):
             week_id__in=live_week_pks_in_snapshot,
         )
         .exclude(pk__in=cell_pks)
-        .exclude(athlete_authored=True)
+        .exclude(athlete_authored=True, entered_by_coach=False)
         .order_by("pk")
         .values_list("pk", flat=True)
     )
     if candidate_pks:
+        # A coach set line about to be purged first gives up the sets it
+        # derived, through the same writer, exactly as if the coach had
+        # blanked it. Read under the lock just taken. What the writer can't
+        # remove (a set on a since-skipped row) still pins the cell through
+        # the pointer check below — spared, never orphaned.
+        stray_coach_sets = list(
+            models.Prescription.objects.filter(
+                pk__in=candidate_pks, athlete_authored=True, entered_by_coach=True
+            )
+        )
+        stray_changes = []
+        for stray in stray_coach_sets:
+            old_text = stray.text  # before ``_as_blank_cue`` blanks it
+            stray_changes.append((_as_blank_cue(stray), old_text))
+        _rederive_coach_lines(plan, stray_changes)
         # Re-read every spare test NOW, under the lock just acquired. This is
         # the actual fix: a ``LoggedSet`` (or an ``athlete_authored`` flip)
         # committed after some earlier, unlocked read is now guaranteed to be
@@ -959,7 +1117,7 @@ def restore_plan_snapshot(plan, snapshot):
         # could miss it.
         spared_pks = _cells_athlete_data_points_at(candidate_pks) | set(
             models.Prescription.objects.filter(
-                pk__in=candidate_pks, athlete_authored=True
+                pk__in=candidate_pks, athlete_authored=True, entered_by_coach=False
             ).values_list("pk", flat=True)
         )
         doomed_pks = [pk for pk in candidate_pks if pk not in spared_pks]
@@ -991,9 +1149,11 @@ def record_plan_action(plan, label, *, athlete_cell_pks=()):
     ``unique_plan_action_seq``. (The undo/redo endpoints take the same lock,
     so recording also serializes against a concurrent restore.)
 
-    ``athlete_cell_pks`` names athlete-authored cells the caller is about to
+    ``athlete_cell_pks`` names athlete-entered cells the caller is about to
     reclaim; they are captured as athlete rows so undo can hand them back
-    (#703). See ``serialize_plan_snapshot``.
+    (#703). Since #709 ``cell_line_write`` only ever takes a BLANK athlete
+    line, so this is a blank handback. See ``serialize_plan_snapshot``. A coach
+    set line (#709) needs no argument: plain capture already holds it.
     """
     models.Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
     # Labels often embed a row's free-text name (255 chars allowed) — clamp to

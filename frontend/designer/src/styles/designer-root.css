@@ -162,3 +162,35 @@
   background: var(--surface);
   color: var(--ink);
 }
+
+/* Unsaved-change banner (useGrid.saveError): fixed, so it never moves the grid. */
+.meso-save-error {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  z-index: 50;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+}
+.meso-save-error-dismiss {
+  appearance: none;
+  flex: none;
+  cursor: pointer;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--rail);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}

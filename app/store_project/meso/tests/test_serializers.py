@@ -709,6 +709,7 @@ class TestSerializeMesocycleGrid:
             "prescription_id": f.squat_cell1.pk,
             "text": "4 x 6, RPE 7, 100",
             "skipped": False,
+            "session_started": False,
             "lines": [],
             "athlete_summary": None,
         }
@@ -759,6 +760,8 @@ class TestSerializeMesocycleGrid:
                 "line": 1,
                 "text": "Front Squat",
                 "athlete_authored": False,
+                "entered_by_coach": False,
+                "loggable": False,
             }
         ]
         # The untouched week's stack is empty.
@@ -778,12 +781,16 @@ class TestSerializeMesocycleGrid:
                 "line": 1,
                 "text": "Pause for two seconds",
                 "athlete_authored": False,
+                "entered_by_coach": False,
+                "loggable": False,
             },
             {
                 "id": athlete_line.pk,
                 "line": 2,
                 "text": "105 x 5, RPE 8",
                 "athlete_authored": True,
+                "entered_by_coach": False,
+                "loggable": True,
             },
         ]
 
@@ -809,6 +816,8 @@ class TestSerializeMesocycleGrid:
                 "line": 1,
                 "text": "",
                 "athlete_authored": False,
+                "entered_by_coach": False,
+                "loggable": False,
             }
         ]
 

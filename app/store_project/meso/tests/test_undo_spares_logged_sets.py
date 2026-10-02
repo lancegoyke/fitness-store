@@ -53,7 +53,7 @@ from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
 from store_project.meso.models import SessionLog
 from store_project.meso.tests._helpers import day
-from store_project.meso.tests.test_parse_at_commit import reclaim
+from store_project.meso.tests.test_parse_at_commit import legacy_reclaim
 from store_project.meso.tests.test_parse_at_commit import seed
 from store_project.meso.tests.test_parse_at_commit import sub_cell
 from store_project.meso.tests.test_parse_at_commit import write_cell
@@ -271,7 +271,7 @@ class TestRestoreAfterRewriteSparesANullPrescriptionRow:
         original = LoggedSet.objects.get(source_line=cell)
 
         client.force_login(s.coach)
-        assert reclaim(client, s, text="").status_code == 200
+        legacy_reclaim(s, text="")
 
         # Simulate the #577 damage directly: a pre-fix `restore_plan_snapshot`
         # purge hard-deleted this row's line-0 cell out from under it, and

@@ -9,9 +9,18 @@
  *
  * Two things sit beside the athlete's lines. The coach's own cues for an exercise
  * (`coach_lines`) are read-only text after the sets: they occupy line numbers, so
- * the athlete's stack only ever uses the FREE ones (the cell endpoint refuses a
- * changed write onto a coach line). And one session note ("Notes for your coach")
+ * the athlete's stack only ever uses the FREE ones (a changed write onto a coach
+ * line is refused unless it is `new`, which relocates instead). And one session note ("Notes for your coach")
  * saves through the log endpoint as `{notes}` — see `noteInput`/`saveNotes`.
+ *
+ * The coach can log sets on the same session ("logged by coach": a sub-line
+ * with `entered_by_coach`, still editable — an athlete edit makes it theirs).
+ * Two people writing a NEW line on one number never overwrite each other: a
+ * line the client believes is empty goes out as `new: true`, and when the
+ * server finds something there it files the text on the next free number and
+ * answers `relocated_from` plus the exercise's whole stack. `applyExerciseLines`
+ * merges such a stack into the page (a dirty local line keeps its text and moves
+ * off a taken number, its outbox entry with it).
  */
 // ---- %1RM ergonomics helpers (S2 Phase 2b) ----
 // Pure maths shared by the logger and its tests. A %1RM target ("75%") is an
@@ -82,6 +91,30 @@ function notifyTourRefresh() {
 // lines (matches the server's MAX_CELL_LINE) so `addLine` can't fabricate an
 // unbounded stack.
 const MAX_CELL_LINE = 20;
+
+// A client-only identity for each sub-line entry, assigned once when it is
+// created. The template keys its x-for on it, so a renumbered line (`l.line`
+// changes) keeps its input element, focus and caret. Never sent to the server.
+let _keySeq = 0;
+function nextLineKey() {
+  _keySeq += 1;
+  return "l" + _keySeq;
+}
+
+// An idempotency token for one "new-line write" (1..64 chars): every body that
+// carries that write — the write-ahead copy, the post, queued replays — sends
+// the same one, so a replay whose first delivery already landed isn't written
+// twice. `crypto.randomUUID()` when the browser has it.
+function makeToken() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return (
+    Date.now().toString(36) +
+    Math.random().toString(36).slice(2, 12) +
+    Math.random().toString(36).slice(2, 12)
+  );
+}
 
 // The offline outbox (`meso-log-queue`) holds two kinds of write. A session
 // log is `{url, body}`, the shape it has always had, so a queue written before
@@ -230,6 +263,8 @@ function createLogger() {
       for (const ex of this.exercises) {
         if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
         if (!Array.isArray(ex.coach_lines)) ex.coach_lines = [];
+        // Typed text that has no line to live on (see `applyExerciseLines`).
+        if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
         const want = Math.min(
           Math.max(Number.isInteger(ex.pad_lines) ? ex.pad_lines : 1, 1),
           MAX_CELL_LINE,
@@ -250,6 +285,8 @@ function createLogger() {
           l.savedText = l.text || "";
           l.queued = false;
           l.saveError = false;
+          l.entered_by_coach = !!l.entered_by_coach;
+          if (!l._k) l._k = nextLineKey();
         }
       }
       // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
@@ -322,25 +359,56 @@ function createLogger() {
     // and a blur of the line would post the old text back over the queued one.
     restoreQueuedLines() {
       if (!this.cellUrl) return;
+      // Numbers already given to a displaced line in this pass.
+      const handedOut = new Set();
       for (const item of this.readQueue()) {
         if (!isCellEntry(item) || item.url !== this.cellUrl) continue;
         if (!this.isMine(item)) continue;
         const ex = this.exercises.find((e) => e.id === item.body.exercise_id);
         // Gone from the session: the flush sends it and the server says so.
         if (!ex) continue;
-        const line = item.body.line;
-        // A coach cue has taken this number since the line was queued: no
-        // input to show it on. The flush still sends it and the server's 422
-        // drops it, rather than leaving an editable input over the cue.
-        if (this.coachLineSet(ex).has(line)) continue;
+        let line = item.body.line;
+        let retargeted = "";
+        // A coach cue has taken this number since the line was queued: there is
+        // no input to show it on, and an editable input over the cue would be
+        // wrong. Show it on the next free number instead and re-target its
+        // outbox entry there, flagged `new` (the server holds nothing on that
+        // number as far as this page knows). Flushed as it is, it then lands on
+        // that number — or, if something took it meanwhile, the server files it
+        // on the next free one and `applyExerciseLines` re-keys it.
+        if (this.coachLineSet(ex).has(line)) {
+          const free = this._freeLineFor(ex, handedOut);
+          if (free == null) {
+            // None left: the text still shows, as unplaced. Its outbox entry
+            // stays as queued; the flush gets the server's honest 422.
+            if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
+            ex.unplaced.push({ text: item.body.text });
+            if (item.id) this._ownEntries[item.id] = true;
+            continue;
+          }
+          if (item.id) {
+            retargeted = this._retargetOutbox(item.id, free);
+            if (!retargeted) {
+              // Couldn't be moved: show it as unplaced, outbox entry kept.
+              if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
+              ex.unplaced.push({ text: item.body.text });
+              this._ownEntries[item.id] = true;
+              continue;
+            }
+          }
+          handedOut.add(free);
+          line = free;
+        }
         if (!ex.sub_lines.some((l) => l.line === line)) {
-          ex.sub_lines.push({ line, text: "", savedText: "" });
+          ex.sub_lines.push({ line, text: "", savedText: "", _k: nextLineKey() });
           ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
         }
         // Read back through the array, so on the live page this is Alpine's
         // reactive copy rather than the plain object just pushed.
         const entry = ex.sub_lines.find((l) => l.line === line);
         entry.text = item.body.text;
+        const token = retargeted || item.body.token;
+        if (typeof token === "string" && token) entry.newToken = token;
         entry.queued = true;
         entry.saveError = false;
         // Its text is on the line now, as this page's own.
@@ -1141,7 +1209,7 @@ function createLogger() {
       const line = this.nextFreeLine(ex);
       if (line == null) return;
       // Nothing is saved on a new line, so blurring it empty posts nothing.
-      ex.sub_lines.push({ line, text: "", savedText: "" });
+      ex.sub_lines.push({ line, text: "", savedText: "", _k: nextLineKey() });
     },
 
     // ---- session note ("Notes for your coach") ----
@@ -1330,7 +1398,19 @@ function createLogger() {
       const text = entry.text || "";
       const busy = (this._lineSavesRunning[key] || 0) > 0;
       if (!busy && !this._lineNeedsSending(entry, text, ex.id, line)) return;
-      this.enqueueCell({ exercise_id: ex.id, line, text });
+      const body = { exercise_id: ex.id, line, text };
+      // `new` only when the server surely holds nothing here: with an earlier
+      // save still running it may already hold that text, and a replay flagged
+      // `new` would file a correction on another line as a second set.
+      // An entry that already has a token stays `new` (same token) until a 200
+      // confirms it, busy or not: the server reads a known token with other
+      // text as an edit of the line it created.
+      if (entry.newToken || (!busy && entry.savedText === "")) {
+        body.new = true;
+        if (!entry.newToken) entry.newToken = makeToken();
+        body.token = entry.newToken;
+      }
+      this.enqueueCell(body);
     },
 
     // The dirty check (#527): a line whose text the server already has needs
@@ -1393,6 +1473,10 @@ function createLogger() {
       let text;
       // The outbox entry this write stands for.
       let sent = null;
+      // The client believes the server holds nothing on this line (see
+      // `_writeAheadOnBlur`); a replay carries the flag it was queued with.
+      let newLine = false;
+      let token = "";
       if (fromQueue) {
         // Send what the queue holds for this cell NOW. A blur that ran first
         // may already have saved newer text and dropped the entry; replaying
@@ -1400,8 +1484,16 @@ function createLogger() {
         sent = this.queuedCell(ex.id, line);
         if (!sent) return "skipped";
         text = sent.body.text;
+        newLine = sent.body.new === true;
+        if (newLine && typeof sent.body.token === "string" && sent.body.token) {
+          token = sent.body.token;
+          if (entry && !entry.newToken) entry.newToken = token;
+        }
       } else {
-        text = entry ? entry.text || "" : "";
+        // No entry: the line was moved or dropped by a merge since this save
+        // was asked for; sending "" for its number would blank someone else's.
+        if (!entry) return "skipped";
+        text = entry.text || "";
         if (entry && !this._lineNeedsSending(entry, text, ex.id, line)) {
           entry.saveError = false;
           // The blur may have queued this very text while an earlier save
@@ -1411,7 +1503,20 @@ function createLogger() {
           return "skipped";
         }
       }
+      if (
+        !fromQueue &&
+        entry &&
+        (entry.newToken || entry.savedText === "")
+      ) {
+        newLine = true;
+        if (!entry.newToken) entry.newToken = makeToken();
+        token = entry.newToken;
+      }
       const body = { exercise_id: ex.id, line, text };
+      if (newLine) {
+        body.new = true;
+        if (token) body.token = token;
+      }
       // Write ahead: the line is in the outbox BEFORE the request goes out,
       // so closing the page mid-request — a POST stalled on gym wifi — can't
       // lose it. It replaces any older entry for the cell (latest text wins);
@@ -1458,7 +1563,9 @@ function createLogger() {
         return "rejected";
       }
       if (sent) this.dropEntry(sent);
-      if (entry) entry.queued = false;
+      // An entry a merge renumbered while this ran has its own outbox entry now
+      // (`applyExerciseLines`); its queued state isn't this reply's to clear.
+      if (entry && entry.line === line) entry.queued = false;
       let data;
       try {
         data = await res.json();
@@ -1466,7 +1573,7 @@ function createLogger() {
         // Saved server-side regardless, but its warn/PR state is unknown, so
         // the line's saved text is too: the next blur sends it again
         // (harmlessly) and reconciles.
-        if (entry) entry.savedText = undefined;
+        if (entry && entry.line === line) entry.savedText = undefined;
         return "saved";
       }
       // The count is session-wide, not this line's, so it applies before the
@@ -1474,6 +1581,26 @@ function createLogger() {
       // out of order; that is safe because `applyProgress` drops any payload
       // whose `as_of` is older than the one already shown.
       this.applyProgress(data.progress);
+      // Checked after the last await: a merge may have renumbered or dropped
+      // this entry while the body was being read, and then this reply says
+      // nothing about it.
+      if (entry && entry.line !== line) return "saved";
+      // The server put the text on another number: re-key the stack.
+      if (
+        Number.isInteger(data.relocated_from) &&
+        data.cell &&
+        Number.isInteger(data.cell.line)
+      ) {
+        this._applyRelocation(
+          ex,
+          entry,
+          line,
+          typeof data.cell.text === "string" ? data.cell.text : text,
+          text,
+          data,
+        );
+        return "saved";
+      }
       // A replay of text another tab queued: if this tab never touched the
       // line, show what the server now holds, or a later blur here would post
       // the old text back over it. Never for this page's own entry — the line
@@ -1499,13 +1626,26 @@ function createLogger() {
       // just-committed text, so fixing a fat-fingered attempt (or typing one)
       // updates the cell's color right away, without a page reload.
       if (!entry) return "saved";
+      // A readable 200 for this entry: the server holds the line, so the
+      // `new` protection ends (even if the text changed while this ran).
+      entry.newToken = undefined;
+      // The athlete's write is on the line now, so it is theirs.
+      entry.entered_by_coach = !!(data.cell && data.cell.entered_by_coach);
       if ((entry.text || "") !== text) {
         // The line changed while this was in flight, so what the server has
         // is no longer what it shows; the next blur sends it either way.
         entry.savedText = undefined;
         return "saved";
       }
-      entry.savedText = text;
+      // A replayed write the server had already taken answers with the line as
+      // it is NOW, which may be newer than what was sent: show that, not ours.
+      const held =
+        token && data.cell && typeof data.cell.text === "string"
+          ? data.cell.text
+          : text;
+      if (held !== text) entry.text = held;
+      entry.savedText = held;
+      entry.newToken = undefined; // a 200 confirms the server holds the line
       entry.warn = !!(data.cell && data.cell.warn);
       // WHY it's tinted, not just whether (#572) — `_lineNeedsSending` treats
       // one reason as a repair to re-post and one as a duplicate to leave
@@ -1525,6 +1665,266 @@ function createLogger() {
           : null;
       entry.pr = earned ? `${earned.value} ${earned.unit}` : "";
       return "saved";
+    },
+
+    // The lowest number a displaced line can be shown on: not a coach cue, and
+    // either absent from the stack or a blank, unqueued pad line.
+    // Numbers an outbox entry for this exercise targets are taken too: giving
+    // one away would put two writes on one number.
+    _queuedLineNumbers(ex) {
+      return new Set(
+        this.readQueue()
+          .filter(
+            (i) =>
+              isCellEntry(i) &&
+              i.url === this.cellUrl &&
+              i.body.exercise_id === ex.id,
+          )
+          .map((i) => i.body.line),
+      );
+    },
+
+    _freeLineFor(ex, taken = new Set()) {
+      const cues = this.coachLineSet(ex);
+      const queued = this._queuedLineNumbers(ex);
+      for (let n = 1; n <= MAX_CELL_LINE; n += 1) {
+        if (cues.has(n) || taken.has(n) || queued.has(n)) continue;
+        const there = (ex.sub_lines || []).find((l) => l.line === n);
+        if (!there || (!(there.text || "") && !there.queued && there.savedText === "")) {
+          return n;
+        }
+      }
+      return null;
+    },
+
+    // Point one of this page's outbox entries at another line number, flagged
+    // `new`: its text was never on the server under the old one. Whatever the
+    // outbox already holds an entry for the new number the move is refused
+    // (a caller bug — it must pick a number nothing targets): no other entry is
+    // ever deleted here. Keeps the entry's id, so it stays this page's own, and
+    // its token (same write; one is made if it had none). Returns the token, or
+    // "" when nothing was moved.
+    _retargetOutbox(id, toLine) {
+      const queue = this.readQueue();
+      const index = queue.findIndex((i) => i.id === id);
+      if (index === -1) return "";
+      const from = queue[index];
+      if (
+        queue.some(
+          (i, n) =>
+            n !== index && isSameCell(i, from.url, from.body.exercise_id, toLine),
+        )
+      ) {
+        return "";
+      }
+      const token =
+        typeof from.body.token === "string" && from.body.token
+          ? from.body.token
+          : makeToken();
+      queue[index] = {
+        ...from,
+        body: { ...from.body, line: toLine, new: true, token },
+      };
+      return this.writeQueue(queue) ? token : "";
+    },
+
+    // A line that holds something the server may not: text not (known to be)
+    // saved, a write queued or running for it.
+    _lineIsDirty(ex, l) {
+      return (
+        l.savedText === undefined ||
+        (l.text || "") !== l.savedText ||
+        !!l.queued ||
+        (this._lineSavesRunning[ex.id + ":" + l.line] || 0) > 0
+      );
+    },
+
+    // Merge the server's whole stack for one exercise into the page: the answer
+    // to a relocated write, and what live polling will use. `serverLines` is
+    // `{sub_lines: [{line, text, warn, warn_reason, entered_by_coach}],
+    // coach_lines: [{line, text}]}`.
+    //
+    //   - `coach_lines` is the server's.
+    //   - A CLEAN local line takes the server's line of its number (text,
+    //     warn, warn_reason, entered_by_coach; queued/saveError cleared). If the
+    //     server has none: it is dropped when the number is now a coach cue;
+    //     otherwise the server holds nothing there now (it drops blank lines),
+    //     so the line is blanked to a pad — keeping stale text would let a
+    //     later blur re-post it. (`partial` skips that blanking: the caller's
+    //     server lines are only some of the stack.)
+    //   - A DIRTY local line (see `_lineIsDirty`) keeps its text. If its number
+    //     is now a coach cue, or the server's text there differs from both the
+    //     line's text and what it last knew (`savedText`, when known), it moves to
+    //     the lowest number free in both stacks with `savedText = ""` (its next
+    //     save goes as `new`), and the outbox entry this page owns for it
+    //     moves with it, flagged `new`. With no free number the text goes to
+    //     `ex.unplaced` (shown read-only, never lost) and its outbox entry
+    //     stays as it is: replayed, the server's 422 `no_free_line` is the
+    //     honest answer.
+    //   - Server lines with no local entry are added. The stack ends sorted,
+    //     one entry per number, none on a coach cue.
+    applyExerciseLines(ex, serverLines, { partial = false } = {}) {
+      if (!ex || !serverLines || typeof serverLines !== "object") return;
+      const valid = (x) => x && Number.isInteger(x.line) && x.line >= 1;
+      const coach = (Array.isArray(serverLines.coach_lines) ? serverLines.coach_lines : [])
+        .filter(valid)
+        .map((c) => ({ line: c.line, text: c.text || "" }));
+      const subs = new Map();
+      for (const s of Array.isArray(serverLines.sub_lines) ? serverLines.sub_lines : []) {
+        if (valid(s)) subs.set(s.line, s);
+      }
+      ex.coach_lines = coach;
+      const cues = new Set(coach.map((c) => c.line));
+      const adopt = (l, s) => {
+        l.text = s.text || "";
+        l.savedText = l.text;
+        l.warn = !!s.warn;
+        l.warn_reason = s.warn_reason || "";
+        l.entered_by_coach = !!s.entered_by_coach;
+        l.queued = false;
+        l.saveError = false;
+      };
+      const kept = [];
+      const displaced = [];
+      for (const l of Array.isArray(ex.sub_lines) ? ex.sub_lines : []) {
+        const s = subs.get(l.line);
+        if (!this._lineIsDirty(ex, l)) {
+          if (s) {
+            adopt(l, s);
+            kept.push(l);
+          } else if (!cues.has(l.line)) {
+            if (!partial && (l.text || "") !== "") {
+              l.text = "";
+              l.savedText = "";
+              l.warn = false;
+              l.warn_reason = "";
+              l.pr = "";
+              l.entered_by_coach = false;
+            }
+            kept.push(l);
+          }
+        } else if (
+          cues.has(l.line) ||
+          (s &&
+            l.savedText !== undefined &&
+            (s.text || "") !== l.savedText &&
+            (s.text || "") !== (l.text || ""))
+        ) {
+          // Displaced only when the number changed hands: a coach cue, or
+          // server text that isn't what this page last knew. A dirty line
+          // whose savedText still matches the server is the athlete's own
+          // pending edit of it and keeps its number (and outbox entry); with
+          // savedText unknown it stays put too.
+          displaced.push(l);
+        } else {
+          kept.push(l);
+        }
+      }
+      const have = new Set(kept.map((l) => l.line));
+      for (const [line, s] of subs) {
+        if (have.has(line) || cues.has(line)) continue;
+        const l = { line, _k: nextLineKey() };
+        adopt(l, s);
+        kept.push(l);
+        have.add(line);
+      }
+      const taken = new Set([
+        ...have,
+        ...cues,
+        ...subs.keys(),
+        ...this._queuedLineNumbers(ex),
+      ]);
+      displaced.sort((a, b) => (a.line || 0) - (b.line || 0));
+      let moved = false;
+      for (const l of displaced) {
+        let n = null;
+        for (let i = 1; i <= MAX_CELL_LINE; i += 1) {
+          if (!taken.has(i)) {
+            n = i;
+            break;
+          }
+        }
+        const own = this.queuedCell(ex.id, l.line);
+        const owned = !!own && !!own.id && !!this._ownEntries[own.id];
+        if (n == null) {
+          if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
+          ex.unplaced.push({ text: l.text || "" });
+          continue;
+        }
+        let token = "";
+        if (owned) {
+          token = this._retargetOutbox(own.id, n);
+          if (!token) {
+            // The outbox wouldn't move (storage, or a target in the way): the
+            // text must not sit on a number its write doesn't follow.
+            if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
+            ex.unplaced.push({ text: l.text || "" });
+            continue;
+          }
+          moved = true;
+          l.newToken = token;
+        }
+        taken.add(n);
+        l.line = n;
+        l.savedText = "";
+        kept.push(l);
+      }
+      kept.sort((a, b) => (a.line || 0) - (b.line || 0));
+      ex.sub_lines = kept;
+      // The replay pass that is running read the outbox before this moved
+      // anything; ask for another so the moved entry isn't left waiting.
+      if (moved) this.flushQueue();
+    },
+
+    // The server answered a write with `relocated_from`: its line number now
+    // belongs to someone else and `sentText` landed on `data.cell.line`. The
+    // entry that was sent is out of the stack while the server's stack merges
+    // in, then takes the new number — clean, or dirty if the athlete typed on
+    // while the request was out (its text stays; the server holds `sentText`).
+    _applyRelocation(ex, entry, oldLine, serverText, sentText, data) {
+      const target = data.cell.line;
+      const cell = data.cell;
+      const present = !!entry && (ex.sub_lines || []).includes(entry) && entry.line === oldLine;
+      if (present) ex.sub_lines = ex.sub_lines.filter((l) => l !== entry);
+      const lines = data.exercise_lines;
+      this.applyExerciseLines(
+        ex,
+        lines && typeof lines === "object"
+          ? lines
+          : {
+              coach_lines: ex.coach_lines,
+              sub_lines: [
+                {
+                  line: target,
+                  text: serverText,
+                  warn: cell.warn,
+                  warn_reason: cell.warn_reason,
+                  entered_by_coach: cell.entered_by_coach,
+                },
+              ],
+            },
+        { partial: !(lines && typeof lines === "object") },
+      );
+      if (!present) return;
+      entry.line = target;
+      // The text the server holds on the line — for an idempotent replay that
+      // can be newer than `sentText`. An entry nobody typed on since follows it.
+      if (entry.text === sentText) entry.text = serverText;
+      entry.savedText = serverText;
+      entry.newToken = undefined; // a 200 confirms it
+      entry.queued = false;
+      entry.saveError = false;
+      entry.warn = !!cell.warn;
+      entry.warn_reason = cell.warn_reason || "";
+      entry.entered_by_coach = !!cell.entered_by_coach;
+      const earned =
+        Array.isArray(data.new_records) && data.new_records.length
+          ? data.new_records[0]
+          : null;
+      entry.pr = earned ? `${earned.value} ${earned.unit}` : "";
+      ex.sub_lines = ex.sub_lines.filter((l) => l.line !== target);
+      ex.sub_lines.push(entry);
+      ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
     },
 
     // A line's write didn't land; say what the outbox holds for it. Written

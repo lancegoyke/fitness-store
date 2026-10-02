@@ -438,6 +438,68 @@ def _classify_performed_head(head, explicit_load=False):
     return None
 
 
+_FOR_WORD = re.compile(r"\s+for\s+", re.IGNORECASE)
+_AT_WORD = re.compile(r"\s+at\s+", re.IGNORECASE)
+_ONE_SET_PREFIX = re.compile(r"^1\s*[x\u00d7]\s*(.+?)\s*@\s*(.+)$", re.IGNORECASE)
+_TRAILING_RPE = re.compile(
+    r"^(?P<base>.*?\S)\s*(?:@\s*(?:rpe\s*)?|\brpe\s*)"
+    r"(?P<rpe>\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?)$",
+    re.IGNORECASE,
+)
+_SET_COUNT_KEYS = ("reps", "reps_range", "duration", "amrap")
+
+
+def _classify_word_or_prefix_head(head, explicit_load):
+    """Word operators (``225 for 5``, ``5 at 225``) and a one-set prefix.
+
+    Both rewrite to a shape the existing helpers already judge, so their
+    plausibility checks still apply. Only a leading ``1`` counts as the prefix:
+    ``3x5 @ 225`` is a multi-set line, which a coach means as a cue.
+    """
+    if _FOR_WORD.search(head):
+        out = _try_load_first(_FOR_WORD.sub(" x ", head, count=1), explicit_load)
+        if out is not None:
+            return out
+    if _AT_WORD.search(head):
+        out = _try_at_form(_AT_WORD.sub(" @ ", head, count=1), explicit_load)
+        if out is not None:
+            return out
+    prefix = _ONE_SET_PREFIX.match(head)
+    if prefix:
+        return _try_at_form(f"{prefix.group(1)} @ {prefix.group(2)}", explicit_load)
+    return None
+
+
+def _classify_extended_head(head, explicit_load=False):
+    """Coach-notation shapes ``_classify_performed_head`` does not read.
+
+    Tried only after that function returns ``None``, so nothing that already
+    parsed can change. Adds the word operators and one-set prefix, and a
+    trailing RPE with no comma (``225x5 @8``, ``225 x 5 RPE 8``). The RPE form
+    needs a base with both a load and a rep/duration/AMRAP count: ``225 @8`` is
+    still not a set, and ``5 @ 8`` was already one (reps 5, load 8).
+    """
+    out = _classify_word_or_prefix_head(head, explicit_load)
+    if out is not None:
+        return out
+    match = _TRAILING_RPE.match(head)
+    if not match:
+        return None
+    rpe = match.group("rpe")
+    if any(float(n) > 10 for n in re.findall(r"\d+(?:\.\d+)?", rpe)):
+        return None
+    base = match.group("base")
+    out = _classify_performed_head(base, explicit_load)
+    if out is None:
+        out = _classify_word_or_prefix_head(base, explicit_load)
+    if out is None or "load" not in out:
+        return None
+    if not any(k in out for k in _SET_COUNT_KEYS):
+        return None
+    out["rpe"] = re.sub(r"\s*", "", rpe)
+    return out
+
+
 def parse_performed(text):
     """Derive best-effort structure from what an athlete typed into a cell.
 
@@ -520,6 +582,8 @@ def parse_performed(text):
     segments = line.split(",")
     head = segments[0].strip()
     out = _classify_performed_head(head, explicit_load)
+    if out is None:
+        out = _classify_extended_head(head, explicit_load)
 
     if out is not None:
         for segment in segments[1:]:
@@ -767,3 +831,62 @@ def performed_is_set(text):
     """
     parsed = parse_performed(text)
     return bool(parsed) and parsed.get("kind") == "set"
+
+
+def performed_set_values(text):
+    """Does ``text`` parse to a set that carries reps or a load?
+
+    The writer's own test for "this cell becomes a ``LoggedSet``", factored out
+    so the read side (the chip flip) asks exactly the question the write side
+    answers instead of re-deriving it.
+    """
+    parsed = parse_performed(text)
+    return bool(
+        parsed
+        and parsed.get("kind") == "set"
+        and (parsed.get("reps") or parsed.get("load"))
+    )
+
+
+def reads_as_one_set(text):
+    """Strict default for a coach's new line: is this one complete set?
+
+    ``parse_performed`` is deliberately generous (``3x5`` is load 3 for 5 reps,
+    ``5 @ 8`` is 5 reps at 8), which is right for an athlete logging what they
+    did but wrong for a coach, who writes ``3x5`` as sets by reps and ``5 @ 8``
+    as reps at an RPE. So beyond a set with a load and a rep/duration/AMRAP
+    count, the load must not be a bare unit-less integer of 10 or less. A
+    coach who means a 5 lb set can add the unit.
+    """
+    parsed = parse_performed(text)
+    if not parsed or parsed.get("kind") != "set":
+        return False
+    load = parsed.get("load")
+    if not load:
+        return False
+    # One definite count. A rep RANGE (``225 x 8-10``) or AMRAP (``AMRAP @
+    # 135``) is a target to aim at, which a performed set never is.
+    if parsed.get("reps_range") or parsed.get("amrap"):
+        return False
+    if not any(parsed.get(k) for k in ("reps", "duration")):
+        return False
+    match = _LOAD.match(load)
+    if match and match.group(1) is not None:
+        number, unit = match.groups()
+        # A percentage is how a coach PRESCRIBES a load (``5 @ 70%``,
+        # ``85% x 5``), and a bare number of 10 or less reads as an RPE
+        # (``5 @ 8``, ``4 @ 9.5``) or a set count (``3x5``).
+        if unit == "%":
+            return False
+        if not unit and float(number) <= 10:
+            return False
+        # ``12x2`` / ``20 x 4``: a bare number before the ``x`` is a set count
+        # in a coach's hands up to about 20 (speed work, EMOMs). A real load
+        # that light gets a unit (``12kg x 2``) or the ``@`` form.
+        if (
+            not unit
+            and float(number) <= 20
+            and re.match(r"^\s*\d+(?:\.\d+)?\s*[x\u00d7]", parsed["raw"], re.I)
+        ):
+            return False
+    return True

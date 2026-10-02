@@ -37,10 +37,13 @@ def test_backfill_stamps_unstamped_rows_and_leaves_stamped_ones():
     executor = MigrationExecutor(connection)
     leaf_nodes = executor.loader.graph.leaf_nodes("meso")
     try:
+        # Seeded BEFORE rolling back: ``seed()`` writes its cells through the
+        # current ``Prescription``, whose later columns (#709's 0064) don't
+        # exist at 0062. Rolling back drops them and keeps the rows.
+        s = seed()
         executor.migrate([MESO_0062])
         executor.loader.build_graph()
 
-        s = seed()
         ex = ExerciseFactory(name="Box Squat", slug="box-squat")
         slot = s.squat.exercise_slot
         slot.exercise = ex

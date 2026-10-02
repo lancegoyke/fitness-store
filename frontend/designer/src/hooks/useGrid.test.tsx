@@ -5,7 +5,8 @@
 // day|week|exercise, undo/redo) POST then refetch the whole grid (GET
 // grid/), mirroring usePlanData/useReorder's ref-guard idiom so concurrent
 // structural ops can't race.
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { MesoTable } from "../components/MesoTable";
 import { useGrid } from "./useGrid";
 import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid } from "../lib/api";
 
@@ -404,12 +405,12 @@ describe("writeCellLine", () => {
     });
 
     expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
-      { id: 5, line: 1, text: "RPE 9", athlete_authored: false },
+      { id: 5, line: 1, text: "RPE 9" },
       { id: 6, line: 2, text: "slow eccentric" },
     ]);
   });
 
-  it("optimistically reclaims an athlete-authored line on a coach write", () => {
+  it("an in-place coach write onto an athlete-entered line paints it as a coach line (the server then refuses visibly)", () => {
     const { result } = setup(
       grid({
         days: [
@@ -435,6 +436,7 @@ describe("writeCellLine", () => {
       result.current.writeCellLine(9, 1, 1, "105 x 5");
     });
 
+    // A coach write painted onto a line is always a coach line in the view.
     expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
       { id: 5, line: 1, text: "105 x 5", athlete_authored: false },
     ]);
@@ -1119,5 +1121,666 @@ describe("concurrency guard covers the new P2 verbs", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2); // POST + GET only — no third/fourth call
     expect(result.current.busy).toBe(false);
+  });
+});
+
+// --- #709: the coach logs in the grid — server-stack adoption, per-cell
+// serialization, refusals, retry marks, and the saveError banner ----------
+
+describe("writeCellLine (#709)", () => {
+  const key = "9:1";
+  const athlete = { name: "Dana Reyes", initials: "DR", contraindications: [] };
+
+  function linesOf(r: { current: ReturnType<typeof useGrid> }) {
+    return r.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines;
+  }
+
+  function gridCell(lines: GridCell["lines"], extra: Partial<GridCell> = {}) {
+    return { prescription_id: 100, text: "SERVER LINE 0", skipped: false, lines, athlete_summary: null, session_started: true, ...extra };
+  }
+
+  function withLines(lines: GridCell["lines"], extra: Partial<MesoGrid> = {}) {
+    return grid({
+      ...extra,
+      days: [day({ rows: [row({ cells: { "1": cell({ lines }) } })] })],
+    });
+  }
+
+  async function flush() {
+    await act(async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    });
+  }
+
+  function deferred() {
+    let resolve!: (v: unknown) => void;
+    const promise = new Promise((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it("sends intent/kind only when given", () => {
+    const { result } = setup();
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 2, "225 x 5", { intent: "edit", kind: "set" });
+    });
+    expect(sentBody()).toEqual({ week_id: 1, line: 2, text: "225 x 5", intent: "edit", kind: "set" });
+  });
+
+  it("intent new on an absent or blank line puts the text there", () => {
+    const { result } = setup(withLines([{ line: 1, text: "" }]));
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "cue", { intent: "new" });
+    });
+    expect(linesOf(result)).toEqual([{ line: 1, text: "cue", athlete_authored: false }]);
+  });
+
+  it("intent new on an occupied line is predicted onto the next absent/blank line above it", () => {
+    const { result } = setup(
+      withLines([
+        { line: 1, text: "100 x 5", athlete_authored: true },
+        { line: 2, text: "cue two" },
+        { line: 3, text: "" },
+      ]),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "my text", { intent: "new" });
+    });
+    expect(linesOf(result)).toEqual([
+      { line: 1, text: "100 x 5", athlete_authored: true },
+      { line: 2, text: "cue two" },
+      { line: 3, text: "my text", athlete_authored: false },
+    ]);
+    // The request still names the line the coach typed on; the server relocates.
+    expect(sentBody()).toMatchObject({ line: 1, intent: "new" });
+  });
+
+  it("serializes writes to one cell and re-applies a queued write over the adopted server stack", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "old" }]));
+    const first = deferred();
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(res({ ok: true, grid_cell: gridCell([{ line: 1, text: "A" }, { line: 2, text: "B" }]) }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "A", { intent: "edit" });
+      result.current.writeCellLine(9, 1, 2, "B", { intent: "new" });
+    });
+    // Only the first is in flight; the second waits for its answer.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      first.resolve(
+        res({
+          ok: true,
+          grid_cell: gridCell(
+            [
+              { line: 1, text: "A", athlete_authored: false },
+              { line: 3, text: "athlete line", athlete_authored: true },
+            ],
+            { athlete_summary: { sets: 1, load: "100", unit: "kg", rpe: "" } },
+          ),
+        }),
+      );
+    });
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sentBody(1)).toMatchObject({ line: 2, text: "B", intent: "new" });
+    // The second answer is adopted too: server stack wins, line-0 text untouched.
+    expect(linesOf(result)).toEqual([
+      { line: 1, text: "A" },
+      { line: 2, text: "B" },
+    ]);
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.text).toBe("3 x 5, RPE 8, 100");
+  });
+
+  it("keeps a still-queued write on screen when an earlier answer is adopted", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "old" }]));
+    const first = deferred();
+    globalThis.fetch = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValue(new Promise(() => {})) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "A", { intent: "edit" });
+      result.current.writeCellLine(9, 1, 2, "B", { intent: "new" });
+    });
+    await act(async () => {
+      first.resolve(res({ ok: true, grid_cell: gridCell([{ line: 1, text: "A" }], { session_started: true }) }));
+    });
+    await flush();
+    expect(linesOf(result)).toEqual([
+      { line: 1, text: "A" },
+      { line: 2, text: "B", athlete_authored: false },
+    ]);
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.session_started).toBe(true);
+  });
+
+  it("a relocated write shows 'Moved below <First>'s line' and clears after ~6s", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { result } = setup(withLines([{ line: 1, text: "100 x 5", athlete_authored: true }], { athlete }));
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        res({
+          ok: true,
+          relocated_from: 1,
+          grid_cell: gridCell([
+            { line: 1, text: "100 x 5", athlete_authored: true },
+            { line: 2, text: "mine" },
+          ]),
+        }),
+      ) as unknown as typeof fetch;
+      act(() => {
+        result.current.writeCellLine(9, 1, 1, "mine", { intent: "new" });
+      });
+      await flush();
+      expect(result.current.cellUi[key]?.notice).toEqual({ kind: "moved", message: "Moved below Dana's line" });
+      await act(async () => {
+        vi.advanceTimersByTime(6100);
+      });
+      expect(result.current.cellUi[key]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to 'your athlete' in the moved notice when the grid has no athlete", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "x" }]));
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({ ok: true, relocated_from: 1, grid_cell: gridCell([{ line: 1, text: "x" }, { line: 2, text: "y" }]) }),
+    ) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "y", { intent: "new" });
+    });
+    await waitFor(() => expect(result.current.cellUi[key]?.notice?.message).toBe("Moved below your athlete's line"));
+  });
+
+  it("422 athlete_line: adopts grid_cell and records a refusal holding the coach's text", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "cue" }], { athlete }));
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res(
+        {
+          ok: false,
+          code: "athlete_line",
+          error: "Dana logged this line — your text wasn't saved over it.",
+          athlete_first_name: "Dana",
+          grid_cell: gridCell([{ line: 1, text: "100 x 5", athlete_authored: true }]),
+        },
+        false,
+        422,
+      ),
+    ) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "my cue", { intent: "edit" });
+    });
+    await waitFor(() => expect(result.current.cellUi[key]?.refusals).toHaveLength(1));
+    expect(result.current.cellUi[key]?.refusals).toEqual([
+      {
+        id: expect.any(Number),
+        text: "my cue",
+        message: "Dana just logged on this line — your text is below it.",
+        canAdd: true,
+      },
+    ]);
+    expect(linesOf(result)).toEqual([{ line: 1, text: "100 x 5", athlete_authored: true }]);
+    expect(result.current.saveError).toBe(null);
+  });
+
+  const REFUSED = () =>
+    res({ ok: false, code: "athlete_line", error: "x", grid_cell: gridCell([{ line: 1, text: "theirs", athlete_authored: true }]) }, false, 422);
+
+  it("refusals are a list: two refused writes in one cell both stay, and only discardRefusal(id) removes one", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "cue" }, { line: 2, text: "cue2" }]));
+    globalThis.fetch = vi.fn().mockImplementation(async () => REFUSED()) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "first", { intent: "edit" });
+      result.current.writeCellLine(9, 1, 2, "second", { intent: "edit" });
+    });
+    await waitFor(() => expect(result.current.cellUi[key]?.refusals).toHaveLength(2));
+    const [r1, r2] = result.current.cellUi[key]!.refusals!;
+    expect([r1!.text, r2!.text]).toEqual(["first", "second"]);
+    act(() => {
+      result.current.discardRefusal(9, 1, r1!.id);
+    });
+    expect(result.current.cellUi[key]?.refusals?.map((r) => r.text)).toEqual(["second"]);
+    act(() => {
+      result.current.discardRefusal(9, 1, r2!.id);
+    });
+    expect(result.current.cellUi[key]).toBeUndefined();
+  });
+
+  it("an unrelated intent-new write does NOT clear a refusal", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "cue" }]));
+    globalThis.fetch = vi
+      .fn()
+      .mockImplementationOnce(async () => REFUSED())
+      .mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "mine", { intent: "edit" });
+    });
+    await waitFor(() => expect(result.current.cellUi[key]?.refusals).toHaveLength(1));
+    act(() => {
+      result.current.writeCellLine(9, 1, 2, "unrelated ghost line", { intent: "new" });
+    });
+    expect(result.current.cellUi[key]?.refusals?.map((r) => r.text)).toEqual(["mine"]);
+  });
+
+  it("an athlete taking the line under a dirty draft: the unmounted draft is refused visibly, text survives (end to end)", async () => {
+    const athleteLineGrid = withLines([{ line: 1, text: "100 x 5", athlete_authored: true }], { athlete });
+    function Harness() {
+      const g = useGrid({ planId: 7, csrf: "tok", initialGrid: withLines([{ id: 1, line: 1, text: "old cue" }], { athlete }) });
+      return (
+        <>
+          <button onClick={() => void g.refetchGrid()}>refetch</button>
+          <MesoTable
+            grid={g.grid}
+            busy={g.busy}
+            onPatchCell={g.patchCell}
+            onWriteCellLine={g.writeCellLine}
+            onPatchRowColumns={g.patchRowColumns}
+            onRenameExercise={g.renameExercise}
+            onRenameDay={g.renameDay}
+            onAddExercise={g.addExercise}
+            onRemoveExercise={g.removeExercise}
+            onAddDay={g.addDay}
+            onRemoveDay={g.removeDay}
+            onAddWeek={g.addWeek}
+            onRemoveWeek={g.removeWeek}
+            onSkipCell={g.skipCell}
+            onFillAcrossWeeks={g.fillAcrossWeeks}
+            onAddExerciseThisWeek={g.addExerciseThisWeek}
+            cellUi={g.cellUi}
+            onRetryCellLine={g.retryCellLine}
+            onDismissCellNotice={g.dismissCellNotice}
+            onDiscardRefusal={g.discardRefusal}
+          />
+        </>
+      );
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(res(athleteLineGrid))
+      .mockResolvedValue(
+        res(
+          {
+            ok: false,
+            code: "athlete_line",
+            error: "x",
+            athlete_first_name: "Dana",
+            grid_cell: gridCell([{ id: 1, line: 1, text: "100 x 5", athlete_authored: true }]),
+          },
+          false,
+          422,
+        ),
+      );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    render(<Harness />);
+    fireEvent.change(screen.getByTestId("cell-line-100-1"), { target: { value: "my edit" } });
+    fireEvent.click(screen.getByText("refetch"));
+    await waitFor(() => expect(screen.queryByTestId("cell-line-100-1")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("cell-refusal-text-100-0")).toHaveTextContent("my edit"));
+    expect(sentBody(1)).toMatchObject({ line: 1, text: "my edit", intent: "edit" });
+  });
+
+  it("a dirty ghost draft is committed as intent new on unmount", () => {
+    const fetchMock = vi.fn().mockResolvedValue(res({ ok: true }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    function Harness() {
+      const g = useGrid({ planId: 7, csrf: "tok", initialGrid: grid() });
+      return (
+        <MesoTable
+          grid={g.grid} busy={false} onPatchCell={g.patchCell} onWriteCellLine={g.writeCellLine}
+          onPatchRowColumns={g.patchRowColumns} onRenameExercise={g.renameExercise} onRenameDay={g.renameDay}
+          onAddExercise={g.addExercise} onRemoveExercise={g.removeExercise} onAddDay={g.addDay}
+          onRemoveDay={g.removeDay} onAddWeek={g.addWeek} onRemoveWeek={g.removeWeek} onSkipCell={g.skipCell}
+          onFillAcrossWeeks={g.fillAcrossWeeks} onAddExerciseThisWeek={g.addExerciseThisWeek}
+        />
+      );
+    }
+    const view = render(<Harness />);
+    fireEvent.change(screen.getByTestId("cell-line-new-100"), { target: { value: "half" } });
+    view.unmount();
+    expect(sentBody()).toMatchObject({ line: 1, text: "half", intent: "new" });
+  });
+
+  it("Add as a new line (a new write) gets a NEW token; the refused write's retry keeps its OWN", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "cue" }]));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 2, "typed", { intent: "new" });
+    });
+    const token1 = sentBody(0).token;
+    expect(typeof token1).toBe("string");
+    expect(token1.length).toBeGreaterThan(0);
+    expect(token1.length).toBeLessThanOrEqual(64);
+    await waitFor(() => expect(result.current.cellUi[key]?.unsaved).toEqual([2]));
+    act(() => {
+      result.current.retryCellLine(9, 1, 2);
+    });
+    expect(sentBody(1).token).toBe(token1);
+    await flush();
+    act(() => {
+      result.current.writeCellLine(9, 1, 2, "typed", { intent: "new" });
+    });
+    expect(sentBody(2).token).not.toBe(token1);
+  });
+
+  it("edits carry no token", () => {
+    const { result } = setup();
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "x", { intent: "edit" });
+    });
+    expect(sentBody()).not.toHaveProperty("token");
+  });
+
+  it("retry mark follows the line the text is shown on after a queued new write is repainted", async () => {
+    const { result } = setup(withLines([]));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = deferred();
+    globalThis.fetch = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockRejectedValue(new TypeError("offline")) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "A", { intent: "new" });
+      result.current.writeCellLine(9, 1, 2, "B", { intent: "new" });
+    });
+    // The server relocated A to line 2 (the athlete took line 1), so B is repainted at 3.
+    await act(async () => {
+      first.resolve(
+        res({
+          ok: true,
+          relocated_from: 1,
+          grid_cell: gridCell([
+            { line: 1, text: "100 x 5", athlete_authored: true },
+            { line: 2, text: "A" },
+          ]),
+        }),
+      );
+    });
+    await waitFor(() => expect(result.current.cellUi[key]?.unsaved).toEqual([3]));
+    expect(linesOf(result)?.find((l) => l.text === "B")?.line).toBe(3);
+  });
+
+  it("a structural verb flushes in-flight line writes before its POST", async () => {
+    const { result } = setup();
+    const first = deferred();
+    const fetchMock = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(res(grid()));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "x", { intent: "new" });
+    });
+    act(() => {
+      void result.current.addDay();
+    });
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      first.resolve(res({ ok: true }));
+    });
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
+    expect(String(fetchMock.mock.calls[1]![0])).toContain("/session/");
+  });
+
+  it.each(["not_a_set", "no_athlete", "skipped"])(
+    "422 %s: adopts grid_cell and shows the server's error as a dismissable cell notice",
+    async (code) => {
+      const { result } = setup(withLines([{ line: 1, text: "cue" }]));
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        res({ ok: false, code, error: "Because reasons.", grid_cell: gridCell([{ line: 1, text: "cue", loggable: false }]) }, false, 422),
+      ) as unknown as typeof fetch;
+      act(() => {
+        result.current.writeCellLine(9, 1, 1, "cue", { intent: "edit", kind: "set" });
+      });
+      await waitFor(() => expect(result.current.cellUi[key]?.notice).toEqual({ kind: "error", message: "Because reasons. (“cue”)" }));
+      expect(linesOf(result)).toEqual([{ line: 1, text: "cue", loggable: false }]);
+      act(() => {
+        result.current.dismissCellNotice(9, 1);
+      });
+      expect(result.current.cellUi[key]).toBeUndefined();
+    },
+  );
+
+  it("422 no_free_line keeps the text as a refusal draft with the server's message", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "cue" }]));
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({ ok: false, code: "no_free_line", error: "No free line left.", grid_cell: gridCell([{ line: 1, text: "cue" }]) }, false, 422),
+    ) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "extra", { intent: "new" });
+    });
+    await waitFor(() =>
+      expect(result.current.cellUi[key]?.refusals).toEqual([
+        { id: expect.any(Number), text: "extra", message: "No free line left.", canAdd: false },
+      ]),
+    );
+    expect(result.current.cellUi[key]?.notice).toBeUndefined();
+  });
+
+  it("a network failure keeps the text on screen, marks the line unsaved, and retry re-sends then clears the mark", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "old" }]));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValue(res({ ok: true, grid_cell: gridCell([{ line: 1, text: "new text" }]) })) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "new text", { intent: "edit" });
+    });
+    await waitFor(() => expect(result.current.cellUi[key]?.unsaved).toEqual([1]));
+    expect(linesOf(result)).toEqual([{ line: 1, text: "new text" }]);
+    expect(result.current.saveError).not.toBe(null);
+
+    act(() => {
+      result.current.retryCellLine(9, 1, 1);
+    });
+    expect(result.current.cellUi[key]).toBeUndefined();
+    expect(sentBody(1)).toEqual({ week_id: 1, line: 1, text: "new text", intent: "edit" });
+    await flush();
+    expect(result.current.cellUi[key]).toBeUndefined();
+    expect(linesOf(result)).toEqual([{ line: 1, text: "new text" }]);
+  });
+
+  it.each([
+    ["5xx", res({ ok: false }, false, 503)],
+    ["an unreadable 200", { ok: true, status: 200, json: async () => { throw new SyntaxError("bad"); } }],
+  ])("%s marks the line unsaved", async (_label, response) => {
+    const { result } = setup(withLines([{ line: 1, text: "old" }]));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockResolvedValue(response) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "typed", { intent: "edit" });
+    });
+    await waitFor(() => expect(result.current.cellUi[key]?.unsaved).toEqual([1]));
+    expect(linesOf(result)).toEqual([{ line: 1, text: "typed" }]);
+  });
+
+  it("an unsaved line survives a later successful write's adoption", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "a" }, { line: 2, text: "b" }]));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValue(
+        res({ ok: true, grid_cell: gridCell([{ line: 1, text: "a" }, { line: 2, text: "b2" }]) }),
+      ) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "a-unsaved", { intent: "edit" });
+    });
+    await waitFor(() => expect(result.current.cellUi[key]?.unsaved).toEqual([1]));
+    act(() => {
+      result.current.writeCellLine(9, 1, 2, "b2", { intent: "edit" });
+    });
+    await flush();
+    expect(linesOf(result)).toEqual([
+      { line: 1, text: "a-unsaved" },
+      { line: 2, text: "b2" },
+    ]);
+    expect(result.current.cellUi[key]?.unsaved).toEqual([1]);
+  });
+
+  it("a structural refetch landing mid-write keeps the optimistic line on screen until its response arrives", async () => {
+    const { result } = setup(withLines([{ line: 1, text: "old" }]));
+    const inflight = deferred();
+    const fetched = withLines([{ line: 1, text: "old" }]);
+    globalThis.fetch = vi
+      .fn()
+      .mockReturnValueOnce(inflight.promise)
+      .mockResolvedValue(res(fetched)) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 2, "typed", { intent: "new" });
+    });
+    await act(async () => {
+      await result.current.refetchGrid();
+    });
+    expect(linesOf(result)).toEqual([
+      { line: 1, text: "old" },
+      { line: 2, text: "typed", athlete_authored: false },
+    ]);
+    await act(async () => {
+      inflight.resolve(res({ ok: true, grid_cell: gridCell([{ line: 1, text: "old" }, { line: 2, text: "typed" }]) }));
+    });
+    await flush();
+    expect(linesOf(result)).toEqual([
+      { line: 1, text: "old" },
+      { line: 2, text: "typed" },
+    ]);
+  });
+
+  describe("an unsaved write is never painted over a line someone else now holds", () => {
+    const athleteTook = () =>
+      withLines([{ line: 1, text: "100 x 5", athlete_authored: true }], { athlete });
+
+    it("new write: ghost write fails, the athlete takes line 1, a refetch -> text on line 2 with a retry mark, line 1 stays the athlete's", async () => {
+      const { result } = setup(withLines([]));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      globalThis.fetch = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError("offline"))
+        .mockResolvedValue(res(athleteTook())) as unknown as typeof fetch;
+      act(() => {
+        result.current.writeCellLine(9, 1, 1, "my cue", { intent: "new" });
+      });
+      await waitFor(() => expect(result.current.cellUi[key]?.unsaved).toEqual([1]));
+      await act(async () => {
+        await result.current.refetchGrid();
+      });
+      expect(linesOf(result)).toEqual([
+        { line: 1, text: "100 x 5", athlete_authored: true },
+        { line: 2, text: "my cue", athlete_authored: false },
+      ]);
+      expect(result.current.cellUi[key]?.unsaved).toEqual([2]);
+      expect(result.current.cellUi[key]?.refusals).toBeUndefined();
+    });
+
+    it("edit write: the text moves into the refusal list (Add/Discard) and leaves the unsaved set", async () => {
+      const { result } = setup(withLines([{ line: 1, text: "old cue" }], { athlete }));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      globalThis.fetch = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError("offline"))
+        .mockResolvedValue(res(athleteTook())) as unknown as typeof fetch;
+      act(() => {
+        result.current.writeCellLine(9, 1, 1, "brace harder", { intent: "edit" });
+      });
+      await waitFor(() => expect(result.current.cellUi[key]?.unsaved).toEqual([1]));
+      await act(async () => {
+        await result.current.refetchGrid();
+      });
+      expect(linesOf(result)).toEqual([{ line: 1, text: "100 x 5", athlete_authored: true }]);
+      expect(result.current.cellUi[key]?.unsaved ?? []).toEqual([]);
+      expect(result.current.cellUi[key]?.refusals).toEqual([
+        {
+          id: expect.any(Number),
+          text: "brace harder",
+          message: "Dana logged on this line — your unsaved text is below it.",
+          canAdd: true,
+        },
+      ]);
+    });
+
+    it("no refusal row is added for blank text", async () => {
+      const { result } = setup(withLines([{ line: 1, text: "old" }]));
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        res({ ok: false, code: "athlete_line", error: "x", grid_cell: gridCell([{ line: 1, text: "theirs", athlete_authored: true }]) }, false, 422),
+      ) as unknown as typeof fetch;
+      act(() => {
+        result.current.writeCellLine(9, 1, 1, "", { intent: "edit" });
+      });
+      await flush();
+      expect(result.current.cellUi[key]?.refusals).toBeUndefined();
+    });
+  });
+
+  it("flushes in-flight line writes before fillAcrossWeeks", async () => {
+    const { result } = setup();
+    const first = deferred();
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(res(grid()));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "x", { intent: "new" });
+    });
+    act(() => {
+      void result.current.fillAcrossWeeks(100);
+    });
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the fill waits for the line write
+    await act(async () => {
+      first.resolve(res({ ok: true }));
+    });
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/fill/"))).toBe(true));
+  });
+});
+
+describe("saveError banner state (#709)", () => {
+  it("a failed patchCell sets saveError (and still console.errors); dismissSaveError clears it", async () => {
+    const { result } = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockResolvedValue(res({}, false, 500)) as unknown as typeof fetch;
+    expect(result.current.saveError).toBe(null);
+    act(() => {
+      result.current.patchCell(100, { text: "4 x 6" });
+    });
+    await waitFor(() => expect(result.current.saveError).toMatch(/Couldn't save your last change/));
+    expect(console.error).toHaveBeenCalled();
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.text).toBe("4 x 6");
+    act(() => {
+      result.current.dismissSaveError();
+    });
+    expect(result.current.saveError).toBe(null);
+  });
+
+  it("a failed structural verb sets saveError", async () => {
+    const { result } = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockResolvedValue(res({}, false, 500)) as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.addDay();
+    });
+    expect(result.current.saveError).not.toBe(null);
+  });
+
+  it("a failed refetch sets saveError", async () => {
+    const { result } = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockResolvedValue(res({}, false, 500)) as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.refetchGrid();
+    });
+    expect(result.current.saveError).not.toBe(null);
   });
 });

@@ -20,6 +20,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
@@ -28,6 +29,7 @@ from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
+from store_project.meso.history import record_plan_action
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
@@ -36,6 +38,7 @@ from store_project.meso.models import SessionLog
 from store_project.meso.parsing import parse_performed
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
+from store_project.meso.views import _touch_plan
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -553,14 +556,47 @@ class TestDoneLogEditsRefreshThePersistedOneRm:
 # -- Codex review round 2 ------------------------------------------------------
 
 
-def reclaim(client, s, text="coach cue: brace harder", line=1):
-    """The coach overwrites an athlete-authored sub-line."""
+# Since #709 the coach endpoint REFUSES a changed write to a non-empty athlete
+# line (422 `athlete_line`), so "a coach rewrote the athlete's line" can no
+# longer be produced by POSTing. It still exists in data written before that
+# deploy and in undo snapshots taken then, and the suites below are about what
+# the app does with such a line (undo, handback, display). `legacy_reclaim`
+# therefore builds the state by ORM, reproducing exactly what the pre-#709
+# endpoint did: snapshot the plan with the athlete's cell captured as an
+# athlete row, then rewrite the cell as a coach cue.
+def legacy_reclaim(s, text="coach cue: brace harder", line=1):
+    """The state a pre-#709 coach overwrite of an athlete-authored sub-line left."""
+    with transaction.atomic():
+        existing = Prescription.objects.filter(
+            exercise_slot=s.squat.exercise_slot, week=s.week, line=line
+        ).first()
+        record_plan_action(
+            s.plan,
+            f"Edited {s.squat.exercise_slot.name or 'exercise'}",
+            athlete_cell_pks=(
+                [existing.pk]
+                if existing is not None and existing.athlete_authored
+                else ()
+            ),
+        )
+        cell, _created = Prescription.objects.get_or_create(
+            exercise_slot=s.squat.exercise_slot, week=s.week, line=line
+        )
+        cell.text = text
+        cell.athlete_authored = False
+        cell.save(update_fields=["text", "athlete_authored"])
+        _touch_plan(s.plan)
+    return cell
+
+
+def coach_write(client, s, text, line=1, **extra):
+    """POST a coach sub-line write; returns the response (status is the caller's)."""
     return client.post(
         reverse(
             "meso:api_cell_line_write",
             kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
         ),
-        data=json.dumps({"week_id": s.week.pk, "line": line, "text": text}),
+        data=json.dumps({"week_id": s.week.pk, "line": line, "text": text, **extra}),
         content_type="application/json",
     )
 
@@ -580,7 +616,13 @@ class TestReclaimLeavesAthleteDataAlone:
     again, while `source_line` stays set and keeps the structured delete off it.
     """
 
-    def test_the_set_is_untouched_by_a_reclaim(self, client):
+    def test_the_set_is_untouched_by_a_refused_rewrite(self, client):
+        """#709: the endpoint no longer rewrites an athlete line at all.
+
+        This was "the set is untouched by a reclaim". The coach's changed write
+        to the athlete's line is a 422 now; the line, its flags and its set stay
+        exactly as the athlete left them and no undo step is recorded.
+        """
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -588,14 +630,16 @@ class TestReclaimLeavesAthleteDataAlone:
         row = LoggedSet.objects.get(source_line=cell)
 
         client.force_login(s.coach)
-        assert reclaim(client, s).status_code == 200
+        resp = coach_write(client, s, "coach cue: brace harder")
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "athlete_line"
 
+        cell.refresh_from_db()
+        assert (cell.text, cell.athlete_authored) == ("225 x 5", True)
         row.refresh_from_db()
         assert (row.load, row.reps) == ("225", "5")
-        assert row.source_line_id == cell.pk, (
-            "the link must survive — it is what keeps the structured logger's "
-            "delete from treating this as one of its own rows"
-        )
+        assert row.source_line_id == cell.pk
+        assert not s.plan.actions.exists()
 
     def test_a_hidden_parsed_set_is_untouched_by_the_log_endpoint(self, client):
         """The log endpoint writes no sets, so it can never replace a parsed one."""
@@ -621,7 +665,7 @@ class TestReclaimLeavesAthleteDataAlone:
         )
 
         client.force_login(s.coach)
-        reclaim(client, s)
+        legacy_reclaim(s)
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
@@ -751,7 +795,7 @@ class TestPersistedOneRmTracksItsSet:
         before = AthleteOneRm.objects.get(athlete=s.athlete)
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        legacy_reclaim(s, text="brace harder")
 
         after = AthleteOneRm.objects.get(pk=before.pk)
         assert after.value == before.value
@@ -1072,7 +1116,7 @@ class TestEmptyLogsAreReapedOnEveryPath:
         cell = sub_cell(s.squat, 1)
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        legacy_reclaim(s, text="brace harder")
 
         log = the_log(s.session, s.athlete)
         assert log.sets.count() == 1
@@ -1124,7 +1168,7 @@ class TestVisibilityAndDeleteScopeAgree:
         write_cell(client, s.session, s.squat, 2, "235 x 3")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder", line=1)
+        legacy_reclaim(s, text="brace harder", line=1)
 
         client.force_login(s.athlete)
         log_post(client, s.session, {"status": "pending", "sets": []})
@@ -1170,8 +1214,8 @@ class TestParsedSetsGetDistinctSetNumbers:
         write_cell(client, s.session, s.squat, 2, "235 x 3")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder", line=1)
-        reclaim(client, s, text="and again", line=2)
+        legacy_reclaim(s, text="brace harder", line=1)
+        legacy_reclaim(s, text="and again", line=2)
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
@@ -1218,7 +1262,7 @@ class TestTheBlurPathOwnsOnlyAthleteLines:
         cell = sub_cell(s.squat, 1)
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        legacy_reclaim(s, text="brace harder")
 
         # The athlete taps the rewritten line.
         client.force_login(s.athlete)
@@ -1288,7 +1332,7 @@ class TestAnUntouchedCoachLineIsNotClaimed:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        legacy_reclaim(s, text="brace harder")
 
         client.force_login(s.athlete)
         for _ in range(2):
@@ -1335,7 +1379,7 @@ class TestVisibilityFollowsTheDisplayedText:
 
         # The coach reclaims the line but saves the SAME text.
         client.force_login(s.coach)
-        reclaim(client, s, text="225 x 5")
+        legacy_reclaim(s, text="225 x 5")
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
@@ -1356,7 +1400,7 @@ class TestVisibilityFollowsTheDisplayedText:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder")
+        legacy_reclaim(s, text="brace harder")
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
@@ -1373,7 +1417,7 @@ class TestVisibilityFollowsTheDisplayedText:
         cell = sub_cell(s.squat, 1)
 
         client.force_login(s.coach)
-        reclaim(client, s, text="225 x 5")
+        legacy_reclaim(s, text="225 x 5")
 
         client.force_login(s.athlete)
         returned = log_post(client, s.session, {"status": "pending"}).json()
@@ -1396,7 +1440,7 @@ class TestEditingARewrittenLineKeepsItsHistory:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="")
+        legacy_reclaim(s, text="")
 
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, new_text)
@@ -1418,7 +1462,7 @@ class TestEditingARewrittenLineKeepsItsHistory:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="")
+        legacy_reclaim(s, text="")
 
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "230 x 3")
@@ -1456,7 +1500,7 @@ class TestSetNumbersStayDistinctAcrossReclaims:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="")
+        legacy_reclaim(s, text="")
 
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "230 x 3")
@@ -1470,11 +1514,11 @@ class TestSetNumbersStayDistinctAcrossReclaims:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="")
+        legacy_reclaim(s, text="")
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "230 x 3")
         client.force_login(s.coach)
-        reclaim(client, s, text="and again")
+        legacy_reclaim(s, text="and again")
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
@@ -1541,7 +1585,7 @@ class TestRestoringARewrittenLineDoesNotDuplicate:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="")
+        legacy_reclaim(s, text="")
 
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -1558,7 +1602,7 @@ class TestRestoringARewrittenLineDoesNotDuplicate:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="")
+        legacy_reclaim(s, text="")
 
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -1571,7 +1615,7 @@ class TestRestoringARewrittenLineDoesNotDuplicate:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
-        reclaim(client, s, text="")
+        legacy_reclaim(s, text="")
 
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "230 x 3")
@@ -1804,7 +1848,7 @@ class TestTheLogEndpointLeavesARewrittenSetAlone:
         # The coach rewrites the line; the row is now "visible" server-side,
         # but the athlete's open page still has empty structured inputs.
         client.force_login(s.coach)
-        assert reclaim(client, s, text="brace harder").status_code == 200
+        legacy_reclaim(s, text="brace harder")
 
         client.force_login(s.athlete)
         resp = log_post(client, s.session, {"status": "pending"})
@@ -1834,7 +1878,7 @@ class TestTheDisplayTestIgnoresLoadCase:
         assert row.load == "BW"
 
         client.force_login(s.coach)
-        assert reclaim(client, s, text="bw x 12").status_code == 200
+        legacy_reclaim(s, text="bw x 12")
 
         from store_project.meso.models import parsed_set_is_hidden
 
@@ -1957,7 +2001,7 @@ class TestTwoIdenticalSetsStayTwoSets:
         assert LoggedSet.objects.filter(prescription=s.squat).count() == 2
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder", line=1)
+        legacy_reclaim(s, text="brace harder", line=1)
 
         # The athlete's page shows the rewritten row, so their save carries it.
         client.force_login(s.athlete)
@@ -1997,7 +2041,7 @@ class TestUndoDoesNotOrphanASetsSourceCell:
         s = seed()
         client.force_login(s.coach)
         # A snapshot that predates the athlete's line.
-        assert reclaim(client, s, text="tempo cue", line=3).status_code == 200
+        legacy_reclaim(s, text="tempo cue", line=3)
 
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -2005,7 +2049,7 @@ class TestUndoDoesNotOrphanASetsSourceCell:
         row = LoggedSet.objects.get(source_line=cell)
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder", line=1)
+        legacy_reclaim(s, text="brace harder", line=1)
         undo_url = reverse("meso:api_plan_undo", kwargs={"plan_id": s.plan.pk})
         for _ in range(3):
             client.post(undo_url, content_type="application/json")
@@ -2039,7 +2083,7 @@ class TestOneValueManySpellings:
         row = LoggedSet.objects.get(source_line=cell)
 
         client.force_login(s.coach)
-        reclaim(client, s, text="brace harder", line=1)
+        legacy_reclaim(s, text="brace harder", line=1)
 
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "bw x 12")
@@ -2059,7 +2103,7 @@ class TestOneValueManySpellings:
         assert row.rpe == "8.0"
 
         client.force_login(s.coach)
-        assert reclaim(client, s, text="225 x 5, RPE 8", line=1).status_code == 200
+        legacy_reclaim(s, text="225 x 5, RPE 8", line=1)
 
         row.refresh_from_db()
         assert parsed_set_is_hidden(row), "the line still displays this performance"
@@ -2112,7 +2156,7 @@ class TestADurationHasManySpellings:
         assert row.reps == "30s"
 
         client.force_login(s.coach)
-        assert reclaim(client, s, text="225 x 30 seconds", line=1).status_code == 200
+        legacy_reclaim(s, text="225 x 30 seconds", line=1)
 
         row.refresh_from_db()
         assert parsed_set_is_hidden(row), (
@@ -2180,7 +2224,7 @@ class TestOneLoadManySuffixes:
         assert row.load == "225lb"
 
         client.force_login(s.coach)
-        assert reclaim(client, s, text="225 lbs x 5", line=1).status_code == 200
+        legacy_reclaim(s, text="225 lbs x 5", line=1)
 
         row.refresh_from_db()
         assert parsed_set_is_hidden(row), "the line still displays this performance"

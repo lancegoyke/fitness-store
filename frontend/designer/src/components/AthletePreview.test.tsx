@@ -233,6 +233,19 @@ describe("AthletePreview", () => {
     expect(screen.getAllByText("from your coach")).toHaveLength(1);
   });
 
+  it("shows a coach-logged set line among the athlete's lines with a 'logged by coach' mark (#709)", () => {
+    const g = grid();
+    g.days[0]!.rows[1]!.cells["10"]!.lines = [
+      { id: 20, line: 1, text: "225 x 5", athlete_authored: true, entered_by_coach: true },
+      { id: 21, line: 2, text: "225 x 4", athlete_authored: true },
+    ];
+    render(<AthletePreview grid={g} />);
+    expect(screen.getByTestId("athlete-line-2010-0")).toHaveValue("225 x 5");
+    expect(screen.getByTestId("athlete-line-coach-mark-2010-0")).toHaveTextContent("logged by coach");
+    expect(screen.getByTestId("athlete-line-2010-1")).toHaveValue("225 x 4");
+    expect(screen.queryByTestId("athlete-line-coach-mark-2010-1")).not.toBeInTheDocument();
+  });
+
   it("gives empty lines free line numbers and the target as placeholder", () => {
     const g = grid();
     const cell = g.days[0]!.rows[1]!.cells["10"]!;

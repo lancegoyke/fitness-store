@@ -71,18 +71,76 @@ MesoGrid | null` and `history: GridHistory`, hydrated once from
 - **`patchCell`/`renameExercise`**: optimistic + fire-and-forget, mirroring
   the retired `useAutosave`'s semantics below — local state updates
   immediately, the POST isn't awaited by the caller, and a failure is
-  `console.error`'d rather than rolled back. Each in-flight write is
+  `console.error`'d and surfaced via `saveError` (see below) rather than
+  rolled back. Each in-flight write is
   tracked in `pendingWritesRef` so `fillAcrossWeeks` can flush them first
   (fill copies the source cell's already-committed DB values, so an
   in-flight edit must land first or it'd read stale data). Phase 2a:
   `patchCell`'s only patchable field is `text` — the cell IS one freeform
   string now (`GridCellPatch = Partial<Pick<GridCell, "text">>`).
-- **`writeCellLine(exerciseSlotId, weekId, line, text)`** (Phase 2a): upserts
-  one freeform (week × line) sub-line of a row's stack — addressed by
-  slot/week/line, not pk, since the line may not exist yet (POST
-  `row/<slot>/cell/` `{week_id, line, text}`, the server's `cell_line_write`
-  get_or_create). Same optimistic fire-and-forget shape as `patchCell`;
-  line 0 updates `cell.text` locally, blank text clears a line in place.
+- **`writeCellLine(exerciseSlotId, weekId, line, text, opts?)`** (Phase 2a,
+  reworked by #709): writes one (week × line) sub-line — addressed by
+  slot/week/line (POST `row/<slot>/cell/` `{week_id, line, text, intent?,
+  kind?}`, the server's `cell_line_write`). `opts.intent` is `"new"` (the
+  client believed the line absent/blank) or `"edit"` (it held the coach's
+  non-blank text); `opts.kind` is `"set"`/`"cue"` (the kind chip). Keys are
+  only sent when given. Unlike the other verbs the server's ANSWER matters:
+  - **Optimistic**: edit/none sets that line's text in place (flags kept; a
+    `kind` flips them; a blank line written to becomes a plain cue). `"new"`
+    onto an occupied line is predicted onto the next absent/blank line above
+    it (the server's relocation rule). New lines are `athlete_authored:false`.
+    Line 0 sets `cell.text`.
+  - **Serialized per cell**: writes to one (slot, week) are chained, so
+    responses arrive in send order (the first write starts synchronously).
+    Still tracked in `pendingWritesRef`, so `fillAcrossWeeks` flushes them.
+  - **Server-stack adoption**: every 200 and every 422 carries `grid_cell`;
+    its `lines`/`athlete_summary`/`session_started` replace the cell's (never
+    its line-0 `text` — `patchCell` owns that), then the writes still queued
+    behind it (and any unsaved ones) are re-applied. `history` is adopted on
+    200. `relocated_from` raises a cell notice "Moved below <First>'s line"
+    (first token of `grid.athlete.name`, else "your athlete") that clears
+    after ~6s.
+  - **Refusals** (`cellUi[cellUiKey(slot, week)].refusal = {text, message}`):
+    422 `athlete_line` ("<First> just logged on this line — your text is
+    below it.", `canAdd`) and `no_free_line` (the server's `error`, no add).
+    MesoTable renders a `role="alert"` block (`cell-refusal-<id>`) with the
+    message, the refused text quoted as plain React text, "Add as a new
+    line" (`writeCellLine(.., nextLine, text, {intent:"new"})`, which clears
+    the refusal) and "Discard" (`discardRefusal`). The ghost is untouched,
+    so neither the refused text nor the coach's typing is ever lost.
+  - **Other 422s** (`not_a_set`/`no_athlete`/`skipped`): `grid_cell` adopted,
+    the server's `error` shown as a dismissable `role="alert"` cell notice
+    (`cell-error-<id>`, `dismissCellNotice`).
+  - **Retry marks**: a network error, 5xx/other non-422 failure, or a 200
+    with an unreadable body keeps the optimistic text on screen and records
+    the line in `cellUi[key].unsaved`; MesoTable renders "Not saved — retry"
+    (`cell-line-retry-<id>-<line>`) → `retryCellLine` re-sends the same
+    write (no new repaint) and the mark clears on success. Unsaved text is
+    re-applied over later adoptions. Also sets `saveError`.
+  Extra return values: `cellUi`, `retryCellLine`, `dismissCellNotice`,
+  `discardRefusal`.
+- **`saveError` / `dismissSaveError`** (#709): NO optimistic verb fails
+  silently any more. `patchCell`, `renameExercise`, `renamePlan`,
+  `renameMesocycle`, `renameDay`, `patchRowColumns`, `writeCellLine`, every
+  structural verb, `fillAcrossWeeks`, `undo`/`redo` and `refetchGrid` still
+  `console.error` AND set `saveError`; `DesignerRoot` renders a fixed banner
+  (`role="alert"`, `data-testid="designer-save-error"`, "Couldn't save your
+  last change — it's still on screen but not saved. …") with a Dismiss
+  button. It is dismissed only by the coach.
+- **MesoTable line kinds** (#709): inline editable sub-lines = cues
+  (`!athlete_authored`) + coach set lines (`athlete_authored &&
+  entered_by_coach`). Athlete-ENTERED lines (`athlete_authored &&
+  !entered_by_coach`) stay in the #645 roll-up group and render READ-ONLY
+  when expanded ("logged by <First>", still a keyboard-nav stop). A coach
+  set line carries a "logged" chip (`cell-line-kind-<id>-<line>`, click →
+  `kind:"cue"`); a loggable cue gets "log as set" (click → `kind:"set"`) only
+  when the grid has an athlete, the plan isn't a template (`isTemplate`
+  prop) and the day has a live session that week. Chips are absolutely
+  positioned over the input (zero layout shift), `tabIndex=-1`, and commit
+  the line's own dirty draft first. The ghost has a stable React key; a
+  sub-line's draft never resyncs over a dirty draft; multi-line paste skips every
+  `athlete_authored` line (athlete- or coach-logged). `refetchGrid` re-applies
+  queued/unsaved line writes over the fetched grid.
 - **`patchRowColumns(exerciseSlotId, {tempo?, rest?, note?})`** (Phase 2a,
   D2): the per-exercise Tempo/Rest/instructions row columns — attributes of
   the block-shared ExerciseSlot (POST `row/<slot>/`, the server's

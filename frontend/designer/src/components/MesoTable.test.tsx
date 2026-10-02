@@ -380,56 +380,36 @@ describe("cell sub-lines", () => {
     expect(screen.getByTestId("cell-line-new-100")).toHaveValue("");
   });
 
-  it("marks only athlete-authored lines and clears the mark after a coach edit", async () => {
+  it("athlete-ENTERED lines are read-only (still a nav stop) with a 'logged by <First>' mark; cues are not marked", async () => {
     const user = userEvent.setup();
     const onWriteCellLine = vi.fn();
     const athleteLine = { id: 5, line: 1, text: "100 x 5", athlete_authored: true };
     const coachLine = { id: 6, line: 2, text: "Pause for two seconds", athlete_authored: false };
     const athleteGrid = grid({
+      athlete: { name: "Dana Reyes", initials: "DR", contraindications: [] },
       days: [day({ rows: [row({ cells: { "1": cell({ lines: [athleteLine, coachLine] }) } })] })],
     });
-    const view = render(<MesoTable {...baseProps({ grid: athleteGrid, onWriteCellLine })} />);
+    render(<MesoTable {...baseProps({ grid: athleteGrid, onWriteCellLine })} />);
 
-    // #645: athlete lines collapse to one marker; expand to edit them.
+    // #645: athlete lines collapse to one marker; expand to see them.
     expect(screen.queryByTestId("cell-line-100-1")).not.toBeInTheDocument();
     expect(screen.getByTestId("cell-line-100-2")).toBeInTheDocument();
     await user.click(screen.getByTestId("cell-athlete-marker-100"));
     const athleteMark = screen.getByTestId("cell-line-athlete-5");
-    expect(athleteMark).toHaveTextContent("athlete");
-    expect(athleteMark).toHaveAttribute("title", "Logged by your athlete");
+    expect(athleteMark).toHaveTextContent("logged by Dana");
     expect(athleteMark).not.toHaveAttribute("tabindex");
     expect(athleteMark).not.toHaveAttribute("data-grid-cell");
     expect(screen.queryByTestId("cell-line-athlete-6")).not.toBeInTheDocument();
 
     const athleteInput = screen.getByTestId("cell-line-100-1");
+    expect(athleteInput).toHaveAttribute("readonly");
+    expect(athleteInput).toHaveAccessibleName("Line 1 — logged by Dana");
+    expect(athleteInput).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "text", 1));
     expect(athleteInput.parentElement).toHaveClass("meso-line-row--athlete");
-    await user.clear(athleteInput);
-    await user.type(athleteInput, "105 x 5");
+    await user.type(athleteInput, "999");
     await user.tab();
-
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "105 x 5");
-    const rewrittenGrid = grid({
-      days: [
-        day({
-          rows: [
-            row({
-              cells: {
-                "1": cell({
-                  lines: [
-                    { ...athleteLine, text: "105 x 5", athlete_authored: false },
-                    coachLine,
-                  ],
-                }),
-              },
-            }),
-          ],
-        }),
-      ],
-    });
-    view.rerender(
-      <MesoTable {...baseProps({ grid: rewrittenGrid, onWriteCellLine })} />,
-    );
-    expect(screen.queryByTestId("cell-line-athlete-5")).not.toBeInTheDocument();
+    expect(athleteInput).toHaveValue("100 x 5");
+    expect(onWriteCellLine).not.toHaveBeenCalled();
   });
 
   describe("athlete roll-up marker (#645)", () => {
@@ -585,7 +565,7 @@ describe("cell sub-lines", () => {
     await user.clear(input);
     await user.type(input, "RPE 9");
     await user.tab();
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9", { intent: "edit" });
   });
 
   it("Enter commits a sub-line the same as blur", async () => {
@@ -596,7 +576,7 @@ describe("cell sub-lines", () => {
     await user.clear(input);
     await user.type(input, "pause at pins");
     await user.keyboard("{Enter}");
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 2, "pause at pins");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 2, "pause at pins", { intent: "edit" });
   });
 
   it('blanking an existing sub-line commits "" (clears in place, the row stays)', async () => {
@@ -605,7 +585,7 @@ describe("cell sub-lines", () => {
     render(<MesoTable {...baseProps({ grid: linesGrid(), onWriteCellLine })} />);
     await user.clear(screen.getByTestId("cell-line-100-1"));
     await user.tab();
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "", { intent: "edit" });
   });
 
   it("a clean sub-line blur is a no-op (dirty gate)", async () => {
@@ -636,7 +616,7 @@ describe("cell sub-lines", () => {
     const ghost = screen.getByTestId("cell-line-new-100");
     await user.type(ghost, "Cable Crunch");
     await user.tab();
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 3, "Cable Crunch");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 3, "Cable Crunch", { intent: "new" });
   });
 
   it("the ghost mints line 1 when the cell has no sub-lines yet", async () => {
@@ -646,7 +626,7 @@ describe("cell sub-lines", () => {
     const ghost = screen.getByTestId("cell-line-new-100");
     await user.type(ghost, "RPE 8");
     await user.keyboard("{Enter}");
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 8");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 8", { intent: "new" });
   });
 
   it("a blank (or blanked-back) ghost commit creates nothing", async () => {
@@ -732,9 +712,9 @@ describe("cell stack copy/paste", () => {
     const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
     fireEvent.paste(input, { clipboardData: clipboard("4 x 6\nRPE 9") });
     expect(onPatchCell).toHaveBeenCalledWith(100, { text: "4 x 6" });
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9", { intent: "edit" });
     // Old line 2 ("slow eccentric") is beyond the pasted stack: blanked.
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 2, "");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 2, "", { intent: "edit" });
     expect(input).toHaveValue("4 x 6");
   });
 
@@ -1307,7 +1287,7 @@ describe("fill across weeks (Ctrl/Cmd+Enter keybinding)", () => {
 
     fireEvent.keyDown(line, { key: "Enter", ctrlKey: true });
 
-    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9", { intent: "edit" });
     expect(onWriteCellLine.mock.invocationCallOrder[0]!).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]!);
   });
 
@@ -2183,5 +2163,337 @@ describe("shared horizontal scroll", () => {
     expect(strip.getAttribute("aria-hidden")).toBe("true");
     expect(strip.hidden).toBe(true);
     expect(strip.previousElementSibling?.previousElementSibling).toBe(container.querySelector(".meso-table-scroll"));
+  });
+});
+
+// --- #709: the coach logs in the grid ---------------------------------------
+describe("coach set lines, kind chips, refusals and retry (#709)", () => {
+  const ATHLETE = { name: "Dana Reyes", initials: "DR", contraindications: [] };
+
+  function gridWith(lines: GridCell["lines"], extra: Partial<MesoGrid> = {}, dayExtra: Partial<GridDay> = {}) {
+    return grid({
+      athlete: ATHLETE,
+      days: [day({ ...dayExtra, rows: [row({ cells: { "1": cell({ lines }) } })] })],
+      ...extra,
+    });
+  }
+
+  const COACH_SET = { id: 7, line: 1, text: "225 x 5", athlete_authored: true, entered_by_coach: true, loggable: true };
+  const CUE = { id: 8, line: 2, text: "225 x 3", athlete_authored: false, loggable: true };
+
+  it("renders a coach set line inline and editable (not in the athlete roll-up), with a 'logged' chip", () => {
+    render(<MesoTable {...baseProps({ grid: gridWith([COACH_SET]) })} />);
+    const input = screen.getByTestId("cell-line-100-1");
+    expect(input).not.toHaveAttribute("readonly");
+    expect(screen.queryByTestId("cell-athlete-marker-100")).not.toBeInTheDocument();
+    const chip = screen.getByTestId("cell-line-kind-100-1");
+    expect(chip).toHaveTextContent("logged");
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    expect(chip).toHaveAttribute("title", "Counts as Dana's set — you logged it. Click to make it a cue.");
+    expect(chip).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("the 'logged' chip sends kind cue as an edit", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: gridWith([COACH_SET]), onWriteCellLine })} />);
+    await user.click(screen.getByTestId("cell-line-kind-100-1"));
+    expect(onWriteCellLine).toHaveBeenCalledTimes(1);
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "225 x 5", { intent: "edit", kind: "cue" });
+  });
+
+  it("a chip click commits the line's dirty draft first (edit), then flips its kind", () => {
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: gridWith([COACH_SET]), onWriteCellLine })} />);
+    const input = screen.getByTestId("cell-line-100-1");
+    fireEvent.change(input, { target: { value: "230 x 5" } });
+    fireEvent.click(screen.getByTestId("cell-line-kind-100-1"));
+    expect(onWriteCellLine.mock.calls).toEqual([
+      [9, 1, 1, "230 x 5", { intent: "edit" }],
+      [9, 1, 1, "230 x 5", { intent: "edit", kind: "cue" }],
+    ]);
+  });
+
+  it("the chip does not take focus on mousedown (no stray blur-commit)", () => {
+    render(<MesoTable {...baseProps({ grid: gridWith([COACH_SET]) })} />);
+    const chip = screen.getByTestId("cell-line-kind-100-1");
+    expect(fireEvent.mouseDown(chip)).toBe(false); // preventDefault called
+  });
+
+  it("a loggable cue gets a 'log as set' chip that sends kind set", () => {
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: gridWith([CUE]), onWriteCellLine })} />);
+    const chip = screen.getByTestId("cell-line-kind-100-2");
+    expect(chip).toHaveTextContent("log as set");
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(chip);
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 2, "225 x 3", { intent: "edit", kind: "set" });
+  });
+
+  it.each([
+    ["not loggable", { ...CUE, loggable: false }, {}, {}],
+    ["loggable flag absent", { ...CUE, loggable: undefined }, {}, {}],
+    ["blank", { ...CUE, text: "" }, {}, {}],
+    ["no athlete", CUE, { athlete: null }, {}],
+    ["no live session this week", CUE, {}, { session_ids: {} }],
+  ])("no 'log as set' chip when %s", (_name, line, gridExtra, dayExtra) => {
+    render(<MesoTable {...baseProps({ grid: gridWith([line], gridExtra, dayExtra) })} />);
+    expect(screen.queryByTestId("cell-line-kind-100-2")).not.toBeInTheDocument();
+  });
+
+  it("no 'log as set' chip on a template plan", () => {
+    render(<MesoTable {...baseProps({ grid: gridWith([CUE]), isTemplate: true })} />);
+    expect(screen.queryByTestId("cell-line-kind-100-2")).not.toBeInTheDocument();
+  });
+
+  it("existing blank lines commit as intent new, non-blank coach lines as edit", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: gridWith([{ id: 1, line: 1, text: "" }, { id: 2, line: 2, text: "cue" }]),
+          onWriteCellLine,
+        })}
+      />,
+    );
+    await user.type(screen.getByTestId("cell-line-100-1"), "typed");
+    await user.tab();
+    expect(onWriteCellLine).toHaveBeenLastCalledWith(9, 1, 1, "typed", { intent: "new" });
+    await user.type(screen.getByTestId("cell-line-100-2"), "!");
+    await user.tab();
+    expect(onWriteCellLine).toHaveBeenLastCalledWith(9, 1, 2, "cue!", { intent: "edit" });
+  });
+
+  it("an expanded athlete-entered line is a read-only keyboard-nav stop", async () => {
+    const user = userEvent.setup();
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: gridWith([{ id: 5, line: 1, text: "100 x 5", athlete_authored: true }, { ...COACH_SET, id: 9, line: 2 }]),
+        })}
+      />,
+    );
+    await user.click(screen.getByTestId("cell-athlete-marker-100"));
+    const ro = screen.getByTestId("cell-line-100-1");
+    expect(ro).toHaveAttribute("readonly");
+    expect(ro).toHaveAttribute("tabindex");
+    expect(ro).toHaveAccessibleName("Line 1 — logged by Dana");
+    // The coach set line stays inline (editable), outside the group.
+    expect(screen.getByTestId("cell-line-100-2").closest('[data-testid="cell-athlete-group-100"]')).toBeNull();
+  });
+
+  describe("ghost + draft survival", () => {
+    it("keeps what the coach is typing when an external update changes nextLine", () => {
+      const props = baseProps({ grid: gridWith([{ id: 1, line: 1, text: "cue" }]) });
+      const view = render(<MesoTable {...props} />);
+      const ghost = screen.getByTestId("cell-line-new-100") as HTMLInputElement;
+      fireEvent.change(ghost, { target: { value: "half-typed" } });
+      expect(ghost).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "text", 2));
+
+      view.rerender(
+        <MesoTable
+          {...props}
+          grid={gridWith([
+            { id: 1, line: 1, text: "cue" },
+            { id: 2, line: 2, text: "100 x 5", athlete_authored: true },
+            { id: 3, line: 3, text: "100 x 5", athlete_authored: true },
+          ])}
+        />,
+      );
+      const after = screen.getByTestId("cell-line-new-100") as HTMLInputElement;
+      expect(after).toBe(ghost); // same DOM node: not remounted
+      expect(after).toHaveValue("half-typed");
+      expect(after).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "text", 4));
+    });
+
+    it("the ghost clears its draft after its own commit and commits as intent new", async () => {
+      const user = userEvent.setup();
+      const onWriteCellLine = vi.fn();
+      render(<MesoTable {...baseProps({ onWriteCellLine })} />);
+      const ghost = screen.getByTestId("cell-line-new-100");
+      await user.type(ghost, "RPE 8");
+      await user.tab();
+      expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 8", { intent: "new" });
+      expect(ghost).toHaveValue("");
+    });
+
+    it("a dirty sub-line draft survives an external text change; its commit still goes out", () => {
+      const onWriteCellLine = vi.fn();
+      const props = baseProps({ grid: gridWith([{ id: 1, line: 1, text: "old" }]), onWriteCellLine });
+      const view = render(<MesoTable {...props} />);
+      const input = screen.getByTestId("cell-line-100-1");
+      fireEvent.change(input, { target: { value: "my edit" } });
+      view.rerender(<MesoTable {...props} grid={gridWith([{ id: 1, line: 1, text: "server says hi" }])} />);
+      expect(screen.getByTestId("cell-line-100-1")).toHaveValue("my edit");
+      fireEvent.blur(screen.getByTestId("cell-line-100-1"));
+      expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "my edit", { intent: "edit" });
+    });
+
+    it("a clean sub-line still follows an external text change", () => {
+      const props = baseProps({ grid: gridWith([{ id: 1, line: 1, text: "old" }]) });
+      const view = render(<MesoTable {...props} />);
+      view.rerender(<MesoTable {...props} grid={gridWith([{ id: 1, line: 1, text: "new" }])} />);
+      expect(screen.getByTestId("cell-line-100-1")).toHaveValue("new");
+    });
+  });
+
+  describe("refusal, notices and retry marks", () => {
+    const REFUSAL = { id: 1, text: "my refused text", message: "Dana just logged on this line — your text is below it.", canAdd: true };
+    const ui = (state: object) => ({ "9:1": state });
+
+    it("shows the message, the refused text (quoted, as text) and Add/Discard under the cell; the ghost stays a normal ghost", () => {
+      render(
+        <MesoTable
+          {...baseProps({
+            grid: gridWith([{ id: 1, line: 1, text: "100 x 5", athlete_authored: true }]),
+            cellUi: ui({ refusals: [{ ...REFUSAL, text: "<b>hi</b>" }] }),
+          })}
+        />,
+      );
+      expect(screen.getByTestId("cell-line-new-100")).toHaveValue("");
+      const alert = screen.getByTestId("cell-refusal-100");
+      expect(alert).toHaveAttribute("role", "alert");
+      expect(alert).toHaveTextContent("Dana just logged on this line — your text is below it.");
+      expect(screen.getByTestId("cell-refusal-text-100-0").tagName).toBe("Q");
+      expect(screen.getByTestId("cell-refusal-text-100-0")).toHaveTextContent("<b>hi</b>");
+      expect(alert.querySelector("b")).toBeNull();
+      expect(screen.getByTestId("cell-refusal-add-100-0")).toBeInTheDocument();
+      expect(screen.getByTestId("cell-refusal-discard-100-0")).toBeInTheDocument();
+    });
+
+    it("a refusal landing while the ghost holds typing keeps BOTH texts", () => {
+      const props = baseProps({ grid: gridWith([{ id: 1, line: 1, text: "100 x 5", athlete_authored: true }]) });
+      const view = render(<MesoTable {...props} cellUi={{}} />);
+      fireEvent.change(screen.getByTestId("cell-line-new-100"), { target: { value: "still typing" } });
+      view.rerender(<MesoTable {...props} cellUi={ui({ refusals: [REFUSAL] })} />);
+      expect(screen.getByTestId("cell-line-new-100")).toHaveValue("still typing");
+      expect(screen.getByTestId("cell-refusal-text-100-0")).toHaveTextContent("my refused text");
+    });
+
+    it("'Add as a new line' re-sends the refused text as intent new on the next line", async () => {
+      const user = userEvent.setup();
+      const onWriteCellLine = vi.fn();
+      const onDiscardRefusal = vi.fn();
+      render(
+        <MesoTable
+          {...baseProps({
+            onWriteCellLine,
+            onDiscardRefusal,
+            grid: gridWith([{ id: 1, line: 1, text: "100 x 5", athlete_authored: true }]),
+            cellUi: ui({ refusals: [REFUSAL] }),
+          })}
+        />,
+      );
+      await user.click(screen.getByTestId("cell-refusal-add-100-0"));
+      expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 2, "my refused text", { intent: "new" });
+      expect(onDiscardRefusal).toHaveBeenCalledWith(9, 1, 1); // Add removes its own refusal
+    });
+
+    it("renders one row per refusal, each with its own Add and Discard", async () => {
+      const user = userEvent.setup();
+      const onDiscardRefusal = vi.fn();
+      render(
+        <MesoTable
+          {...baseProps({
+            onDiscardRefusal,
+            cellUi: ui({ refusals: [REFUSAL, { ...REFUSAL, id: 2, text: "second text" }] }),
+          })}
+        />,
+      );
+      expect(screen.getByTestId("cell-refusal-text-100-0")).toHaveTextContent("my refused text");
+      expect(screen.getByTestId("cell-refusal-text-100-1")).toHaveTextContent("second text");
+      await user.click(screen.getByTestId("cell-refusal-discard-100-1"));
+      expect(onDiscardRefusal).toHaveBeenCalledWith(9, 1, 2);
+    });
+
+    it("'Discard' calls onDiscardRefusal and sends nothing", async () => {
+      const user = userEvent.setup();
+      const onWriteCellLine = vi.fn();
+      const onDiscardRefusal = vi.fn();
+      render(<MesoTable {...baseProps({ onWriteCellLine, onDiscardRefusal, cellUi: ui({ refusals: [REFUSAL] }) })} />);
+      await user.click(screen.getByTestId("cell-refusal-discard-100-0"));
+      expect(onDiscardRefusal).toHaveBeenCalledWith(9, 1, 1);
+      expect(onWriteCellLine).not.toHaveBeenCalled();
+    });
+
+    it("a no_free_line refusal offers only Discard", () => {
+      render(<MesoTable {...baseProps({ cellUi: ui({ refusals: [{ ...REFUSAL, canAdd: false }] }) })} />);
+      expect(screen.queryByTestId("cell-refusal-add-100-0")).not.toBeInTheDocument();
+      expect(screen.getByTestId("cell-refusal-discard-100-0")).toBeInTheDocument();
+    });
+
+    it("renders a dismissable error notice and a transient moved notice", async () => {
+      const user = userEvent.setup();
+      const onDismissCellNotice = vi.fn();
+      const view = render(
+        <MesoTable {...baseProps({ onDismissCellNotice, cellUi: ui({ notice: { kind: "error", message: "No can do." } }) })} />,
+      );
+      const err = screen.getByTestId("cell-error-100");
+      expect(err).toHaveAttribute("role", "alert");
+      expect(err).toHaveTextContent("No can do.");
+      await user.click(screen.getByRole("button", { name: "Dismiss" }));
+      expect(onDismissCellNotice).toHaveBeenCalledWith(9, 1);
+
+      view.rerender(
+        <MesoTable {...baseProps({ cellUi: ui({ notice: { kind: "moved", message: "Moved below Dana's line" } }) })} />,
+      );
+      expect(screen.getByTestId("cell-notice-100")).toHaveTextContent("Moved below Dana's line");
+    });
+
+    it("an unsaved line shows 'Not saved — retry', which calls onRetryCellLine", async () => {
+      const user = userEvent.setup();
+      const onRetryCellLine = vi.fn();
+      render(
+        <MesoTable
+          {...baseProps({ grid: gridWith([{ id: 1, line: 1, text: "typed" }]), onRetryCellLine, cellUi: ui({ unsaved: [1] }) })}
+        />,
+      );
+      const retry = screen.getByTestId("cell-line-retry-100-1");
+      expect(retry).toHaveTextContent("Not saved — retry");
+      await user.click(retry);
+      expect(onRetryCellLine).toHaveBeenCalledWith(9, 1, 1);
+      expect(screen.queryByTestId("cell-line-retry-100-2")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("multi-line paste never writes to a performance line (athlete OR coach logged)", () => {
+    function clipboard(text: string) {
+      return { getData: vi.fn(() => text), setData: vi.fn() };
+    }
+
+    it("skips athlete-entered line numbers, picks new/edit intent from the view, blanks only plan (non-performance) lines beyond", () => {
+      const onWriteCellLine = vi.fn();
+      const onPatchCell = vi.fn();
+      render(
+        <MesoTable
+          {...baseProps({
+            onWriteCellLine,
+            onPatchCell,
+            grid: gridWith([
+              { id: 1, line: 1, text: "100 x 5", athlete_authored: true },
+              { id: 2, line: 2, text: "old cue" },
+              { id: 3, line: 3, text: "" },
+              { id: 4, line: 4, text: "athlete again", athlete_authored: true },
+              { id: 5, line: 5, text: "stale cue" },
+              { id: 6, line: 6, text: "stale coach set", athlete_authored: true, entered_by_coach: true },
+            ]),
+          })}
+        />,
+      );
+      fireEvent.paste(screen.getByTestId("cell-text-100"), { clipboardData: clipboard("4 x 6\nA\nB\nC") });
+      expect(onPatchCell).toHaveBeenCalledWith(100, { text: "4 x 6" });
+      // A -> line 2 (edit), B -> line 3 (blank: new), line 4 skipped, C -> line 5 (edit).
+      expect(onWriteCellLine.mock.calls).toEqual([
+        [9, 1, 2, "A", { intent: "edit" }],
+        [9, 1, 3, "B", { intent: "new" }],
+        [9, 1, 5, "C", { intent: "edit" }],
+      ]);
+      const written = onWriteCellLine.mock.calls.map((c) => c[2]);
+      // Neither the athlete's lines (1, 4) nor the coach-logged set (6) is touched.
+      expect(written).not.toContain(1);
+      expect(written).not.toContain(4);
+      expect(written).not.toContain(6);
+    });
   });
 });

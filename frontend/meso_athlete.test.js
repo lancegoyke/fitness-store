@@ -3511,3 +3511,602 @@ describe("athlete_session.html (#524)", () => {
     expect(block).not.toContain("x-html");
   });
 });
+
+// ---- #709: a coach logs on the same session (`new`, relocation, "logged by coach") ----
+
+describe("#709 — `new` marks a line the client believes is empty", () => {
+  function oneLine(entry) {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [entry] };
+    c.exercises = [ex];
+    return { c, ex };
+  }
+  const ok = (line, text) =>
+    res({ body: { ok: true, cell: { id: 5, line, text, warn: false } } });
+  const sentBody = (i = 0) => JSON.parse(global.fetch.mock.calls[i][1].body);
+
+  it("sends new:true when the server holds nothing on the line", async () => {
+    const { c, ex } = oneLine({ line: 1, text: "225 x 5", savedText: "" });
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "225 x 5"));
+    await c.saveCell(ex, 1);
+    expect(sentBody()).toEqual({ exercise_id: 1, line: 1, text: "225 x 5", new: true, token: expect.any(String) });
+  });
+
+  it("does not send it when savedText is unknown", async () => {
+    const { c, ex } = oneLine({ line: 1, text: "225 x 5", savedText: undefined });
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "225 x 5"));
+    await c.saveCell(ex, 1);
+    expect("new" in sentBody()).toBe(false);
+  });
+
+  it("does not send it when the server already holds text there", async () => {
+    const { c, ex } = oneLine({ line: 1, text: "230 x 5", savedText: "225 x 5" });
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "230 x 5"));
+    await c.saveCell(ex, 1);
+    expect("new" in sentBody()).toBe(false);
+  });
+
+  it("the write-ahead copy and the queued replay carry it", async () => {
+    const { c, ex } = oneLine({ line: 1, text: "225 x 5", savedText: "" });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const run = c.saveCell(ex, 1);
+    expect(c.readQueue()[0].body.new).toBe(true); // written at the blur itself
+    await run;
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0].body).toEqual({ exercise_id: 1, line: 1, text: "225 x 5", new: true, token: expect.any(String) });
+    // the replay sends the flag it was queued with
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "225 x 5"));
+    await c.flushQueue();
+    expect(sentBody()).toEqual({ exercise_id: 1, line: 1, text: "225 x 5", new: true, token: expect.any(String) });
+  });
+
+  it("a blur while an earlier save runs keeps the first save's token", async () => {
+    const { c, ex } = oneLine({ line: 1, text: "225 x 5", savedText: "" });
+    let release;
+    global.fetch = vi.fn().mockImplementationOnce(
+      () => new Promise((resolve) => { release = () => resolve(ok(1, "225 x 5")); }),
+    );
+    const first = c.saveCell(ex, 1);
+    await new Promise((r) => setTimeout(r, 0)); // the request is out
+    expect(sentBody().new).toBe(true);
+    const firstToken = sentBody().token;
+    ex.sub_lines[0].text = "230 x 5"; // a correction while the first save runs
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "230 x 5"));
+    const second = c.saveCell(ex, 1);
+    // the first save's token is still unconfirmed: the correction rides with it
+    expect(c.readQueue()[0].body.new).toBe(true);
+    expect(c.readQueue()[0].body.token).toBe(firstToken);
+    release();
+    await first;
+    await second;
+    expect("new" in sentBody()).toBe(false); // savedText is "225 x 5" by then
+  });
+
+  it("an old outbox entry with no flag replays exactly as it was", async () => {
+    const { c, ex } = oneLine({ line: 1, text: "", savedText: "" });
+    c.writeQueue([
+      { kind: "cell", url: CELL_URL, id: "old", body: { exercise_id: 1, line: 1, text: "100 x 5" } },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "100 x 5"));
+    await c.flushQueue();
+    expect(sentBody()).toEqual({ exercise_id: 1, line: 1, text: "100 x 5" });
+  });
+
+  it("a 422 coach_line still drops the entry and says it couldn't save", async () => {
+    const { c, ex } = oneLine({ line: 1, text: "mine", savedText: undefined });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: false,
+        status: 422,
+        body: {
+          ok: false,
+          code: "coach_line",
+          error: "coach line",
+          exercise_lines: { sub_lines: [], coach_lines: [{ line: 1, text: "cue" }] },
+        },
+      }),
+    );
+    expect(await c.saveCell(ex, 1)).toBe("rejected");
+    expect(ex.sub_lines[0].saveError).toBe(true);
+    expect(ex.sub_lines[0].text).toBe("mine");
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("#709 — a relocated write re-keys the stack", () => {
+  const lines = (ex) => ex.sub_lines.map((l) => l.line);
+  const relocated = (extra) =>
+    res({
+      body: {
+        ok: true,
+        cell: { id: 9, line: 2, text: "225 x 5", warn: false, warn_reason: "", entered_by_coach: false },
+        relocated_from: 1,
+        ...extra,
+      },
+    });
+
+  function setup(subLines) {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: subLines };
+    c.exercises = [ex];
+    return { c, ex };
+  }
+
+  it("moves the text onto the new number and shows the coach's cue on the old one", async () => {
+    const { c, ex } = setup([{ line: 1, text: "225 x 5", savedText: "" }, { line: 3, text: "", savedText: "" }]);
+    global.fetch = vi.fn().mockResolvedValue(
+      relocated({
+        exercise_lines: {
+          sub_lines: [{ line: 2, text: "225 x 5", warn: false, warn_reason: "", entered_by_coach: false }],
+          coach_lines: [{ line: 1, text: "tempo 3-1-1" }],
+        },
+      }),
+    );
+    await c.saveCell(ex, 1);
+    expect(lines(ex)).toEqual([2, 3]);
+    expect(ex.sub_lines[0]).toMatchObject({ text: "225 x 5", savedText: "225 x 5", queued: false });
+    expect(ex.coach_lines).toEqual([{ line: 1, text: "tempo 3-1-1" }]);
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("shows a coach-logged set on the old number, labelled", async () => {
+    const { c, ex } = setup([{ line: 1, text: "225 x 5", savedText: "" }]);
+    global.fetch = vi.fn().mockResolvedValue(
+      relocated({
+        exercise_lines: {
+          sub_lines: [
+            { line: 1, text: "200 x 5", warn: false, warn_reason: "", entered_by_coach: true },
+            { line: 2, text: "225 x 5", warn: false, warn_reason: "", entered_by_coach: false },
+          ],
+          coach_lines: [],
+        },
+      }),
+    );
+    await c.saveCell(ex, 1);
+    expect(lines(ex)).toEqual([1, 2]);
+    expect(ex.sub_lines[0]).toMatchObject({ text: "200 x 5", savedText: "200 x 5", entered_by_coach: true });
+    expect(ex.sub_lines[1]).toMatchObject({ text: "225 x 5", entered_by_coach: false });
+  });
+
+  it("a correction typed while the write was in flight stays, on the new number", async () => {
+    const { c, ex } = setup([{ line: 1, text: "225 x 5", savedText: "" }]);
+    let release;
+    global.fetch = vi.fn().mockImplementationOnce(
+      () => new Promise((resolve) => { release = () => resolve(relocated({
+        exercise_lines: {
+          sub_lines: [{ line: 2, text: "225 x 5", warn: false, warn_reason: "", entered_by_coach: false }],
+          coach_lines: [{ line: 1, text: "cue" }],
+        },
+      })); }),
+    );
+    const run = c.saveCell(ex, 1);
+    await new Promise((r) => setTimeout(r, 0)); // the request is out
+    ex.sub_lines[0].text = "230 x 5";
+    release();
+    await run;
+    expect(lines(ex)).toEqual([2]);
+    expect(ex.sub_lines[0]).toMatchObject({ text: "230 x 5", savedText: "225 x 5" });
+  });
+
+  it("an athlete edit that claims a coach's line turns the label off", async () => {
+    const { c, ex } = setup([{ line: 1, text: "200 x 5", savedText: "200 x 5", entered_by_coach: true }]);
+    ex.sub_lines[0].text = "205 x 5";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { id: 5, line: 1, text: "205 x 5", entered_by_coach: false } } }),
+    );
+    await c.saveCell(ex, 1);
+    expect(ex.sub_lines[0].entered_by_coach).toBe(false);
+  });
+
+  it("keeps entered_by_coach from the page payload", () => {
+    const c = initWith({
+      exercises: [{ id: 1, pad_lines: 1, sub_lines: [{ line: 1, text: "200 x 5", entered_by_coach: true }] }],
+    });
+    expect(c.exercises[0].sub_lines[0].entered_by_coach).toBe(true);
+  });
+});
+
+describe("#709 — applyExerciseLines", () => {
+  const lines = (ex) => ex.sub_lines.map((l) => l.line);
+  function setup(subLines, coach = []) {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: coach, sub_lines: subLines };
+    c.exercises = [ex];
+    return { c, ex };
+  }
+  const srv = (line, text, extra = {}) => ({
+    line, text, warn: false, warn_reason: "", entered_by_coach: false, ...extra,
+  });
+
+  it("updates a clean entry from the server and clears its flags", () => {
+    const { c, ex } = setup([{ line: 1, text: "old", savedText: "old", warn: true, saveError: true }]);
+    c.applyExerciseLines(ex, { sub_lines: [srv(1, "new", { entered_by_coach: true })], coach_lines: [] });
+    expect(ex.sub_lines).toHaveLength(1);
+    expect(ex.sub_lines[0]).toMatchObject({
+      text: "new", savedText: "new", warn: false, entered_by_coach: true, queued: false, saveError: false,
+    });
+  });
+
+  it("drops a clean entry on a coach cue, keeps a blank pad line, sorts", () => {
+    const { c, ex } = setup([
+      { line: 3, text: "", savedText: "" },
+      { line: 1, text: "x", savedText: "x" },
+      { line: 2, text: "", savedText: "" },
+    ]);
+    c.applyExerciseLines(ex, { sub_lines: [], coach_lines: [{ line: 1, text: "cue" }] });
+    expect(lines(ex)).toEqual([2, 3]);
+    expect(ex.coach_lines).toEqual([{ line: 1, text: "cue" }]);
+  });
+
+  it("moves a dirty entry off a coach cue to the lowest free number", () => {
+    const { c, ex } = setup([
+      { line: 1, text: "typing", savedText: "" },
+      { line: 2, text: "", savedText: "" },
+    ]);
+    c.applyExerciseLines(ex, { sub_lines: [], coach_lines: [{ line: 1, text: "cue" }] });
+    expect(lines(ex)).toEqual([2, 3]);
+    expect(ex.sub_lines.find((l) => l.line === 3)).toMatchObject({ text: "typing", savedText: "" });
+  });
+
+  it("keeps a dirty focused entry's text when the server has other text on its number", () => {
+    const { c, ex } = setup([{ line: 1, text: "mine", savedText: "mine" }]);
+    ex.sub_lines[0].text = "mine, edited"; // dirty
+    c.applyExerciseLines(ex, { sub_lines: [srv(1, "the coach's set", { entered_by_coach: true })], coach_lines: [] });
+    expect(lines(ex)).toEqual([1, 2]);
+    expect(ex.sub_lines[0]).toMatchObject({ text: "the coach's set", entered_by_coach: true });
+    expect(ex.sub_lines[1]).toMatchObject({ text: "mine, edited", savedText: "" });
+  });
+
+  it("a dirty entry whose number the server also holds with the same text stays put", () => {
+    const { c, ex } = setup([{ line: 1, text: "225 x 5", savedText: undefined }]);
+    c.applyExerciseLines(ex, { sub_lines: [srv(1, "225 x 5")], coach_lines: [] });
+    expect(lines(ex)).toEqual([1]);
+  });
+
+  it("a line with a save running counts as dirty", () => {
+    const { c, ex } = setup([{ line: 1, text: "a", savedText: "a" }]);
+    c._lineSavesRunning["1:1"] = 1;
+    c.applyExerciseLines(ex, { sub_lines: [srv(1, "b")], coach_lines: [] });
+    expect(ex.sub_lines.find((l) => l.text === "a")).toBeTruthy();
+    expect(lines(ex)).toEqual([1, 2]);
+  });
+
+  it("never leaves two entries on one number or an entry on a cue", () => {
+    const { c, ex } = setup([
+      { line: 1, text: "a", savedText: "" },
+      { line: 2, text: "b", savedText: "" },
+      { line: 3, text: "c", savedText: "c" },
+    ]);
+    c.applyExerciseLines(ex, {
+      sub_lines: [srv(3, "z")],
+      coach_lines: [{ line: 1, text: "cue" }, { line: 2, text: "cue2" }],
+    });
+    const nums = lines(ex);
+    expect(new Set(nums).size).toBe(nums.length);
+    expect(nums.every((n) => n !== 1 && n !== 2)).toBe(true);
+    expect(nums).toEqual([3, 4, 5]);
+    expect(ex.sub_lines.map((l) => l.text)).toEqual(["z", "a", "b"]);
+  });
+
+  it("moves the outbox entry this page owns with the dirty line, flagged new", () => {
+    const { c, ex } = setup([{ line: 1, text: "225 x 5", savedText: "" }]);
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "225 x 5" });
+    ex.sub_lines[0].queued = true;
+    c.applyExerciseLines(ex, { sub_lines: [], coach_lines: [{ line: 1, text: "cue" }] });
+    const q = c.readQueue();
+    expect(q).toHaveLength(1);
+    expect(q[0].body).toEqual({ exercise_id: 1, line: 2, text: "225 x 5", new: true, token: expect.any(String) });
+    expect(c._ownEntries[q[0].id]).toBe(true);
+    expect(ex.sub_lines[0]).toMatchObject({ line: 2, queued: true, savedText: "" });
+  });
+});
+
+describe("#709 — a queued line restored where its number is now taken", () => {
+  const queued = (line, text, extra = {}) => ({
+    kind: "cell", id: "q1", url: NOTE_CELL_URL, body: { exercise_id: 1, line, text, ...extra },
+  });
+
+  it("shows it on the next free number, as queued, and re-targets its outbox entry", () => {
+    const c = initWith(
+      { exercises: [{ id: 1, pad_lines: 2, coach_lines: [{ line: 1, text: "cue" }] }] },
+      { queue: [queued(1, "100 x 5")] },
+    );
+    const ex = c.exercises[0];
+    expect(ex.sub_lines.map((l) => l.line)).toEqual([2, 3]);
+    expect(ex.sub_lines[0]).toMatchObject({ text: "100 x 5", queued: true });
+    expect(c.readQueue()[0].body).toEqual({ exercise_id: 1, line: 2, text: "100 x 5", new: true, token: expect.any(String) });
+  });
+
+  it("after the flush the text shows once, on the number the server used", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 9, line: 3, text: "100 x 5", warn: false, warn_reason: "", entered_by_coach: false },
+          relocated_from: 2,
+          exercise_lines: {
+            sub_lines: [
+              { line: 2, text: "90 x 5", warn: false, warn_reason: "", entered_by_coach: true },
+              { line: 3, text: "100 x 5", warn: false, warn_reason: "", entered_by_coach: false },
+            ],
+            coach_lines: [{ line: 1, text: "cue" }],
+          },
+        },
+      }),
+    );
+    const c = initWith(
+      { exercises: [{ id: 1, pad_lines: 2, coach_lines: [{ line: 1, text: "cue" }] }] },
+      { queue: [queued(2, "100 x 5", { new: true })] },
+    );
+    await c.flushQueue();
+    const ex = c.exercises[0];
+    expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([
+      [2, "90 x 5"],
+      [3, "100 x 5"],
+    ]);
+    expect(ex.sub_lines[0].entered_by_coach).toBe(true);
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("athlete_session.html — logged by coach (#709)", () => {
+  const html = readFileSync(
+    resolve(process.cwd(), "app/store_project/templates/meso/athlete_session.html"),
+    "utf8",
+  );
+
+  it("labels a coach-entered sub-line without making the input read-only", () => {
+    const tag = html.match(/<span[^>]*data-testid="sub-line-by-coach"[^>]*>[^<]*<\/span>/)[0];
+    expect(tag).toContain('x-show="l.entered_by_coach"');
+    expect(tag).toContain("logged by coach");
+    const input = html.match(/<input[^>]*data-testid="sub-line-input"[\s\S]*?\/>/)[0];
+    expect(input).not.toContain("readonly");
+    expect(input).not.toContain(":disabled");
+  });
+});
+
+describe("#709 — nothing typed is lost, stale text is blanked, keys are stable", () => {
+  const srv = (line, text) => ({ line, text, warn: false, warn_reason: "", entered_by_coach: false });
+
+  it("a displaced dirty line with no free number goes to ex.unplaced, outbox entry kept", () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const full = [];
+    for (let n = 2; n <= 20; n += 1) full.push({ line: n, text: "s" + n, savedText: "s" + n });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "typed", savedText: "" }, ...full] };
+    c.exercises = [ex];
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "typed" });
+    ex.sub_lines[0].queued = true;
+    c.applyExerciseLines(ex, {
+      sub_lines: full.map((l) => srv(l.line, l.text)),
+      coach_lines: [{ line: 1, text: "cue" }],
+    });
+    expect(ex.unplaced).toEqual([{ text: "typed" }]);
+    expect(ex.sub_lines.some((l) => l.text === "typed")).toBe(false);
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.readQueue()[0].body).toEqual({ exercise_id: 1, line: 1, text: "typed" });
+  });
+
+  it("a restored queued line with no free number still shows, as unplaced", () => {
+    const coach = [];
+    for (let n = 1; n <= 20; n += 1) coach.push({ line: n, text: "cue" + n });
+    const c = initWith(
+      { exercises: [{ id: 1, pad_lines: 1, coach_lines: coach }] },
+      { queue: [{ kind: "cell", id: "q1", url: NOTE_CELL_URL, body: { exercise_id: 1, line: 1, text: "100 x 5" } }] },
+    );
+    expect(c.exercises[0].unplaced).toEqual([{ text: "100 x 5" }]);
+    expect(c.readQueue()).toHaveLength(1);
+  });
+
+  it("a clean line the server no longer has is blanked to a pad", () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = {
+      id: 1,
+      coach_lines: [],
+      sub_lines: [{ line: 1, text: "225 x 5", savedText: "225 x 5", warn: true, warn_reason: "x", pr: "9 kg", entered_by_coach: true }],
+    };
+    c.applyExerciseLines(ex, { sub_lines: [], coach_lines: [] });
+    expect(ex.sub_lines[0]).toMatchObject({
+      line: 1, text: "", savedText: "", warn: false, warn_reason: "", pr: "", entered_by_coach: false,
+    });
+    expect(c._lineNeedsSending(ex.sub_lines[0], "", 1, 1)).toBe(false); // a blur re-posts nothing
+  });
+
+  it("a merge that renumbers an entry keeps the same object and its key", () => {
+    const c = initWith({ exercises: [{ id: 1, pad_lines: 2 }] });
+    const ex = c.exercises[0];
+    ex.sub_lines[0].text = "typing";
+    const mine = ex.sub_lines[0];
+    const key = mine._k;
+    expect(key).toBeTruthy();
+    expect(new Set(ex.sub_lines.map((l) => l._k)).size).toBe(2);
+    c.applyExerciseLines(ex, { sub_lines: [], coach_lines: [{ line: 1, text: "cue" }] });
+    expect(ex.sub_lines.find((l) => l.text === "typing")).toBe(mine);
+    expect(mine._k).toBe(key);
+    expect(mine.line).not.toBe(1);
+    c.addLine(ex);
+    expect(new Set(ex.sub_lines.map((l) => l._k)).size).toBe(ex.sub_lines.length);
+  });
+
+  it("the template keys on _k and renders unplaced text with x-text", () => {
+    const html = readFileSync(
+      resolve(process.cwd(), "app/store_project/templates/meso/athlete_session.html"),
+      "utf8",
+    );
+    expect(html).toContain('x-for="l in ex.sub_lines" :key="l._k"');
+    const tag = html.match(/<div[^>]*data-testid="sub-line-unplaced"[^>]*>/)[0];
+    expect(tag).toContain("x-text=");
+    expect(tag).not.toContain("x-html");
+  });
+});
+
+describe("#709 — restore never overwrites another queued line; replay token", () => {
+  const q = (id, line, text, extra = {}) => ({
+    kind: "cell", id, url: NOTE_CELL_URL, body: { exercise_id: 1, line, text, new: true, ...extra },
+  });
+  const ok = (line, text, extra = {}) =>
+    res({ body: { ok: true, cell: { id: 5, line, text, warn: false }, ...extra } });
+  const sent = (i = 0) => JSON.parse(global.fetch.mock.calls[i][1].body);
+
+  it("a cue on line 1 over queued lines 1 and 2 keeps both writes, on distinct numbers", () => {
+    const c = initWith(
+      { exercises: [{ id: 1, pad_lines: 2, coach_lines: [{ line: 1, text: "cue" }] }] },
+      { queue: [q("a", 1, "225 x 5"), q("b", 2, "230 x 5")] },
+    );
+    const ex = c.exercises[0];
+    const byText = Object.fromEntries(ex.sub_lines.map((l) => [l.text, l.line]));
+    expect(byText["230 x 5"]).toBe(2);
+    expect(byText["225 x 5"]).toBe(3);
+    const queue = c.readQueue();
+    expect(queue.map((i) => [i.body.line, i.body.text]).sort()).toEqual([
+      [2, "230 x 5"],
+      [3, "225 x 5"],
+    ]);
+  });
+
+  it("_retargetOutbox refuses a number another entry targets and deletes nothing", () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    c.writeQueue([q("a", 1, "x"), q("b", 2, "y")].map((i) => ({ ...i, url: CELL_URL })));
+    expect(c._retargetOutbox("a", 2)).toBe("");
+    expect(c.readQueue()).toHaveLength(2);
+  });
+
+  it("a merge's displaced line avoids numbers an outbox entry targets", () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "a", savedText: "" }] };
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "a", new: true });
+    c.enqueueCell({ exercise_id: 1, line: 2, text: "other", new: true });
+    ex.sub_lines[0].queued = true;
+    c.applyExerciseLines(ex, { sub_lines: [], coach_lines: [{ line: 1, text: "cue" }] });
+    expect(ex.sub_lines[0].line).toBe(3);
+    expect(c.readQueue().map((i) => i.body.line).sort()).toEqual([2, 3]);
+  });
+
+  it("the same token rides the write-ahead, the post and a replay", async () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "225 x 5", savedText: "" }] };
+    c.exercises = [ex];
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const run = c.saveCell(ex, 1);
+    const ahead = c.readQueue()[0].body.token;
+    expect(typeof ahead).toBe("string");
+    await run;
+    expect(sent().token).toBe(ahead);
+    expect(c.readQueue()[0].body.token).toBe(ahead);
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "225 x 5"));
+    await c.flushQueue();
+    expect(sent().token).toBe(ahead);
+    expect(ex.sub_lines[0].newToken).toBeUndefined(); // dropped once the server holds it
+  });
+
+  it("no token without new", async () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "b", savedText: "a" }] };
+    c.exercises = [ex];
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "b"));
+    await c.saveCell(ex, 1);
+    expect("token" in sent()).toBe(false);
+    expect("new" in sent()).toBe(false);
+  });
+
+  it("an idempotent replay answered with newer text shows it once, from the server", async () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "225 x 5", savedText: "" }] };
+    c.exercises = [ex];
+    global.fetch = vi.fn().mockResolvedValue(
+      ok(2, "230 x 5", {
+        relocated_from: 1,
+        exercise_lines: {
+          sub_lines: [{ line: 2, text: "230 x 5", warn: false, warn_reason: "", entered_by_coach: false }],
+          coach_lines: [{ line: 1, text: "cue" }],
+        },
+      }),
+    );
+    await c.saveCell(ex, 1);
+    expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([[2, "230 x 5"]]);
+    expect(ex.sub_lines[0].savedText).toBe("230 x 5");
+  });
+
+  it("an idempotent 200 on the same line takes the text the server holds", async () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "225 x 5", savedText: "" }] };
+    c.exercises = [ex];
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "230 x 5"));
+    await c.saveCell(ex, 1);
+    expect(ex.sub_lines[0]).toMatchObject({ text: "230 x 5", savedText: "230 x 5" });
+  });
+});
+
+describe("#709 — merge keeps an edit; an unconfirmed new line stays new", () => {
+  const ok = (line, text) =>
+    res({ body: { ok: true, cell: { id: 5, line, text, warn: false } } });
+  const sent = (i = 0) => JSON.parse(global.fetch.mock.calls[i][1].body);
+
+  it("a pending edit of a line the server still holds unchanged keeps its number and outbox entry", () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "100x5", savedText: "100x5" }] };
+    c.exercises = [ex];
+    ex.sub_lines[0].text = "105x5";
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "105x5" });
+    ex.sub_lines[0].queued = true;
+    c.applyExerciseLines(ex, {
+      sub_lines: [
+        { line: 1, text: "100x5", warn: false, warn_reason: "", entered_by_coach: false },
+        { line: 2, text: "x", warn: false, warn_reason: "", entered_by_coach: true },
+      ],
+      coach_lines: [],
+    });
+    expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([[1, "105x5"], [2, "x"]]);
+    expect(c.readQueue().map((i) => [i.body.line, i.body.text, i.body.new])).toEqual([[1, "105x5", undefined]]);
+  });
+
+  it("a dirty line with unknown savedText stays in place", () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "a", savedText: undefined }] };
+    c.applyExerciseLines(ex, {
+      sub_lines: [{ line: 1, text: "b", warn: false, warn_reason: "", entered_by_coach: false }],
+      coach_lines: [],
+    });
+    expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([[1, "a"]]);
+  });
+
+  it("after a network failure an edit is still queued as new with the same token", async () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "225 x 5", savedText: "" }] };
+    c.exercises = [ex];
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(ex, 1);
+    const token = c.readQueue()[0].body.token;
+    expect(ex.sub_lines[0].savedText).toBeUndefined();
+    ex.sub_lines[0].text = "230 x 5";
+    const run = c.saveCell(ex, 1);
+    expect(c.readQueue()[0].body).toEqual({ exercise_id: 1, line: 1, text: "230 x 5", new: true, token });
+    await run;
+    expect(sent(1)).toEqual({ exercise_id: 1, line: 1, text: "230 x 5", new: true, token });
+    expect(c.readQueue()[0].body).toEqual({ exercise_id: 1, line: 1, text: "230 x 5", new: true, token });
+  });
+
+  it("a 200 clears the token, so the next edit is a plain edit", async () => {
+    const c = makeLogger({ cellUrl: CELL_URL });
+    const ex = { id: 1, coach_lines: [], sub_lines: [{ line: 1, text: "225 x 5", savedText: "" }] };
+    c.exercises = [ex];
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "225 x 5"));
+    await c.saveCell(ex, 1);
+    expect(ex.sub_lines[0].newToken).toBeUndefined();
+    ex.sub_lines[0].text = "230 x 5";
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "230 x 5"));
+    await c.saveCell(ex, 1);
+    expect("new" in sent()).toBe(false);
+    expect("token" in sent()).toBe(false);
+  });
+
+  it("restore then flush keeps new and the token", async () => {
+    global.fetch = vi.fn().mockResolvedValue(ok(1, "225 x 5"));
+    const c = initWith(
+      { exercises: [{ id: 1, pad_lines: 1 }] },
+      { queue: [{ kind: "cell", id: "q1", url: NOTE_CELL_URL, body: { exercise_id: 1, line: 1, text: "225 x 5", new: true, token: "tok-1" } }] },
+    );
+    expect(c.exercises[0].sub_lines[0].newToken).toBe("tok-1");
+    await c.flushQueue();
+    expect(sent()).toEqual({ exercise_id: 1, line: 1, text: "225 x 5", new: true, token: "tok-1" });
+  });
+});

@@ -247,6 +247,88 @@
   box-sizing: border-box;
 }
 
+/* #709 kind chip: overlays the input's right edge (absolute, with matching
+   input padding), so showing it never changes the cell's size. */
+.meso-line-row {
+  position: relative;
+}
+.meso-line-row--chip .meso-line-input {
+  padding-right: 62px;
+}
+.meso-line-chip {
+  appearance: none;
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  margin: 0;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.meso-line-chip--on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* "log as set" only shows on hover / focus within the line. */
+.meso-line-chip:not(.meso-line-chip--on) {
+  opacity: 0;
+  pointer-events: none;
+}
+.meso-line-row:hover .meso-line-chip:not(.meso-line-chip--on),
+.meso-line-row:focus-within .meso-line-chip:not(.meso-line-chip--on) {
+  opacity: 1;
+  pointer-events: auto;
+}
+.meso-line-retry {
+  appearance: none;
+  align-self: flex-start;
+  margin: 1px 0 0;
+  padding: 0 4px;
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--warn);
+  font: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  cursor: pointer;
+}
+.meso-cell-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: var(--rail);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.3;
+}
+.meso-cell-alert-dismiss {
+  appearance: none;
+  flex: none;
+  margin-left: auto;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.meso-cell-note {
+  padding: 2px 4px;
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
 .meso-line-row--athlete .meso-line-input {
   color: var(--dim);
   background: var(--rail);
@@ -461,4 +543,33 @@
   flex: none;
   font-size: 10.5px;
   color: var(--dim);
+}
+
+/* Refusal alert: message, the refused text (quoted), and two actions. */
+.meso-cell-alert {
+  flex-wrap: wrap;
+}
+.meso-cell-alert-text {
+  font-family: "IBM Plex Mono", monospace;
+  overflow-wrap: anywhere;
+}
+.meso-cell-alert-actions {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+.meso-cell-alert-actions button {
+  appearance: none;
+  padding: 0 5px;
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--warn);
+  font: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  cursor: pointer;
+}
+.meso-cell-refusal {
+  width: 100%;
 }

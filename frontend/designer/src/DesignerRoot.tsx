@@ -226,6 +226,18 @@ export function DesignerRoot() {
 
   return (
     <div className="meso-designer-root">
+      {gridState.saveError ? (
+        <div className="meso-save-error" role="alert" data-testid="designer-save-error">
+          <span>{gridState.saveError}</span>
+          <button
+            type="button"
+            className="meso-save-error-dismiss"
+            onClick={gridState.dismissSaveError}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       <TopBar
         planTitle={grid?.plan?.title ?? ""}
         onRenamePlan={gridState.renamePlan}
@@ -285,6 +297,11 @@ export function DesignerRoot() {
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}
                 onDragEnd={tableReorder.onDragEnd}
                 exerciseSuggestions={hydrated.exerciseSuggestions}
+                cellUi={gridState.cellUi}
+                onRetryCellLine={gridState.retryCellLine}
+                onDismissCellNotice={gridState.dismissCellNotice}
+                onDiscardRefusal={gridState.discardRefusal}
+                isTemplate={flags.is_template}
               />
             )}
 

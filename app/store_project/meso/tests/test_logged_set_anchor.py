@@ -262,11 +262,14 @@ class TestBackfillMigration:
             slot_b = ExerciseSlot.objects.create(
                 session_slot=session.session_slot, name="Bench", order=1
             )
-            prescription_a = Prescription.objects.create(
-                exercise_slot=slot_a, week=week, line=0, text="5x5"
+            # Through the historical model too: `Prescription` gained
+            # `entered_by_coach` (#709) after this state.
+            OldPrescription = old_apps.get_model("meso", "Prescription")
+            prescription_a = OldPrescription.objects.create(
+                exercise_slot_id=slot_a.pk, week_id=week.pk, line=0, text="5x5"
             )
-            prescription_b = Prescription.objects.create(
-                exercise_slot=slot_b, week=week, line=0, text="3x8"
+            prescription_b = OldPrescription.objects.create(
+                exercise_slot_id=slot_b.pk, week_id=week.pk, line=0, text="3x8"
             )
             log = SessionLog.objects.create(session=session, athlete=athlete)
 

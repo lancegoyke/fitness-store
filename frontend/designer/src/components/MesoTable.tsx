@@ -69,8 +69,9 @@ import {
 } from "@dnd-kit/core";
 import type { CollisionDetection, DragEndEvent, DragStartEvent, KeyboardCoordinateGetter } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid } from "../lib/api";
-import type { GridCellPatch, GridRowPatch, Id } from "../hooks/useGrid";
+import type { CellLine, GridCell, GridDay, GridRow, GridWeek, MesoGrid } from "../lib/api";
+import { cellUiKey } from "../hooks/useGrid";
+import type { CellLineWriteOpts, CellUiState, GridCellPatch, GridRowPatch, Id } from "../hooks/useGrid";
 import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { UseTableNavResult } from "../hooks/useTableNav";
 import type { TableDragData, TableDragEndEvent } from "../hooks/useTableReorder";
@@ -94,7 +95,7 @@ export interface MesoTableProps {
   // Phase 2a: upsert one freeform (week × line) sub-line of a row's stack —
   // addressed by slot/week/line, not pk, since the line may not exist yet
   // (useGrid.writeCellLine). Fire-and-forget, like onPatchCell.
-  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
+  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string, opts?: CellLineWriteOpts): void;
   // Phase 2a (D2): the per-exercise Tempo/Notes/Rest row columns
   // (useGrid.patchRowColumns). Fire-and-forget, like onPatchCell.
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
@@ -120,7 +121,37 @@ export interface MesoTableProps {
   // row-name combobox (DesignerRoot reads `#meso-exercise-suggest`). Optional
   // so existing callers/tests keep working with no suggestions.
   exerciseSuggestions?: ExerciseSuggestions;
+  // #709: transient per-cell UI from useGrid (notices, refused drafts, retry
+  // marks), keyed by cellUiKey(slot, week), and the verbs that act on it. All
+  // optional so callers that don't log sets for an athlete keep working.
+  cellUi?: Record<string, CellUiState>;
+  onRetryCellLine?(exerciseSlotId: Id, weekId: Id, line: number): void;
+  onDismissCellNotice?(exerciseSlotId: Id, weekId: Id): void;
+  onDiscardRefusal?(exerciseSlotId: Id, weekId: Id, refusalId: number): void;
+  /** The plan is a template: no athlete, so a line can never be a logged set. */
+  isTemplate?: boolean;
 }
+
+interface CellExtras {
+  cellUi: Record<string, CellUiState>;
+  /** The athlete's first name, or null when the grid has no athlete name. */
+  athleteFirst: string | null;
+  /** A coach can log sets here: the plan has an athlete and isn't a template. */
+  canLogSets: boolean;
+  onRetryCellLine(exerciseSlotId: Id, weekId: Id, line: number): void;
+  onDismissCellNotice(exerciseSlotId: Id, weekId: Id): void;
+  onDiscardRefusal(exerciseSlotId: Id, weekId: Id, refusalId: number): void;
+}
+
+const NOOP = () => {};
+const CellExtrasContext = createContext<CellExtras>({
+  cellUi: {},
+  athleteFirst: null,
+  canLogSets: false,
+  onRetryCellLine: NOOP,
+  onDismissCellNotice: NOOP,
+  onDiscardRefusal: NOOP,
+});
 
 /** The single arm/confirm slot — mirrors usePlanData's PendingDelete
  * (one thing armed at a time), but kept local to MesoTable since useGrid's
@@ -195,11 +226,21 @@ interface CellSubLineInputProps {
   weekId: number;
   line: number;
   text: string;
-  athleteAuthored?: boolean;
+  /** Who owns the line: a coach cue, a set the coach logged, or one the
+   * athlete entered (read-only here). Defaults to "cue". */
+  origin?: "cue" | "coach" | "athlete";
+  /** The athlete's first name for "logged by …" labels (null: "your athlete"). */
+  athleteFirst?: string | null;
   /** The trailing "next line" input — commits only non-blank (a blank ghost
-   * has nothing to create), and remounts empty via its parent's key once the
-   * optimistic upsert promotes its text to a real `cell.lines` entry. */
+   * has nothing to create). Its React key is stable, so an external update
+   * that moves `line` never remounts it and drops the coach's typing. */
   ghost?: boolean;
+  /** The kind chip: "logged" (a coach set line) or "log as set" (a loggable cue). */
+  chip?: "logged" | "log-as-set" | null;
+  onFlip?(line: number, text: string, kind: "set" | "cue"): void;
+  /** This line's last write never reached the server. */
+  unsaved?: boolean;
+  onRetry?(line: number): void;
   tableNav: UseTableNavResult;
   onWrite(line: number, text: string): void;
 }
@@ -211,7 +252,12 @@ interface CellSubLineInputProps {
  * D3's RPE row is literally "arrow down and type"), so Enter/Escape and the
  * arrows all come from cellProps now instead of a local onKeyDown.
  * Blanking an EXISTING line commits "" — the line clears in place (the row
- * stays), mirroring the server's blank-text upsert. */
+ * stays), mirroring the server's blank-text upsert.
+ *
+ * #709: the unsaved draft always wins on screen — a `text` change from
+ * outside (a server answer, an undo) never overwrites a dirty draft; the
+ * coach's commit then goes to the server, which refuses it visibly if the
+ * line changed hands. */
 function CellSubLineInput({
   cellId,
   lineId,
@@ -219,24 +265,48 @@ function CellSubLineInput({
   weekId,
   line,
   text,
-  athleteAuthored,
+  origin = "cue",
+  athleteFirst,
   ghost,
+  chip,
+  onFlip,
+  unsaved,
+  onRetry,
   tableNav,
   onWrite,
 }: CellSubLineInputProps) {
   const [draft, setDraft] = useState(text);
   const dirtyRef = useRef(false);
+  const athlete = origin === "athlete";
+  const first = athleteFirst ?? "your athlete";
 
   useEffect(() => {
+    if (dirtyRef.current) return;
     setDraft(text);
-    dirtyRef.current = false;
   }, [text]);
 
+  // Commit-on-unmount: a response can flip this line to the athlete's (the
+  // input unmounts), and an uncommitted draft must not vanish with it. The
+  // server then refuses it visibly, so the text survives as a refusal row.
+  const latestRef = useRef({ draft, line, ghost, onWrite });
+  latestRef.current = { draft, line, ghost, onWrite };
+  useEffect(
+    () => () => {
+      const cur = latestRef.current;
+      if (!dirtyRef.current) return;
+      dirtyRef.current = false;
+      if (cur.ghost && cur.draft.trim() === "") return;
+      cur.onWrite(cur.line, cur.draft);
+    },
+    [],
+  );
+
   function commitIfDirty() {
-    if (!dirtyRef.current) return;
+    if (athlete || !dirtyRef.current) return;
     dirtyRef.current = false;
     if (ghost && draft.trim() === "") return;
     onWrite(line, draft);
+    if (ghost) setDraft("");
   }
 
   const navProps = tableNav.cellProps(
@@ -253,31 +323,77 @@ function CellSubLineInput({
     line,
   );
 
+  const label = ghost
+    ? "Add a line"
+    : athlete
+      ? `Line ${line} — logged by ${first}`
+      : `Line ${line}`;
+
   return (
-    <div className={`meso-line-row${athleteAuthored ? " meso-line-row--athlete" : ""}`}>
-      {athleteAuthored && lineId != null ? (
+    <div
+      className={`meso-line-row${athlete ? " meso-line-row--athlete" : ""}${chip ? " meso-line-row--chip" : ""}`}
+    >
+      {athlete ? (
         <span
           className="meso-line-athlete-mark"
-          data-testid={`cell-line-athlete-${lineId}`}
-          title="Logged by your athlete"
+          data-testid={lineId != null ? `cell-line-athlete-${lineId}` : undefined}
+          title={`Logged by ${first}`}
         >
-          athlete
+          logged by {first}
         </span>
       ) : null}
       <input
         className={`meso-cell meso-line-input${ghost ? " meso-line-input--ghost" : ""}`}
         data-testid={ghost ? `cell-line-new-${cellId}` : `cell-line-${cellId}-${line}`}
         data-grid-cell={tableCellDomKey(rowId, weekId, "text", line)}
-        aria-label={ghost ? "Add a line" : athleteAuthored ? `Line ${line} — logged by your athlete` : `Line ${line}`}
+        aria-label={label}
         placeholder={ghost ? "+ line" : "—"}
         value={draft}
-        onChange={(e) => {
-          dirtyRef.current = true;
-          setDraft(e.target.value);
-        }}
+        readOnly={athlete}
+        onChange={
+          athlete
+            ? undefined
+            : (e) => {
+                dirtyRef.current = true;
+                setDraft(e.target.value);
+              }
+        }
         onBlur={commitIfDirty}
         {...navProps}
       />
+      {chip ? (
+        <button
+          type="button"
+          tabIndex={-1}
+          className={`meso-line-chip${chip === "logged" ? " meso-line-chip--on" : ""}`}
+          data-testid={`cell-line-kind-${cellId}-${line}`}
+          aria-pressed={chip === "logged"}
+          title={
+            chip === "logged"
+              ? `Counts as ${athleteFirst ? `${athleteFirst}'s` : "your athlete's"} set — you logged it. Click to make it a cue.`
+              : "Log this line as a set for your athlete."
+          }
+          // Keep the input's focus: a click must not blur-commit before the
+          // handler below runs (it commits this line's own draft first).
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            commitIfDirty();
+            onFlip?.(line, draft, chip === "logged" ? "cue" : "set");
+          }}
+        >
+          {chip === "logged" ? "logged" : "log as set"}
+        </button>
+      ) : null}
+      {unsaved ? (
+        <button
+          type="button"
+          className="meso-line-retry"
+          data-testid={`cell-line-retry-${cellId}-${line}`}
+          onClick={() => onRetry?.(line)}
+        >
+          Not saved — retry
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -288,8 +404,10 @@ interface GridCellEditorProps {
   week: GridWeek;
   busy: boolean;
   tableNav: UseTableNavResult;
+  /** This day has a live session in this week (a set can be logged on it). */
+  sessionLive: boolean;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
-  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
+  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string, opts?: CellLineWriteOpts): void;
   onFillAcrossWeeks(cellId: number): void;
 }
 
@@ -336,10 +454,13 @@ function GridCellEditor({
   week,
   busy,
   tableNav,
+  sessionLive,
   onPatchCell,
   onWriteCellLine,
   onFillAcrossWeeks,
 }: GridCellEditorProps) {
+  const extras = useContext(CellExtrasContext);
+  const ui = extras.cellUi[cellUiKey(row.exercise_slot_id, week.id)];
   const [draft, setDraft] = useState(cell.text);
   const dirtyRef = useRef(false);
 
@@ -375,7 +496,18 @@ function GridCellEditor({
   // #645: athlete-authored lines collapse to ONE roll-up marker (read-only
   // presentation; the lines, their writes and the ghost numbering are
   // untouched). Expanding renders them as the editable athlete rows.
-  const athleteLines = lines.filter((l) => l.athlete_authored && l.text.trim() !== "");
+  // #709: athlete-ENTERED lines (athlete_authored && !entered_by_coach) are
+  // the roll-up group, read-only when expanded; coach set lines render inline
+  // beside the cues, in line order, each with its own "logged" chip.
+  const athleteLines = lines.filter((l) => l.athlete_authored && !l.entered_by_coach && l.text.trim() !== "");
+  const inlineLines = lines.filter((l) => !l.athlete_authored || l.entered_by_coach);
+  const canChip = extras.canLogSets && sessionLive;
+  const writeLine = (line: number, text: string, current: CellLine | undefined) =>
+    onWriteCellLine(row.exercise_slot_id, week.id, line, text, {
+      intent: current && current.text.trim() !== "" ? "edit" : "new",
+    });
+  const flipLine = (line: number, text: string, kind: "set" | "cue") =>
+    onWriteCellLine(row.exercise_slot_id, week.id, line, text, { intent: "edit", kind });
   const [athleteOpen, setAthleteOpen] = useState(false);
   const markerRef = useRef<HTMLButtonElement>(null);
   const athleteSetCount = cell.athlete_summary?.sets ?? athleteLines.length;
@@ -426,12 +558,29 @@ function GridCellEditor({
     // Escape baseline (same rule as the Enter handler's), or Escape would
     // roll the UI back past the commit.
     tableNav.setRevertBaseline(row.exercise_slot_id, week.id, "text", head);
-    rest.forEach((text, i) => onWriteCellLine(row.exercise_slot_id, week.id, i + 1, text));
-    // Blank any existing line beyond the pasted stack so the result equals
-    // the source cell (a cleared line stays rendered in place — Phase 2a's
-    // blank-upsert semantics — rather than carrying stale text).
+    // The pasted lines go onto the NEXT free line numbers (>= 1), skipping
+    // every performance line (athlete_authored, whoever entered it): a coach-
+    // logged set is the athlete's record, not plan text, and a plan operation
+    // never rewrites it.
+    const athleteNums = new Set(lines.filter((l) => l.athlete_authored).map((l) => l.line));
+    let n = 0;
+    let lastUsed = 0;
+    for (const text of rest) {
+      n += 1;
+      while (athleteNums.has(n)) n += 1;
+      const current = lines.find((l) => l.line === n);
+      onWriteCellLine(row.exercise_slot_id, week.id, n, text, {
+        intent: !current || current.text.trim() === "" ? "new" : "edit",
+      });
+      lastUsed = n;
+    }
+    // Blank any existing, non-athlete line beyond the pasted stack so the
+    // result equals the source cell (a cleared line stays rendered in place —
+    // Phase 2a's blank-upsert semantics — rather than carrying stale text).
     for (const l of lines) {
-      if (l.line > rest.length && l.text !== "") onWriteCellLine(row.exercise_slot_id, week.id, l.line, "");
+      if (l.line > lastUsed && l.text !== "" && !athleteNums.has(l.line)) {
+        onWriteCellLine(row.exercise_slot_id, week.id, l.line, "", { intent: "edit" });
+      }
     }
   }
 
@@ -482,9 +631,14 @@ function GridCellEditor({
         onPaste={onPaste}
         {...navProps}
       />
-      {lines
-        .filter((l) => !l.athlete_authored)
-        .map((l) => (
+      {inlineLines.map((l) => {
+        const isCoachSet = !!l.athlete_authored && !!l.entered_by_coach;
+        const chip = isCoachSet
+          ? "logged"
+          : canChip && l.loggable && l.text.trim() !== ""
+            ? "log-as-set"
+            : null;
+        return (
           <CellSubLineInput
             key={l.line}
             cellId={cellId}
@@ -493,10 +647,17 @@ function GridCellEditor({
             weekId={week.id}
             line={l.line}
             text={l.text}
+            origin={isCoachSet ? "coach" : "cue"}
+            athleteFirst={extras.athleteFirst}
+            chip={chip}
+            onFlip={flipLine}
+            unsaved={ui?.unsaved?.includes(l.line)}
+            onRetry={(line) => extras.onRetryCellLine(row.exercise_slot_id, week.id, line)}
             tableNav={tableNav}
-            onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
+            onWrite={(line, text) => writeLine(line, text, l)}
           />
-        ))}
+        );
+      })}
       {athleteLines.length > 0 ? (
         <div
           className="meso-athlete-group"
@@ -535,16 +696,17 @@ function GridCellEditor({
                   weekId={week.id}
                   line={l.line}
                   text={l.text}
-                  athleteAuthored
+                  origin="athlete"
+                  athleteFirst={extras.athleteFirst}
                   tableNav={tableNav}
-                  onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
+                  onWrite={() => {}}
                 />
               ))
             : null}
         </div>
       ) : null}
       <CellSubLineInput
-        key={`ghost-${nextLine}`}
+        key="ghost"
         cellId={cellId}
         rowId={row.exercise_slot_id}
         weekId={week.id}
@@ -552,8 +714,59 @@ function GridCellEditor({
         text=""
         ghost
         tableNav={tableNav}
-        onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
+        onWrite={(line, text) => writeLine(line, text, undefined)}
       />
+      {ui?.refusals?.length ? (
+        <div className="meso-cell-alert" role="alert" data-testid={`cell-refusal-${cellId}`}>
+          {ui.refusals.map((r, i) => (
+            <div key={r.id} className="meso-cell-refusal" data-testid={`cell-refusal-row-${cellId}-${i}`}>
+              <span>{r.message}</span>{" "}
+              <q className="meso-cell-alert-text" data-testid={`cell-refusal-text-${cellId}-${i}`}>
+                {r.text}
+              </q>
+              <span className="meso-cell-alert-actions">
+                {r.canAdd ? (
+                  <button
+                    type="button"
+                    data-testid={`cell-refusal-add-${cellId}-${i}`}
+                    onClick={() => {
+                      onWriteCellLine(row.exercise_slot_id, week.id, nextLine, r.text, { intent: "new" });
+                      extras.onDiscardRefusal(row.exercise_slot_id, week.id, r.id);
+                    }}
+                  >
+                    Add as a new line
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  data-testid={`cell-refusal-discard-${cellId}-${i}`}
+                  onClick={() => extras.onDiscardRefusal(row.exercise_slot_id, week.id, r.id)}
+                >
+                  Discard
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {ui?.notice?.kind === "error" ? (
+        <div className="meso-cell-alert" role="alert" data-testid={`cell-error-${cellId}`}>
+          <span>{ui.notice.message}</span>
+          <button
+            type="button"
+            className="meso-cell-alert-dismiss"
+            aria-label="Dismiss"
+            onClick={() => extras.onDismissCellNotice(row.exercise_slot_id, week.id)}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
+      {ui?.notice?.kind === "moved" ? (
+        <div className="meso-cell-note" role="status" data-testid={`cell-notice-${cellId}`}>
+          {ui.notice.message}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -891,7 +1104,7 @@ interface TableRowProps {
   onConfirmRemoveRow(): void;
   onCancelRemoveRow(): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
-  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
+  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string, opts?: CellLineWriteOpts): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string, exerciseId?: string | null): void;
   onSkipCell(cellId: number, skipped: boolean): void;
@@ -1024,6 +1237,7 @@ function TableRow({
                 week={week}
                 busy={busy}
                 tableNav={tableNav}
+                sessionLive={day.session_ids[String(week.id)] != null}
                 onPatchCell={onPatchCell}
                 onWriteCellLine={onWriteCellLine}
                 onFillAcrossWeeks={onFillAcrossWeeks}
@@ -1051,7 +1265,7 @@ interface TableDayBlockProps {
   arm(type: ArmedKind, id: Id): void;
   disarm(): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
-  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
+  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string, opts?: CellLineWriteOpts): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string, exerciseId?: string | null): void;
   onRenameDay(sessionSlotId: Id, name: string): void;
@@ -1422,6 +1636,11 @@ export function MesoTable(props: MesoTableProps) {
     onAddExerciseThisWeek,
     onDragEnd,
     exerciseSuggestions,
+    cellUi,
+    onRetryCellLine,
+    onDismissCellNotice,
+    onDiscardRefusal,
+    isTemplate,
   } = props;
 
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -1520,9 +1739,23 @@ export function MesoTable(props: MesoTableProps) {
     return { catalog: hydrated.catalog, mine: mergeMine(hydrated.mine, gridRows) };
   }, [exerciseSuggestions, grid]);
 
+  const athlete = grid?.athlete ?? null;
+  const cellExtras = useMemo<CellExtras>(
+    () => ({
+      cellUi: cellUi ?? {},
+      athleteFirst: athlete?.name?.trim().split(/\s+/)[0] || null,
+      canLogSets: athlete != null && !isTemplate,
+      onRetryCellLine: onRetryCellLine ?? NOOP,
+      onDismissCellNotice: onDismissCellNotice ?? NOOP,
+      onDiscardRefusal: onDiscardRefusal ?? NOOP,
+    }),
+    [cellUi, athlete, isTemplate, onRetryCellLine, onDismissCellNotice, onDiscardRefusal],
+  );
+
   if (!grid) return null;
 
   return (
+    <CellExtrasContext.Provider value={cellExtras}>
     <ExerciseSuggestContext.Provider value={suggestSource}>
     <div className="meso-table-view" data-testid="meso-table-view">
       <WeekManagerStrip
@@ -1594,6 +1827,7 @@ export function MesoTable(props: MesoTableProps) {
       </button>
     </div>
     </ExerciseSuggestContext.Provider>
+    </CellExtrasContext.Provider>
   );
 }
 
