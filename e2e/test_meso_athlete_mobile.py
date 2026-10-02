@@ -128,8 +128,10 @@ def test_athlete_opens_a_session_from_home(
     expect(page.get_by_role("heading", name="Lower")).to_be_visible()
     squat = page.get_by_test_id("exercise-card").filter(has_text="Back Squat")
     # Alpine renders the cards from the JSON payload; wait for the coach's
-    # first sub-line to hydrate before measuring anything.
-    expect(squat.get_by_test_id("sub-line-input").first).to_have_value("RPE 7")
+    # cues to hydrate before measuring anything. They are read-only text after
+    # the athlete's lines (#524), never an input's value.
+    expect(squat.get_by_test_id("coach-cue").first).to_have_text("RPE 7")
+    expect(squat.get_by_test_id("sub-line-input").first).to_have_value("")
     shot("01-session")
 
     _assert_fits_down_to_320(page, viewport)

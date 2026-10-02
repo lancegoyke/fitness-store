@@ -142,12 +142,18 @@ def test_coach_edits_and_delivers_the_block(
     press(session_link)
     expect(page.get_by_role("heading", name="Lower")).to_be_visible()
 
-    # The session page shows only line 0 as the target. A coach's sub-line is
-    # the value of the first "what you did" input, the field the athlete types
-    # their own sets into (#524 asks whether it should be). If that changes,
-    # this assertion moves with it.
+    # The session page shows only line 0 as the target. The coach's sub-line
+    # is a read-only cue AFTER the athlete's lines (#524), not the value of the
+    # first "what you did" input, and the empty lines hint at the set's own
+    # target ("4 x 6 @ 70" -> "70 x 6").
     squat_card = _squat_card(page)
-    expect(squat_card.get_by_test_id("sub-line-input").first).to_have_value(
-        EDITED_SUB_LINE
-    )
+    cue = squat_card.get_by_test_id("coach-cue")
+    expect(cue).to_have_count(1)
+    expect(cue).to_be_visible()
+    assert cue.inner_text().strip() == EDITED_SUB_LINE
+    inputs = squat_card.get_by_test_id("sub-line-input")
+    expect(inputs.first).to_be_visible()
+    for i in range(inputs.count()):
+        expect(inputs.nth(i)).to_have_value("")
+    expect(inputs.first).to_have_attribute("placeholder", "70 x 6")
     shot("04-session")

@@ -34,6 +34,15 @@ SAVED_OFFLINE_TEXT = "Saved offline — will sync when you’re back."
 SAVED_TEXT = "Saved ✓"
 
 
+def _actions(page):
+    """The Finish-session footer, where the session's own save status lives.
+
+    The session note has its own status line with the same wording (#524), so
+    a page-wide text match is ambiguous.
+    """
+    return page.locator(".meso-log-actions")
+
+
 def _box_squat_card(page):
     return page.get_by_test_id("exercise-card").filter(has_text="Box Squat")
 
@@ -80,7 +89,7 @@ def test_athlete_finishes_the_session_offline_and_it_syncs(
 
     press(page.get_by_test_id("session-finish"))
 
-    offline_msg = page.get_by_text(SAVED_OFFLINE_TEXT)
+    offline_msg = _actions(page).get_by_text(SAVED_OFFLINE_TEXT)
     expect(offline_msg).to_be_visible()
     # "Finish session" flips the local badge at once, offline or not.
     expect(page.get_by_test_id("session-status")).to_have_text("Logged")
@@ -107,7 +116,7 @@ def test_athlete_finishes_the_session_offline_and_it_syncs(
     page.wait_for_function(
         "() => JSON.parse(localStorage.getItem('meso-log-queue') || '[]').length === 0"
     )
-    expect(page.get_by_text(SAVED_TEXT)).to_be_visible()
+    expect(_actions(page).get_by_text(SAVED_TEXT)).to_be_visible()
     shot("02-synced")
 
     log = SessionLog.objects.get(
@@ -254,8 +263,8 @@ def test_typed_line_offline_survives_reconnect(
     shot("00-offline-line-queued")
 
     press(page.get_by_test_id("session-finish"))
-    expect(page.get_by_text(SAVED_OFFLINE_TEXT)).to_be_visible()
-    expect(page.get_by_text(SAVED_TEXT)).to_be_hidden()
+    expect(_actions(page).get_by_text(SAVED_OFFLINE_TEXT)).to_be_visible()
+    expect(_actions(page).get_by_text(SAVED_TEXT)).to_be_hidden()
     shot("01-offline")
 
     # Recorded BEFORE going back online, so it captures every POST the
@@ -272,7 +281,7 @@ def test_typed_line_offline_survives_reconnect(
         "() => JSON.parse(localStorage.getItem('meso-log-queue') || '[]').length === 0"
     )
     # Everything landed, so now the page may say so.
-    expect(page.get_by_text(SAVED_TEXT)).to_be_visible()
+    expect(_actions(page).get_by_text(SAVED_TEXT)).to_be_visible()
     shot("02-back-online")
 
     # Nothing may still say the line didn't save, and the "queued" marker
@@ -420,7 +429,7 @@ def test_typed_line_retyped_offline_syncs_last_text(
     assert cell_entries[0]["body"]["text"] == "110 x 5", cell_entries
 
     press(page.get_by_test_id("session-finish"))
-    expect(page.get_by_text(SAVED_OFFLINE_TEXT)).to_be_visible()
+    expect(_actions(page).get_by_text(SAVED_OFFLINE_TEXT)).to_be_visible()
 
     context.set_offline(False)
     page.wait_for_function("() => window.__e2eOnlineFired === true", timeout=5000)
