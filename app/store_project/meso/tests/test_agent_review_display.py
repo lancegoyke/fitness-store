@@ -202,3 +202,106 @@ def test_overlong_edit_never_stores_a_truncated_after():
         plan, _blank(prescription_id=cell.pk, new_load="230", after="3x5 @ 230")
     )
     assert cleaned["after"] == ""
+
+
+# --- #694: a percent cell progresses in percent -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("cell_text", "new_load", "written"),
+    [
+        ("3x5 @ 80% 1RM", "82.5%", "3x5 @ 82.5% 1RM"),
+        ("3x5 @ 80%", "82.5", "3x5 @ 82.5%"),
+        ("3 x 5, RPE 8, 80% 1RM", "82.5%", "3 x 5, RPE 8, 82.5% 1RM"),
+        ("3x5 @ 80% of 1RM\nfelt easy", "85", "3x5 @ 85% of 1RM\nfelt easy"),
+    ],
+)
+def test_a_percent_cell_progresses_in_place_and_the_card_matches(
+    cell_text, new_load, written
+):
+    from store_project.meso.agent import apply as agent_apply
+
+    plan, _, cell = make_plan()
+    cell.text = cell_text
+    cell.save()
+    cleaned = _clean(plan, _blank(prescription_id=cell.pk, new_load=new_load))
+    assert "status" not in cleaned
+    batch = AgentProposalBatch.objects.create(
+        plan=plan, coach=plan.relationship.coach, instruction="x"
+    )
+    change = ProposedChange.objects.create(batch=batch, **cleaned)
+    agent_apply.apply_change(change)
+    cell.refresh_from_db()
+    assert cell.text.split("\n")[0] == cleaned["after"] == written.split("\n")[0]
+    assert cell.text == written
+
+
+def test_sets_edit_on_a_percent_cell_keeps_the_percent():
+    from store_project.meso.agent import apply as agent_apply
+
+    plan, _, cell = make_plan()
+    cell.text = "3x5 @ 80% 1RM"
+    cell.save()
+    cleaned = _clean(
+        plan, _blank(kind="volume", prescription_id=cell.pk, new_load="", new_sets="4")
+    )
+    assert cleaned["after"] == "4x5 @ 80% 1RM"
+    assert agent_apply.recomposed_text(cell, "sets", "4") == "4x5 @ 80% 1RM"
+
+
+@pytest.mark.parametrize("new_load", ["230", "100 lb", "230 kg"])
+@pytest.mark.parametrize("cell_text", ["3x5 @ 80% 1RM", "3x5 @ 80%"])
+def test_an_absolute_load_on_a_percent_cell_is_rejected_never_appended(
+    cell_text, new_load
+):
+    from store_project.meso.agent import apply as agent_apply
+
+    plan, _, cell = make_plan()
+    cell.text = cell_text
+    cell.save()
+    cleaned = _clean(
+        plan,
+        _blank(prescription_id=cell.pk, new_load=new_load, after=f"{cell_text}, 230"),
+    )
+    assert cleaned["status"] == ProposedChange.Status.REJECTED
+    assert "written as a %1RM; the change gives a weight" in cleaned["rationale"]
+    assert cleaned["before"] == cell_text
+    assert cleaned["after"] == ""  # nothing lands, so the card shows nothing
+    # Even if the coach flips it to Approved, apply writes nothing.
+    assert agent_apply.recomposed_text(cell, "load", new_load) is None
+    batch = AgentProposalBatch.objects.create(
+        plan=plan, coach=plan.relationship.coach, instruction="x"
+    )
+    change = ProposedChange.objects.create(batch=batch, **cleaned)
+    agent_apply.apply_change(change)
+    cell.refresh_from_db()
+    assert cell.text == cell_text
+
+
+def test_a_percent_segment_ending_in_a_period_is_swapped_not_skipped():
+    # Review #694: the parser strips a trailing '.', so the swap must too, or it
+    # skips the percent and overwrites a later load-like token.
+    from store_project.meso.agent import apply as agent_apply
+
+    plan, _, cell = make_plan()
+    cell.text = "3 x 5, RPE 8, 80% of 1rm., 1,000 lb\nfelt easy"
+    cell.save()
+    cleaned = _clean(plan, _blank(prescription_id=cell.pk, new_load="82.5%"))
+    assert cleaned["after"] == "3 x 5, RPE 8, 82.5% of 1rm., 1,000 lb"
+    assert (
+        agent_apply.recomposed_text(cell, "load", "82.5%")
+        == "3 x 5, RPE 8, 82.5% of 1rm., 1,000 lb\nfelt easy"
+    )
+
+
+def test_an_out_of_range_percent_is_an_error_not_a_weight_rejection():
+    plan, _, cell = make_plan()
+    cell.text = "3x5 @ 80% 1RM"
+    cell.save()
+    cleaned, errors = validation.clean_change(
+        _blank(prescription_id=cell.pk, new_load="121%"),
+        plan,
+        mesocycle=plan.mesocycles.first(),
+    )
+    assert cleaned is None
+    assert any("out of range" in e for e in errors)

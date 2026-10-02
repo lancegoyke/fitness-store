@@ -586,3 +586,32 @@ def test_a_partial_group_is_refused_not_truncated(text):
     parsed = parse_performed(text)
     assert parsed["kind"] == "unresolved-set"
     assert parsed["warn"] is True
+
+
+@pytest.mark.parametrize(
+    ("text", "load"),
+    [
+        ("3x5 @ 80% 1RM", "80%"),
+        ("3 x 5 @ 82.5 % of 1RM", "82.5%"),
+        ("3x5 @ 80%", "80%"),
+        ("3x5, RPE 8, 80% 1RM", "80%"),
+    ],
+)
+def test_a_percent_load_reads_with_or_without_its_1rm_basis(text, load):
+    parsed = parse_prescription(text)
+    assert (parsed["sets"], parsed["reps"], parsed["load"]) == (3, 5, load)
+
+
+@pytest.mark.parametrize(
+    ("text", "load"),
+    [("3x5 @ 225", "225"), ("3x5 @ 100 lb", "100lb"), ("3x5, 225", "225")],
+)
+def test_absolute_loads_parse_as_before(text, load):
+    assert parse_prescription(text)["load"] == load
+
+
+def test_an_absolute_load_after_a_percent_basis_still_wins():
+    # Review #694: `80% 1RM, 225lb` read as absolute before the basis form was
+    # taught; it must still.
+    assert parse_prescription("3x5 @ 80% 1RM, 225lb")["load"] == "225lb"
+    assert "_pct_1rm" not in parse_prescription("3x5 @ 80% 1RM")
