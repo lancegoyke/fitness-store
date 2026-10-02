@@ -1344,7 +1344,7 @@ function ScrollMirror({ scrollerRef }: { scrollerRef: RefObject<HTMLDivElement |
     if (!scroller || !mirror || !end) return;
 
     const measure = () => {
-      setScrollWidth(scroller.scrollWidth > scroller.clientWidth + 1 ? scroller.scrollWidth : null);
+      setScrollWidth(scroller.scrollWidth > scroller.clientWidth ? scroller.scrollWidth : null);
     };
     const follow = (from: HTMLElement, to: HTMLElement) => () => {
       if (Math.abs(from.scrollLeft - to.scrollLeft) > 0.5) to.scrollLeft = from.scrollLeft;
@@ -1392,6 +1392,7 @@ function ScrollMirror({ scrollerRef }: { scrollerRef: RefObject<HTMLDivElement |
         className="meso-table-scrollbar"
         data-testid="meso-table-scrollbar"
         aria-hidden="true"
+        tabIndex={-1}
         hidden={scrollWidth === null}
         style={{ visibility: realBarInView ? "hidden" : "visible" }}
       >
