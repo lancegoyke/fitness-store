@@ -1220,7 +1220,7 @@ function TableDayBlock({
         )}
       </div>
 
-      <div className="meso-table-scroll">
+      <div className="meso-table-wrap">
         <table
           className="meso-table"
           style={{ width: tableWidthFor(weeks.length) }}
@@ -1438,6 +1438,14 @@ export function MesoTable(props: MesoTableProps) {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
+        {/* ONE horizontal scroll container for every day (605.7): the day tables
+            share a scrollLeft, so "Wk 1" in Day 1 stays above "Wk 1" in Day 2.
+            Chosen over synchronised per-day scrollers because there is nothing to
+            keep in sync (no scroll-event feedback loops, one scrollbar, native
+            focus/keyboard scroll-into-view), and the sticky Exercise column and
+            the dnd-kit overlay (no live transform) need no change. */}
+        <div className="meso-table-scroll" style={{ scrollPaddingLeft: COL_WIDTHS.exercise }}>
+          <div className="meso-table-days" style={{ width: tableWidthFor(grid.weeks.length) }}>
         <SortableContext items={grid.days.map((d) => tableDayDragId(d.session_slot_id))} strategy={verticalListSortingStrategy}>
           {grid.days.map((day) => (
             <TableDayBlock
@@ -1463,6 +1471,8 @@ export function MesoTable(props: MesoTableProps) {
             />
           ))}
         </SortableContext>
+          </div>
+        </div>
         <DragOverlay>
           {activeDragLabel ? <div className="meso-table-drag-ghost">{activeDragLabel}</div> : null}
         </DragOverlay>
