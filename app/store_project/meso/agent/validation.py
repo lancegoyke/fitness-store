@@ -420,6 +420,11 @@ def clean_change(raw, plan, *, mesocycle, forbidden=None):
                 errors.append(
                     f"a %1RM progression must be a bare percent (got {load_value!r})"
                 )
+            elif not 0 < pct <= MAX_PERCENT_1RM and load_value.strip().endswith("%"):
+                errors.append(
+                    f"%1RM progression {pct:g}% is out of range "
+                    f"(expected 1–{MAX_PERCENT_1RM}%)"
+                )
             elif not 0 < pct <= MAX_PERCENT_1RM:
                 # A bare number far over any sane %1RM is an absolute load ("230").
                 cleaned["reject_reason"] = _PERCENT_CELL_REASON

@@ -608,3 +608,10 @@ def test_a_percent_load_reads_with_or_without_its_1rm_basis(text, load):
 )
 def test_absolute_loads_parse_as_before(text, load):
     assert parse_prescription(text)["load"] == load
+
+
+def test_an_absolute_load_after_a_percent_basis_still_wins():
+    # Review #694: `80% 1RM, 225lb` read as absolute before the basis form was
+    # taught; it must still.
+    assert parse_prescription("3x5 @ 80% 1RM, 225lb")["load"] == "225lb"
+    assert "_pct_1rm" not in parse_prescription("3x5 @ 80% 1RM")

@@ -146,8 +146,10 @@ def _classify_segment(segment, out):
         return
     pct_1rm = PERCENT_1RM.match(segment)
     if pct_1rm:
-        # ``80% 1RM`` is the coach spelling out what ``80%`` already means.
-        out.setdefault("load", f"{pct_1rm.group(1)}%")
+        # ``80% 1RM`` is the coach spelling out what ``80%`` already means. Held
+        # aside so an absolute load later on the line (``80% 1RM, 225lb``) keeps
+        # winning, as it did before this form was read at all.
+        out.setdefault("_pct_1rm", f"{pct_1rm.group(1)}%")
         return
     load = _LOAD.match(segment)
     if load:
@@ -214,6 +216,9 @@ def parse_prescription(text):
     first_line = raw.splitlines()[0]
     for segment in re.split(r",|@", first_line):
         _classify_segment(segment, out)
+    pct_1rm = out.pop("_pct_1rm", None)
+    if pct_1rm and "load" not in out:
+        out["load"] = pct_1rm
     return out
 
 

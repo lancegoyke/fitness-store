@@ -276,3 +276,32 @@ def test_an_absolute_load_on_a_percent_cell_is_rejected_never_appended(
     agent_apply.apply_change(change)
     cell.refresh_from_db()
     assert cell.text == cell_text
+
+
+def test_a_percent_segment_ending_in_a_period_is_swapped_not_skipped():
+    # Review #694: the parser strips a trailing '.', so the swap must too, or it
+    # skips the percent and overwrites a later load-like token.
+    from store_project.meso.agent import apply as agent_apply
+
+    plan, _, cell = make_plan()
+    cell.text = "3 x 5, RPE 8, 80% of 1rm., 1,000 lb\nfelt easy"
+    cell.save()
+    cleaned = _clean(plan, _blank(prescription_id=cell.pk, new_load="82.5%"))
+    assert cleaned["after"] == "3 x 5, RPE 8, 82.5% of 1rm., 1,000 lb"
+    assert (
+        agent_apply.recomposed_text(cell, "load", "82.5%")
+        == "3 x 5, RPE 8, 82.5% of 1rm., 1,000 lb\nfelt easy"
+    )
+
+
+def test_an_out_of_range_percent_is_an_error_not_a_weight_rejection():
+    plan, _, cell = make_plan()
+    cell.text = "3x5 @ 80% 1RM"
+    cell.save()
+    cleaned, errors = validation.clean_change(
+        _blank(prescription_id=cell.pk, new_load="121%"),
+        plan,
+        mesocycle=plan.mesocycles.first(),
+    )
+    assert cleaned is None
+    assert any("out of range" in e for e in errors)

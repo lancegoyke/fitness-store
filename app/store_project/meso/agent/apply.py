@@ -68,7 +68,7 @@ _SETS_HEAD = re.compile(r"^(\s*(?:up\s+to\s+)?)\d+(?=\s*[x×])", re.IGNORECASE)
 # A percent load may carry its basis (``80% 1RM``); that tail is kept verbatim.
 _LOAD_SEGMENT = re.compile(
     r"^(\s*)(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
-    r"(?:(%)(\s*(?:of\s+)?1\s*RM)?|(lbs?|kgs?|kilos?))?(\s*)$",
+    r"(?:(%)(\s*(?:of\s+)?1\s*RM)?|(lbs?|kgs?|kilos?))?(\s*\.?\s*)$",
     re.IGNORECASE,
 )
 # A comma is a segment break unless it is a thousands separator (``1,000 lbs``).
