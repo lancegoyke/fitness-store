@@ -167,3 +167,28 @@ def test_card_after_is_exactly_what_apply_writes(
     cell.refresh_from_db()
     assert cleaned["after"] == written
     assert cell.text == written
+
+
+def test_session_volume_card_is_not_the_models_wording():
+    plan, session, cell = make_plan()
+    cell.text = "3x5 @ 225"
+    cell.save()
+    cleaned = _clean(
+        plan,
+        _blank(
+            kind="volume",
+            session_id=session.pk,
+            new_load="",
+            new_sets="4",
+            after="4 sets total",
+        ),
+    )
+    assert cleaned["after"] == "4 sets on every exercise"
+
+
+def test_an_edit_too_long_for_the_card_starts_rejected_not_truncated():
+    plan, _, cell = make_plan()
+    cell.text = "3x5 " + ("a" * 246) + " @ 225"
+    cell.save()
+    cleaned = _clean(plan, _blank(prescription_id=cell.pk, new_load="230"))
+    assert cleaned["status"] == ProposedChange.Status.REJECTED

@@ -64,7 +64,11 @@ def _parsed_bits(cell):
 
 
 _SETS_HEAD = re.compile(r"^(\s*(?:up\s+to\s+)?)\d+(?=\s*[x×])", re.IGNORECASE)
-_LOAD_SEGMENT = re.compile(r"^(\s*)(\d+(?:\.\d+)?)\s*(%|lbs?|kgs?|kilos?)?(\s*)$")
+_LOAD_SEGMENT = re.compile(
+    r"^(\s*)(\d+(?:,\d{3})*(?:\.\d+)?)\s*(%|lbs?|kgs?|kilos?)?(\s*)$"
+)
+# A comma is a segment break unless it is a thousands separator (``1,000 lbs``).
+_SEGMENT_SPLIT = re.compile(r"(,(?!\d{3}(?!\d))|@)")
 
 
 def _swap_in_place(first_line, component, value):
@@ -75,7 +79,7 @@ def _swap_in_place(first_line, component, value):
     coach's ``x``/``@`` choice survive. ``None`` when the token can't be found
     (a cell with no load yet) — the caller falls back to canonical composition.
     """
-    pieces = re.split(r"(,|@)", first_line)
+    pieces = _SEGMENT_SPLIT.split(first_line)
     for i in range(0, len(pieces), 2):
         segment = pieces[i]
         if component == "sets":
@@ -113,10 +117,15 @@ def recomposed_text(cell, component, value):
         return None
     lines = cell.text.split("\n")
     swapped = _swap_in_place(lines[0], component, str(value))
+    if swapped is None and component == "load" and not bits["load"]:
+        # No load yet: append one in the line's own style, keeping every
+        # qualifier on the line and every note line below it.
+        joiner = ", " if ("," in lines[0] or "@" in lines[0]) else " @ "
+        swapped = f"{lines[0].rstrip()}{joiner}{value}"
     if swapped is not None:
         return "\n".join([swapped, *lines[1:]])
     bits[component] = str(value)
-    return compose_prescription_text(**bits)
+    return "\n".join([compose_prescription_text(**bits), *lines[1:]])
 
 
 def _rewrite_cell(change, component, value):

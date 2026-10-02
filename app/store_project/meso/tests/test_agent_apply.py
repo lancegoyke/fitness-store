@@ -125,9 +125,9 @@ class TestApplyChange:
         presc.refresh_from_db()
         assert presc.text == "3x5 @ 230\nfelt heavy"
 
-    def test_progress_on_a_cell_without_a_load_composes_canonically(self):
+    def test_progress_on_a_cell_without_a_load_appends_in_its_own_style(self):
         plan, _, presc = make_plan()
-        presc.text = "3x5"
+        presc.text = "Up to 3x5 @ RPE 8, stop at 90%\nUse 3-1-1 tempo"
         presc.save()
         change = ProposedChangeFactory(
             batch=_batch(plan),
@@ -137,7 +137,21 @@ class TestApplyChange:
         )
         agent_apply.apply_change(change)
         presc.refresh_from_db()
-        assert presc.text == "3 x 5, 230"
+        assert presc.text == "Up to 3x5 @ RPE 8, stop at 90%, 230\nUse 3-1-1 tempo"
+
+    def test_progress_swaps_a_thousands_separated_load_whole(self):
+        plan, _, presc = make_plan()
+        presc.text = "3x5 @ 1,000 lbs, RPE 8"
+        presc.save()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.PROGRESS,
+            prescription=presc,
+            payload={"load": "1050"},
+        )
+        agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        assert presc.text == "3x5 @ 1050lbs, RPE 8"
 
     def test_volume_rewrites_the_cells_set_count(self):
         plan, _, presc = make_plan()  # default cell "3 x 10, RPE 7, 60"

@@ -230,11 +230,15 @@ def _fill_display(cleaned):
             # the same function, never the model's own rendering of the edit
             # (605.9c — it wrote ``3x5 @ 230`` on the card, ``3 x 5, 230`` landed).
             after = authoritative_after = _first_line(new_text)
+            if len(after) > 255:
+                # The card column can't hold the whole edit, so it can't show
+                # byte-for-byte what lands: start it Rejected, never truncated.
+                applicable = False
         else:
             applicable = False
     elif kind == "volume" and session is not None and payload.get("sets"):
         if any(agent_apply._parsed_bits(cell) for cell in session.cells()):
-            after = f"{payload['sets']} sets on every exercise"
+            after = authoritative_after = f"{payload['sets']} sets on every exercise"
         else:
             applicable = False
     elif kind == "deload":
