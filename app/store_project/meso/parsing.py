@@ -441,6 +441,7 @@ def _classify_performed_head(head, explicit_load=False):
 _FOR_WORD = re.compile(r"\s+for\s+", re.IGNORECASE)
 _AT_WORD = re.compile(r"\s+at\s+", re.IGNORECASE)
 _ONE_SET_PREFIX = re.compile(r"^1\s*[x\u00d7]\s*(.+?)\s*@\s*(.+)$", re.IGNORECASE)
+_ONE_SET_HEAD = re.compile(r"^1\s*[x\u00d7]\s*(\d+)$", re.IGNORECASE)
 _TRAILING_RPE = re.compile(
     r"^(?P<base>.*?\S)\s*(?:@\s*(?:rpe\s*)?|\brpe\s*)"
     r"(?P<rpe>\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?)$",
@@ -467,6 +468,46 @@ def _classify_word_or_prefix_head(head, explicit_load):
     prefix = _ONE_SET_PREFIX.match(head)
     if prefix:
         return _try_at_form(f"{prefix.group(1)} @ {prefix.group(2)}", explicit_load)
+    return None
+
+
+def _classify_one_set_comma(head, segments):
+    """``1 x 5, 225`` — one set of 5 reps at 225 (#720), not 1 lb x 5.
+
+    ``1 x 5, RPE 8, 225`` is also the canonical order ``compose_prescription_text``
+    writes, so the first non-empty, non-RPE segment after the head is the load
+    (a trailing ``.`` ignored, as the RPE read ignores it). Only a head
+    of exactly ``1`` moves: ``3x5, 225`` / ``4 x 6, 85%`` are pinned load-first
+    parses that #709 promised never to change. A load-shaped segment that is
+    implausible (``1x5, 2255``) is a fat-finger, so it is refused rather than
+    falling back to 1 lb. ``None`` leaves today's parse alone.
+    """
+    match = _ONE_SET_HEAD.match(head)
+    if not match:
+        return None
+    reps = {"reps": int(match.group(1))}
+    if not _reps_are_plausible(reps):
+        return None
+    for index, raw_segment in enumerate(segments[1:], start=1):
+        segment = raw_segment.strip().rstrip(".")
+        if not segment:
+            continue
+        # A comma inside a number (``22,5kg``, ``1,000``, ``RPE 8,5``) split it
+        # across two segments. Refuse rather than store the front half (or, after
+        # an RPE, read its tail as the load), as the leading load position does.
+        tail = segments[index + 1] if index + 1 < len(segments) else ""
+        split_number = re.search(r"\d$", raw_segment) and re.match(r"\d", tail)
+        if _RPE.match(segment):
+            if split_number:
+                return {"kind": "unresolved-set", "warn": True}
+            continue
+        if not _LOAD.match(segment):
+            return None
+        if split_number:
+            return {"kind": "unresolved-set", "warn": True}
+        if not _load_is_plausible(segment):
+            return {"kind": "unresolved-set", "warn": True}
+        return {"load": segment.replace(" ", ""), **reps}
     return None
 
 
@@ -533,7 +574,9 @@ def parse_performed(text):
     **One set per line.** Only the line's first recognized set is returned;
     a later comma segment is only ever read for a trailing RPE (``225 x 5,
     RPE 8``). Multi-set-per-line text (``225x5, 230x3``) is explicitly OUT
-    OF SCOPE — the second set is silently dropped, not an error.
+    OF SCOPE — the second set is silently dropped, not an error. The one
+    exception is a head of exactly ``1 x N`` (``1x5, 225``): the comma segment
+    is its load, not a second set (``_classify_one_set_comma``, #720).
     """
     if text is None:
         return None
@@ -581,7 +624,11 @@ def parse_performed(text):
 
     segments = line.split(",")
     head = segments[0].strip()
-    out = _classify_performed_head(head, explicit_load)
+    out = _classify_one_set_comma(head, segments)
+    if out is not None and out.get("kind") == "unresolved-set":
+        return {"kind": "unresolved-set", "raw": raw, "warn": True}
+    if out is None:
+        out = _classify_performed_head(head, explicit_load)
     if out is None:
         out = _classify_extended_head(head, explicit_load)
 
@@ -864,9 +911,12 @@ def reads_as_one_set(text):
     load = parsed.get("load")
     if not load:
         return False
-    # One definite count. A rep RANGE (``225 x 8-10``) or AMRAP (``AMRAP @
-    # 135``) is a target to aim at, which a performed set never is.
+    # One definite count. A rep RANGE (``225 x 8-10``), an RPE range
+    # (``1 x 5, RPE 8-9, 225``) or AMRAP (``AMRAP @ 135``) is a target to aim
+    # at, which a performed set never is.
     if parsed.get("reps_range") or parsed.get("amrap"):
+        return False
+    if "-" in str(parsed.get("rpe", "")):
         return False
     if not any(parsed.get(k) for k in ("reps", "duration")):
         return False
