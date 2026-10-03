@@ -14,6 +14,53 @@ How to read the status field:
 
 ---
 
+## Logs outlive structure (#700) — 2026-10-03
+
+Lance: "you wouldn't want a coach to ever delete the athlete's training
+history." Coach actions in the app already only soft-delete or archive (a day,
+week or row, undo/redo, ending a relationship). This makes the rule structural
+for every other delete.
+
+- The two FKs from a log table to plan structure, `SessionLog.session` and
+  `LoggedSet.exercise_slot`, are `RESTRICT`. A hard delete that would reach an
+  athlete's log through the plan tree raises `RestrictedError` and deletes
+  nothing: a staff admin delete of a plan, block, week, day, session, row,
+  coach link or coach account, or a management command.
+- **RESTRICT, not PROTECT.** Django lets a RESTRICT-ed row go when the same
+  delete also collects it through a CASCADE path. `SessionLog.athlete` and
+  `LoggedSet.session_log` stay CASCADE, so deleting the athlete's own account
+  still removes their own logs (a self-coached user's too). PROTECT would
+  refuse that as well and make an athlete with history undeletable.
+- The SET_NULL FKs (`prescription`, `source_line`, `exercise`) are unchanged:
+  the set survives and detaches.
+- **Where it refuses, intended:**
+  - Admin delete pages (the model's own page and "delete selected") show
+    Django's "protected related objects" list and delete nothing. Inline
+    deletes of structure are off (`can_delete = False` on every structure
+    inline a log hangs below): an inline delete runs `obj.delete()` with no
+    confirmation page, so a refusal there would be a 500. Delete from the
+    row's own admin page instead.
+  - `merge_users` refuses, before it asks for confirmation, when the source
+    account has Meso logs of its own or logs on plans it coaches or owns. It
+    never moved Meso data, and deleting the source would delete its own history
+    (CASCADE through `athlete`) or hit RESTRICT. Moving Meso data between
+    accounts is not built.
+  - `meso_import_template` re-import needs no change: a template has no
+    athlete and no app path logs against one (`save_as_template` copies without
+    logs). If hand-edited data ever puts a log there, the re-import refuses.
+- **Demo and sandbox paths.** `clear_demo` deletes the demo athletes, so their
+  logs go through `SessionLog.athlete`. The sandbox reap deletes the sandbox
+  user after `clear_demo`, so a self-coached sandbox's own logs go the same way;
+  a sandbox coach can't have a real athlete (invites, re-invites, requests and
+  claims are gated). Neither needs an explicit log delete. `seed_meso_demo`'s
+  partial-hierarchy rebuild deletes structure under a live athlete, so it
+  deletes that plan's logs first, in one transaction after
+  `lock_cascade_from_plans`.
+- **Migration 0067** is `AlterField` only. `on_delete` is Django's collector,
+  not the database, and `sqlmigrate` emits no SQL in either direction, so a
+  rolling deploy is safe both ways: old code against the new schema cascades
+  as before.
+
 ## Lift identity of logged sets (#708) — 2026-10-02
 
 - `LoggedSet` stamps the lift it was performed as (`exercise`, `exercise_name`)
@@ -3338,3 +3385,5 @@ _(Append dated entries here as decisions land.)_
   (`_helpers.legacy_move_exercise_to_session`), labelled as legacy data.
 - 2026-10-02 — **Decided (#709):** option 2 plus live co-logging — see *Line kinds and who can
   write them (#709)* above.
+- 2026-10-03 — **Decided (#700):** logs outlive structure; the structure FKs
+  from log tables are RESTRICT — see *Logs outlive structure (#700)* above.

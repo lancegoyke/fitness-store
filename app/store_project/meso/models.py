@@ -2448,6 +2448,9 @@ class SessionLog(models.Model):
         PENDING = "pending", _("Pending")
         DONE = "done", _("Done")
 
+    # RESTRICT (#700): a hard delete of the session (or anything above it)
+    # refuses while it holds this log; the athlete's own account delete still
+    # takes it via ``athlete``. See ``LoggedSet.exercise_slot``.
     session = models.ForeignKey(
         Session,
         on_delete=models.RESTRICT,
@@ -3059,48 +3062,39 @@ class LoggedSet(models.Model):
         verbose_name=_("Session log"),
     )
     # #578 C1: the durable identity a logged set is anchored to. Unlike
-    # ``prescription`` (below), ORDINARY app code only ever *soft*-deletes an
-    # ``ExerciseSlot`` (``deleted_at``) — the designer's own delete/undo paths
-    # never hard-delete it — so this FK is far less likely to go stale the way
-    # ``prescription`` can (#577, #581). That premise isn't absolute, though:
-    # ``plan.mesocycles.all().delete()`` (the re-import rebuild in
-    # ``management/commands/meso_import_template.py`` and the demo-seed
-    # rebuild in ``seed_meso_demo.py``) hard-deletes the whole tree, cascading
-    # ``Mesocycle`` → ``SessionSlot`` → ``ExerciseSlot``. The CONCLUSION still
-    # holds, because that same cascade also takes ``Mesocycle`` → ``Week`` →
-    # ``Session`` → ``SessionLog`` → ``LoggedSet`` down the other branch, so no
-    # ``LoggedSet`` is left pointing at a slot whose whole tree is gone —
-    # nothing is orphaned by that path either.
+    # ``prescription`` (below), app code only ever *soft*-deletes an
+    # ``ExerciseSlot`` (``deleted_at``): the designer's own delete/undo paths
+    # never hard-delete it, so this FK doesn't go stale the way
+    # ``prescription`` can (#577, #581).
     #
-    # CASCADE is deliberate, not an oversight: ``Prescription.exercise_slot``
-    # is already CASCADE, and deleting an ``ExerciseSlot`` means the whole
-    # exercise row is gone from every week — there is no partial state to
-    # preserve, EXCEPT legacy data: a slot moved by the retired ``prescription_move``
-    # endpoint (it re-pointed ``ExerciseSlot.session_slot`` to a different
-    # day, block-wide, leaving every ``LoggedSet`` row alone). A move is now
-    # delete + re-add, but for such old rows a slot that gets
-    # deleted can carry ``LoggedSet`` rows whose ``session_log`` belongs to a
-    # *different* day's still-live ``SessionLog`` than the day the slot now
-    # sits on — CASCADE then removes those sets along with the slot, which is
-    # still the right call (the exercise row truly is gone), just not for the
-    # "whole day disappears together" reason the simple case suggests.
+    # RESTRICT (#700): logs outlive structure. A hard delete of this slot, or
+    # of anything it hangs from (its day, block, plan, coach link or coach
+    # account), raises ``RestrictedError`` while an athlete's set still points
+    # here, instead of deleting the set with it. ``SessionLog.session`` is
+    # RESTRICT for the same reason, which also covers a legacy moved slot
+    # (the retired ``prescription_move``) whose sets sit on another day's log.
+    # RESTRICT, not PROTECT: Django lets a restricted row go when the same
+    # delete also reaches it through a CASCADE path, so deleting the athlete's
+    # OWN account still takes their sets (``SessionLog.athlete`` →
+    # ``session_log``, both CASCADE). ``clear_demo`` and the sandbox reap rely
+    # on that: their logs belong to users the same delete removes. See
+    # ``docs/meso/decisions.md``, "Logs outlive structure (#700)".
     #
-    # Django's delete-confirmation page *lists* CASCADE consequences and says
-    # nothing about SET_NULL ones (#581) — but that is only true of the
-    # MODELS' OWN admin pages (``ExerciseSlotAdmin``, ``SessionSlotAdmin``),
-    # which is why an admin *inline* delete of one of these is refused
-    # (``can_delete = False`` on ``ExerciseSlotInline``/``SessionSlotInline``,
-    # below): ``BaseModelFormSet.save_existing_objects()`` calls
-    # ``obj.delete()`` directly from an inline Save, with no confirmation page
-    # at all. SET_NULL here would just reintroduce the silent detach this
-    # field exists to close.
+    # Admin: a model's own delete page lists the restricted rows and refuses
+    # (Django's "protected related objects" page). An inline delete calls
+    # ``obj.delete()`` straight from ``BaseModelFormSet.save_existing_objects()``
+    # with no confirmation page, so a refusal there would be an unhandled
+    # ``RestrictedError`` (a 500): every structure inline a log hangs below is
+    # ``can_delete = False`` (``admin.py``).
     #
     # One more edge, worth stating rather than discovering by incident: after
     # a code ROLLBACK with migration 0050 still applied, old code's delete
     # collector doesn't know about this FK at all. An admin hard-delete of an
     # ``ExerciseSlot`` with surviving ``LoggedSet`` rows then fails LOUDLY at
     # COMMIT on this deferred constraint, rather than silently corrupting
-    # anything.
+    # anything. (A rollback past #700 alone is quieter: ``on_delete`` is
+    # Python-side, migration 0067 emits no SQL, and old code simply cascades
+    # again.)
     #
     # ``null=True`` is transitional, not permanent: it lets the column be added
     # without a table rewrite and lets the backfill migration (0051) *report*
