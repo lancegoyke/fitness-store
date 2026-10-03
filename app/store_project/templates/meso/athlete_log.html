@@ -1,0 +1,60 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Training log · Meso{% endblock %}
+
+{% block pwa %}{% include "meso/_pwa_head.html" %}{% endblock %}
+
+{# Phone-first PWA surface — no marketing site nav (keep the installed-app feel). #}
+{% block site_nav %}{% endblock %}
+
+{% block navlinks %}
+  <a class="meso-navlink {% if active == 'training' %}is-active{% endif %}" href="{% url 'meso:athlete_home' %}">Training</a>
+{% endblock %}
+
+{% block topnav_avatar %}
+  <a class="meso-avatar meso-avatar--sm meso-avatar--accent meso-avatar--link meso-avatar--tap" href="{% url 'meso:settings' %}" title="{{ athlete_name }} — settings">{{ athlete_initials }}</a>
+{% endblock %}
+
+{% block content %}
+  <div class="meso-page meso-athlete">
+    <div class="meso-crumbs"><a href="{% url 'meso:athlete_home' %}">Training</a> <span>/</span> <span>Training log</span></div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Your training</p>
+        <h1 class="meso-h1">Training log</h1>
+        <p class="meso-sub">Every workout you've logged, newest first.</p>
+      </div>
+    </div>
+
+    {% if log.is_empty %}
+      <div class="meso-card meso-card--pad" data-testid="training-log-empty">
+        <p style="font-size:14px;font-weight:700;letter-spacing:-0.01em;margin-bottom:4px;">Nothing logged yet.</p>
+        <p class="meso-row-meta">When you log a session, it shows up here: every set you did and your notes. It stays here even if your program changes.</p>
+        <a href="{% url 'meso:athlete_home' %}" style="display:inline-flex;align-items:center;min-height:44px;font-weight:650;color:var(--accent);text-decoration:none;">← Back to Training</a>
+      </div>
+    {% else %}
+      <div class="meso-flex" style="flex-direction:column;gap:8px;">
+        {% for e in log.entries %}
+          <a data-testid="training-log-entry" href="{{ e.url }}" style="display:block;padding:12px 14px;border:1px solid var(--line);border-radius:11px;text-decoration:none;color:inherit;min-width:0;">
+            <div style="display:flex;align-items:baseline;gap:10px;">
+              <span class="meso-mono" style="font-size:12px;font-weight:700;color:var(--dim);">{{ e.date_label }}</span>
+              <span class="meso-spacer"></span>
+              {% if e.in_progress %}<span class="meso-badge" data-testid="in-progress">In progress</span>{% endif %}
+            </div>
+            <div style="font-size:14px;font-weight:700;letter-spacing:-0.01em;min-width:0;overflow-wrap:break-word;">{{ e.session_name }}</div>
+            <div class="meso-row-meta" style="min-width:0;overflow-wrap:break-word;">{{ e.plan_title }}{% if e.coach %} · {{ e.coach }}{% endif %}</div>
+            <div class="meso-row-meta" data-testid="training-log-summary" style="min-width:0;overflow-wrap:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">{% if e.summary_text %}{{ e.summary_text }}{% elif e.note_preview %}<em>{{ e.note_preview }}</em>{% endif %}</div>
+          </a>
+        {% endfor %}
+      </div>
+
+      {% if log.newer_url or log.older_url %}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;">
+          {% if log.newer_url %}<a data-testid="training-log-newer" href="{{ log.newer_url }}" style="color:var(--accent);font-weight:650;text-decoration:none;display:inline-flex;align-items:center;min-height:44px;">← Newer</a>{% else %}<span></span>{% endif %}
+          {% if log.older_url %}<a data-testid="training-log-older" href="{{ log.older_url }}" style="color:var(--accent);font-weight:650;text-decoration:none;display:inline-flex;align-items:center;min-height:44px;">Older →</a>{% endif %}
+        </div>
+      {% endif %}
+    {% endif %}
+  </div>
+{% endblock %}

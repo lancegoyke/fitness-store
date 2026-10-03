@@ -6,6 +6,8 @@ from . import views
 from .views import AthleteHomeView
 from .views import AthleteProfileView
 from .views import AthleteSessionView
+from .views import AthleteTrainingLogView
+from .views import AthleteWorkoutView
 from .views import BecomeCoachView
 from .views import ChangeReviewView
 from .views import CoachBillingView
@@ -73,6 +75,12 @@ urlpatterns = [
     # Athlete surface (athlete slice Phase 1) — the athlete's own training view,
     # distinct from the coach's ``athlete/<uuid>/`` record.
     path("me/", AthleteHomeView.as_view(), name="athlete_home"),
+    path("me/log/", AthleteTrainingLogView.as_view(), name="athlete_log"),
+    path(
+        "me/log/<int:log_pk>/",
+        AthleteWorkoutView.as_view(),
+        name="athlete_workout",
+    ),
     path(
         "me/session/<int:pk>/",
         AthleteSessionView.as_view(),

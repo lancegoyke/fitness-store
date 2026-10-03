@@ -16,6 +16,7 @@ import statistics
 import time
 from collections import defaultdict
 
+from django.core.paginator import Paginator
 from django.db.models import CharField
 from django.db.models import Count
 from django.db.models import Exists
@@ -25,6 +26,8 @@ from django.db.models import Prefetch
 from django.db.models import Q
 from django.db.models import Subquery
 from django.db.models.functions import Cast
+from django.db.models.functions import Coalesce
+from django.db.models.functions import TruncDate
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.timesince import timesince
@@ -45,6 +48,7 @@ from .billing import access as billing_access
 from .billing import agent_usage_report
 from .lift_identity import Lift
 from .lift_identity import foreign_lift_names
+from .lift_identity import norm_name
 from .lift_identity import same_lift
 from .models import AgentProposalBatch
 from .models import CoachAthlete
@@ -461,14 +465,18 @@ def profile_program(link, working_plan):
 # guard), so a lifter with no numeric-parseable best sees no empty chrome.
 
 
-def _personal_record_rows(athlete, unit):
+def _personal_record_rows(athlete, unit, *, link_logs=False):
     """Best-lift display rows for a records panel — alphabetical by lift.
 
     Each row carries the estimated 1RM (formatted like the stored ``AthleteOneRm``
     display via ``_fmt_num``) and the winning set's provenance (reps/load/date).
+    With ``link_logs`` (the athlete's own panel only, #700) a row also carries
+    ``log_url``, the athlete's read-only page for the workout that set came
+    from; the coach panel never gets one, since that URL is athlete-only.
     """
-    rows = [
-        {
+    rows = []
+    for r in personal_records(athlete, unit=unit).values():
+        row = {
             "name": r.name,
             "e1rm": _fmt_num(round(r.e1rm)),
             "unit": r.unit,
@@ -476,8 +484,11 @@ def _personal_record_rows(athlete, unit):
             "load": r.load,
             "date": r.date,
         }
-        for r in personal_records(athlete, unit=unit).values()
-    ]
+        if link_logs:
+            row["log_url"] = reverse(
+                "meso:athlete_workout", kwargs={"log_pk": r.session_log_id}
+            )
+        rows.append(row)
     rows.sort(key=lambda row: row["name"].lower())
     return rows
 
@@ -494,11 +505,31 @@ def _records_unit_plan(plans):
 
 
 def athlete_personal_records(user):
-    """The athlete's records panel for their training home (Phase 4d)."""
+    """The athlete's records panel for their training home (Phase 4d).
+
+    The unit is the most-recent live plan's; with none (the coach link ended and
+    the plan archived, #700) it is the plan unit of the athlete's newest counted
+    set, by TRAINING date so a log backfilled today with an old date does not
+    win. Records are plan-unit scoped, so any other unit (the athlete override
+    or the coach default) could come up empty when an archived lb plan meets a
+    kg preference. No counted set means no records, hence an empty panel.
+    """
     plan = _records_unit_plan(Plan.objects.for_athlete(user))
-    if plan is None:
+    if plan is not None:
+        unit = plan.unit
+    else:
+        unit = (
+            LoggedSet.objects.performance_history(user)
+            .order_by(*_LOG_NEWEST_FIRST_ON_SET)
+            .values_list("session_log__session__week__mesocycle__plan__unit", flat=True)
+            .first()
+        )
+    if unit is None:
         return {"rows": [], "unit": ""}
-    return {"rows": _personal_record_rows(user, plan.unit), "unit": plan.unit}
+    return {
+        "rows": _personal_record_rows(user, unit, link_logs=True),
+        "unit": unit,
+    }
 
 
 def coach_personal_records(link):
@@ -512,6 +543,255 @@ def coach_personal_records(link):
     if plan is None:
         return {"rows": [], "unit": ""}
     return {"rows": _personal_record_rows(link.athlete, plan.unit), "unit": plan.unit}
+
+
+# -- training log (#700) ---------------------------------------------------
+#
+# The athlete's read-only history: "if it counts, you can see it". The log is
+# built from ``SessionLog`` / ``LoggedSet`` ONLY, never from live plan
+# structure, and shows exactly the sets ``performance_history`` counts — so a
+# day, week or exercise the coach deleted, an archived plan or an ended coach
+# never hides a set that still feeds a PR. Nothing here filters on
+# ``deleted_at``, plan status or link status. Names are read live through the
+# FKs (session, plan, coach); the lift name is the #708 stamp.
+
+TRAINING_LOG_PAGE_SIZE = 20
+
+# The newest-first order of a counted set by the TRAINING date of its log.
+_LOG_NEWEST_FIRST_ON_SET = (
+    Coalesce("session_log__date", TruncDate("session_log__created_at")).desc(),
+    "-session_log__created_at",
+    "-pk",
+)
+
+
+def training_log_logs(athlete):
+    """The athlete's Training log as a queryset, newest first (#700).
+
+    One entry per ``(session, athlete)`` pair (the newest log), kept when it has
+    a counted set (``performance_history``) or a non-blank note. Ordered by the
+    training date, falling back to the creation day for a NULL ``date``.
+    """
+    counted = LoggedSet.objects.performance_history(athlete).values("session_log_id")
+    return (
+        SessionLog.objects.filter(athlete=athlete)
+        .newest_per_pair()
+        .filter(Q(pk__in=counted) | Q(notes__regex=r"\S"))
+        .select_related(
+            "session__session_slot",
+            "session__week__mesocycle__plan__relationship__coach__coach_profile",
+        )
+        .order_by(
+            Coalesce("date", TruncDate("created_at")).desc(), "-created_at", "-pk"
+        )
+    )
+
+
+def _with_counted_sets(logs, athlete):
+    """``logs`` with each log's counted sets prefetched as ``counted_sets``."""
+    return logs.prefetch_related(
+        Prefetch(
+            "sets",
+            queryset=LoggedSet.objects.performance_history(athlete)
+            .select_related("exercise_slot", "prescription__exercise_slot")
+            .order_by("set_number", "pk"),
+            to_attr="counted_sets",
+        )
+    )
+
+
+def _log_day_label(d, today):
+    """A log's date as "Today", "Yesterday", "Thu, Sep 14" (+ year when not this one)."""
+    if d == today:
+        return "Today"
+    if d == today - datetime.timedelta(days=1):
+        return "Yesterday"
+    if d.year == today.year:
+        return f"{d:%a}, {d:%b} {d.day}"
+    return f"{d:%a}, {d:%b} {d.day}, {d.year}"
+
+
+def _log_date_label(log):
+    """``_log_day_label`` of the log's training date (creation day when undated)."""
+    d = log.date or timezone.localtime(log.created_at).date()
+    return _log_day_label(d, timezone.localdate())
+
+
+def _log_coach_label(plan):
+    """The coach shown on a log: "Self-coached" or "Coach <name>"."""
+    if plan.relationship.is_self:
+        return "Self-coached"
+    return f"Coach {coach_name(plan.coach)}"
+
+
+def _log_exercise_groups(counted_sets):
+    """A log's counted sets grouped into exercises, in display order.
+
+    A group is one anchor slot performed as one lift (``(anchor_slot_id,
+    norm_name(lift.name))``), named by the STAMPED lift (#708). Groups run by
+    anchor-slot ``order`` (unanchored last), then slot id, then their first set;
+    sets within a group by ``(set_number, pk)``, which is also the ordinal
+    ``set_ordinals(by_lift=True)`` gives anchored sets (and covers unanchored
+    ones, which it skips). Returns ``[(name, [sets])]``.
+    """
+    groups = {}
+    for s in counted_sets:
+        lift = s.lift
+        key = (s.anchor_slot_id, norm_name(lift.name) if lift else None)
+        group = groups.setdefault(
+            key,
+            {
+                "name": lift.name if lift else "Unnamed exercise",
+                "sets": [],
+                "slot": None,
+            },
+        )
+        if not group["sets"]:
+            group["slot"] = s.anchor_slot
+        group["sets"].append(s)
+    ordered = sorted(
+        groups.items(),
+        key=lambda kv: (
+            kv[1]["slot"] is None,
+            kv[1]["slot"].order if kv[1]["slot"] is not None else 0,
+            kv[0][0] if kv[0][0] is not None else 0,
+            (kv[1]["sets"][0].set_number, kv[1]["sets"][0].pk),
+        ),
+    )
+    return [(g["name"], g["sets"]) for _, g in ordered]
+
+
+def _top_set(sets):
+    """The heaviest set of a group (load, then reps); the first wins a tie."""
+    ninf = -math.inf
+
+    def rank(s):
+        load, reps = _num(s.load), _num(s.reps)
+        return (ninf if load is None else load, ninf if reps is None else reps)
+
+    return max(sets, key=rank) if sets else None
+
+
+def _log_summary(counted_sets, plan_unit):
+    """One ``{name, sets, top}`` per exercise of a log, for the list row."""
+    summary = []
+    for name, sets in _log_exercise_groups(counted_sets):
+        top = _top_set(sets)
+        summary.append(
+            {
+                "name": name,
+                "sets": len(sets),
+                "top": _logged_set_core(top, plan_unit) if top else "",
+            }
+        )
+    return summary
+
+
+def _summary_text(summary):
+    """The list row's one-line digest, e.g. "Back Squat 3 sets, top 140 kg × 5"."""
+    parts = []
+    for g in summary:
+        n = g["sets"]
+        part = f"{g['name']} {n} set{'s' if n != 1 else ''}"
+        if g["top"]:
+            part += f", top {g['top']}" if n > 1 else f", {g['top']}"
+        parts.append(part)
+    return " · ".join(parts)
+
+
+def athlete_training_log(athlete, page_number):
+    """One page of the athlete's Training log (#700), newest first.
+
+    ``multi_coach`` counts the distinct coaches across ALL entries, not just
+    this page, so a label does not flicker from page to page. The coach shows
+    when there are several, or when that plan's link is no longer active.
+    """
+    logs = _with_counted_sets(training_log_logs(athlete), athlete)
+    paginator = Paginator(logs, TRAINING_LOG_PAGE_SIZE)
+    page = paginator.get_page(page_number)
+    multi_coach = (
+        training_log_logs(athlete)
+        .order_by()
+        .values("session__week__mesocycle__plan__relationship__coach_id")
+        .distinct()
+        .count()
+        > 1
+    )
+    entries = []
+    for log in page.object_list:
+        session = log.session
+        plan = session.week.mesocycle.plan
+        summary = _log_summary(log.counted_sets, plan.unit)
+        show_coach = (
+            multi_coach or plan.relationship.status != CoachAthlete.Status.ACTIVE
+        )
+        entries.append(
+            {
+                "id": log.pk,
+                "url": reverse("meso:athlete_workout", kwargs={"log_pk": log.pk}),
+                "date_label": _log_date_label(log),
+                "session_name": session.name or f"Day {session.day_number}",
+                "plan_title": plan.title,
+                "coach": _log_coach_label(plan) if show_coach else "",
+                "in_progress": log.status == SessionLog.Status.PENDING,
+                "summary": summary,
+                "summary_text": _summary_text(summary),
+                "note_preview": _note_preview(log.notes),
+            }
+        )
+    n = page.number
+    return {
+        "entries": entries,
+        "is_empty": paginator.count == 0,
+        "page_number": n,
+        "older_url": f"?page={n + 1}" if page.has_next() else "",
+        "newer_url": f"?page={n - 1}" if page.has_previous() else "",
+    }
+
+
+def athlete_workout(athlete, log_pk):
+    """One logged workout, read-only (#700); ``None`` when it is not the athlete's log.
+
+    Resolved through ``training_log_logs`` so another athlete's log, an empty
+    one and a non-newest legacy one all come back ``None`` (the view 404s).
+    """
+    log = _with_counted_sets(
+        training_log_logs(athlete).filter(pk=log_pk), athlete
+    ).first()
+    if log is None:
+        return None
+    session = log.session
+    plan = session.week.mesocycle.plan
+    exercises = [
+        {
+            "name": name,
+            "sets": [
+                {
+                    "id": s.pk,
+                    "label": _logged_set_label(s, plan.unit, ordinal),
+                    "by_coach": s.entered_by_coach,
+                }
+                for ordinal, s in enumerate(sets, start=1)
+            ],
+        }
+        for name, sets in _log_exercise_groups(log.counted_sets)
+    ]
+    return {
+        "id": log.pk,
+        "session_id": session.pk,
+        "date_label": _log_date_label(log),
+        "session_name": session.name or f"Day {session.day_number}",
+        "plan_title": plan.title,
+        "coach": _log_coach_label(plan),
+        "in_progress": log.status == SessionLog.Status.PENDING,
+        "exercises": exercises,
+        "notes": log.notes,
+    }
+
+
+def athlete_has_training_log(user):
+    """Whether the athlete has anything in their Training log (#700)."""
+    return training_log_logs(user).exists()
 
 
 def _relative_when(dt):
@@ -1916,8 +2196,8 @@ def athlete_set_progress(session, athlete):
     return {**progress, "as_of": as_of}
 
 
-def _logged_set_label(logged_set, plan_unit, ordinal):
-    """A stored set as one read-only line, e.g. "Set 2 · 70 kg × 6 · RPE 7".
+def _logged_set_core(logged_set, plan_unit):
+    """A stored set's load and reps as text, e.g. "70 kg × 6" ("" when blank).
 
     The load carries its unit (the set's own, else the plan's) only when it is
     a plain number — "BW" or "bodyweight" stand alone.
@@ -1927,14 +2207,18 @@ def _logged_set_label(logged_set, plan_unit, ordinal):
         load = f"{load} {logged_set.unit or plan_unit}"
     reps = logged_set.reps
     if load and reps:
-        core = f"{load} × {reps}"
-    elif load:
-        core = load
-    elif reps:
-        core = f"{reps} reps"
-    else:
-        core = ""
+        return f"{load} × {reps}"
+    if load:
+        return load
+    if reps:
+        return f"{reps} reps"
+    return ""
+
+
+def _logged_set_label(logged_set, plan_unit, ordinal):
+    """A stored set as one read-only line, e.g. "Set 2 · 70 kg × 6 · RPE 7"."""
     parts = [f"Set {ordinal}"]
+    core = _logged_set_core(logged_set, plan_unit)
     if core:
         parts.append(core)
     if logged_set.rpe:
