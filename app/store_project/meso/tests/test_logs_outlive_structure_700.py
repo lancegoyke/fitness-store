@@ -307,6 +307,11 @@ class TestAdminInlineCannotDeleteStructure:
 
         resp = client.post(url, data)
 
-        assert resp.status_code in (200, 302)
+        if resp.status_code != 302:
+            errors = [i.formset.errors for i in resp.context["inline_admin_formsets"]]
+            raise AssertionError(
+                f"expected a clean save (302), got {resp.status_code}: "
+                f"{resp.context['adminform'].form.errors!r} {errors!r}"
+            )
         assert Mesocycle.objects.filter(pk=s.meso.pk).exists()
         _assert_logs_survive(log, row)
