@@ -2299,9 +2299,12 @@ class Prescription(models.Model):
     # if its response is lost the client replays it, and without this the
     # replay would relocate again and land the same text on a second line.
     # Both write endpoints look the token up first and, on a match, answer with
-    # this cell and write nothing. Every save sets or clears it, so it names a
-    # cell only while that write is the latest one there. Never matched on
-    # text: three identical sets are normal.
+    # this cell and write nothing. A save that changes the text clears it,
+    # unless the save carries that same token (an edit of the line that write
+    # made); a restore puts back the token recorded with the restored state
+    # (snapshots recorded before #726 carry none, and then an unchanged line
+    # keeps its token) (#726). Never matched on text: three identical sets are
+    # normal.
     client_token = models.CharField(
         _("Client token"), max_length=64, blank=True, default="", db_default=""
     )
