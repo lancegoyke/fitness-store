@@ -41,6 +41,12 @@ def _set(raw, reps, load, **extra):
         ("1x3, 102.5kg", _set("1x3, 102.5kg", 3, "102.5kg")),
         ("1x10, BW", _set("1x10, BW", 10, "BW")),
         ("1x1, 315", _set("1x1, 315", 1, "315")),
+        # Review: empty segments and a trailing period are skipped, as the
+        # RPE read already skips them.
+        ("1x5,,225", _set("1x5,,225", 5, "225")),
+        ("1x5, , 225", _set("1x5, , 225", 5, "225")),
+        ("1x5, ., 225", _set("1x5, ., 225", 5, "225")),
+        ("1x5, 225.", _set("1x5, 225.", 5, "225")),
     ],
 )
 def test_one_set_comma_load(text, expected):

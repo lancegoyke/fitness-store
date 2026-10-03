@@ -475,7 +475,8 @@ def _classify_one_set_comma(head, segments):
     """``1 x 5, 225`` — one set of 5 reps at 225 (#720), not 1 lb x 5.
 
     ``1 x 5, RPE 8, 225`` is also the canonical order ``compose_prescription_text``
-    writes, so the first non-RPE segment after the head is the load. Only a head
+    writes, so the first non-empty, non-RPE segment after the head is the load
+    (a trailing ``.`` ignored, as the RPE read ignores it). Only a head
     of exactly ``1`` moves: ``3x5, 225`` / ``4 x 6, 85%`` are pinned load-first
     parses that #709 promised never to change. A load-shaped segment that is
     implausible (``1x5, 2255``) is a fat-finger, so it is refused rather than
