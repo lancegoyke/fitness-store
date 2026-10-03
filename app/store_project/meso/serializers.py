@@ -27,6 +27,7 @@ from . import models
 from . import parsing
 from .lift_identity import Lift
 from .lift_identity import LiftIndex
+from .lift_identity import foreign_lift_names
 from .lift_identity import norm_name
 from .names import link_athlete_name
 
@@ -1085,7 +1086,7 @@ def week_readouts(weeks, exercise_slot_ids, cells_by_key, unit="kg"):
     return readouts
 
 
-def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
+def athlete_line_summary(lines, unit, log_id=None, target_reps=None, lift=None):
     """One compact summary of a cell's logged athlete lines, or None.
 
     ``{"sets": n, "load": "225", "unit": "lb", "rpe": "9", "missed": 1}`` -- the
@@ -1106,6 +1107,10 @@ def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
     ``log_id`` is the cell session's newest ``SessionLog`` (see
     ``models.newest_session_log_ids``): sets from any older log are ignored.
     With no numeric top set, a "BW" set is the summary.
+
+    ``lift`` is the cell's current ``Lift``; ``logged_as``/``logged_as_mixed``
+    report the names this log's sets were stamped under when they differ (#714,
+    see ``lift_identity.foreign_lift_names``), ``[]``/False without one.
     """
     # Athlete-ENTERED lines only (#709): a coach set line renders inline in the
     # designer with its own chip, so folding it into this roll-up marker too
@@ -1117,12 +1122,14 @@ def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
     bodyweight = None  # (load text, rpe)
     rpes = []  # every logged set's numeric RPE
     missed = 0
+    log_sets = []  # this log's LoggedSets behind the lines (#714)
     for lc in logged:
         behind = list(lc.parsed_sets.all())
         candidates = []  # (load text, unit, rpe)
         for s in behind:
             if s.session_log_id != log_id:
                 continue
+            log_sets.append(s)
             if _num(s.rpe) is not None:
                 rpes.append(_num(s.rpe))
             missed += rep_missed(target_reps, s.reps)
@@ -1162,6 +1169,11 @@ def athlete_line_summary(lines, unit, log_id=None, target_reps=None):
         "rpe": _fmt_num(max(rpes)) if rpes else "",
         "missed": missed,
     }
+    if lift is None:
+        summary.update(logged_as=[], logged_as_mixed=False)
+    else:
+        names, mixed = foreign_lift_names(lift, log_sets)
+        summary.update(logged_as=names, logged_as_mixed=mixed)
     if top:
         summary.update(load=top[1], unit=top[2] or "")
     elif bodyweight:
@@ -1208,7 +1220,11 @@ def serialize_grid_cell(cell, lines, unit, log_id):
         # The designer collapses logged athlete lines to this one marker (#645);
         # None when the athlete logged nothing.
         "athlete_summary": athlete_line_summary(
-            lines, unit, log_id, (cell.parsed() or {}).get("reps")
+            lines,
+            unit,
+            log_id,
+            (cell.parsed() or {}).get("reps"),
+            lift=Lift(cell.exercise_id, cell.name),
         ),
     }
 

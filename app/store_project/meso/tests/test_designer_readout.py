@@ -176,6 +176,8 @@ class TestAthleteSummary:
             "unit": "kg",
             "rpe": "9",
             "missed": 0,
+            "logged_as": [],
+            "logged_as_mixed": False,
         }
 
     def test_a_cell_with_no_athlete_lines_has_no_summary(self):
@@ -235,6 +237,8 @@ class TestAthleteSummaryUnitsAndScope:
             "unit": "",
             "rpe": "8",
             "missed": 1,  # the helper logs 5 reps against a prescribed 8
+            "logged_as": [],
+            "logged_as_mixed": False,
         }
 
     def test_a_numeric_set_beats_a_bw_set(self):

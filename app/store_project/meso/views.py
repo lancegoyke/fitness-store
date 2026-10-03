@@ -3839,7 +3839,7 @@ def manifest_webmanifest(request):
 #     page loses its Set rows and gains the progress header and the single
 #     "Finish session" button. A cached page would still post `sets`, which the
 #     server now ignores, so installed clients need a fresh cache namespace.
-PWA_CACHE_VERSION = "meso-pwa-v15"
+PWA_CACHE_VERSION = "meso-pwa-v16"
 
 
 @require_GET

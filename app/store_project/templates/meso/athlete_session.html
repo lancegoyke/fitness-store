@@ -64,7 +64,7 @@
           </template>
         </div>
         <div style="padding:9px 16px 11px;">
-          <div class="meso-row-meta meso-mono" style="margin-bottom:6px;">what you did</div>
+          <div class="meso-row-meta meso-mono" style="margin-bottom:6px;">what you did<span data-testid="logged-as-hint" x-show="ex.logged_as && ex.logged_as.length" x-cloak style="color:var(--dim);margin-left:8px;" x-text="(ex.logged_as_mixed ? 'partly logged as ' : 'logged as ') + (ex.logged_as || []).join(', ')"></span></div>
           {% comment %} Sets logged before typed lines were the only way (or whose line a
              coach has since rewritten): history, shown as text and never posted. {% endcomment %}
           <template x-for="r in (ex.logged_readonly || [])" :key="r.id">

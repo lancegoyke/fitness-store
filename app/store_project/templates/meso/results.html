@@ -84,7 +84,7 @@
       {% endcomment %}
       {% for r in rows %}
         <div class="meso-results-grid meso-results-row" data-testid="results-row" style="padding:11px 18px;border-bottom:1px solid var(--line-2);align-items:center;">
-          <div data-testid="results-name" style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em;">{{ r.name }}{% if r.pr %} <span class="meso-badge meso-badge--accent" style="padding:1px 6px;font-size:9.5px;vertical-align:middle;">PR</span>{% endif %}</div>
+          <div data-testid="results-name" style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em;">{{ r.name }}{% if r.pr %} <span class="meso-badge meso-badge--accent" style="padding:1px 6px;font-size:9.5px;vertical-align:middle;">PR</span>{% endif %}{% if r.logged_as %}<div class="meso-row-meta meso-mono" data-testid="logged-as-hint" title="{% if r.logged_as_mixed %}partly logged as{% else %}logged as{% endif %} {{ r.logged_as|join:', ' }}" style="font-size:10.5px;font-weight:400;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{% if r.logged_as_mixed %}partly logged as{% else %}logged as{% endif %} {{ r.logged_as|join:", " }}</div>{% endif %}</div>
           <div class="meso-mono" data-label="Target" style="font-size:11.5px;color:var(--dim);">{{ r.target }}</div>
           <div class="meso-mono" data-testid="results-logged" data-label="Logged" style="font-size:12px;{% if r.rpe_state == 'over' %}color:var(--warn);font-weight:600;{% endif %}">{{ r.logged }}</div>
           <div data-label="RPE" style="text-align:center;">

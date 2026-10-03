@@ -461,6 +461,38 @@ describe("cell sub-lines", () => {
       expect(marker).toHaveAttribute("title", "✓ 3 sets · 225 lb @9.5 · 1 miss");
     });
 
+    it("shows a quiet 'logged as' hint from the server summary (#714)", () => {
+      withCell(
+        cell({
+          lines: three,
+          athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9", logged_as: ["Back Squat", "Box Squat"], logged_as_mixed: false },
+        }),
+      );
+      expect(screen.getByTestId("logged-as-hint-100")).toHaveTextContent("logged as Back Squat, Box Squat");
+      // the marker itself is unchanged
+      expect(screen.getByTestId("cell-athlete-marker-100")).toHaveTextContent("✓ 3 sets · 225 lb @9");
+    });
+
+    it("says 'partly logged as' when mixed (#714)", () => {
+      withCell(
+        cell({
+          lines: three,
+          athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9", logged_as: ["Back Squat"], logged_as_mixed: true },
+        }),
+      );
+      expect(screen.getByTestId("logged-as-hint-100")).toHaveTextContent("partly logged as Back Squat");
+    });
+
+    it("renders no hint without names or on an old payload (#714)", () => {
+      withCell(cell({ lines: three, athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9", logged_as: [] } }));
+      expect(screen.queryByTestId("logged-as-hint-100")).not.toBeInTheDocument();
+    });
+
+    it("renders no hint on an old payload without the fields (#714)", () => {
+      withCell(cell({ lines: three, athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9" } }));
+      expect(screen.queryByTestId("logged-as-hint-100")).not.toBeInTheDocument();
+    });
+
     it("pluralises misses", () => {
       withCell(
         cell({ lines: three, athlete_summary: { sets: 3, load: "225", unit: "lb", rpe: "9", missed: 2 } }),

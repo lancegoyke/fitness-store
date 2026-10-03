@@ -4469,6 +4469,33 @@ describe("live session sync (#709)", () => {
       expect(c.exercises[0].text).toBe("5 x 5 @ 80%");
     });
 
+    it("logged_as / logged_as_mixed are taken, updated and cleared by a poll (#714)", async () => {
+      routeFetch();
+      const c = syncPage();
+      await pollWith(
+        c,
+        syncBody({
+          exercises: [
+            { id: 1, name: "Front Squat", logged_as: ["Back Squat"], logged_as_mixed: true },
+            { id: 2, name: "Press" },
+          ],
+        }),
+      );
+      expect(c.exercises[0].logged_as).toEqual(["Back Squat"]);
+      expect(c.exercises[0].logged_as_mixed).toBe(true);
+      await pollWith(
+        c,
+        syncBody({
+          exercises: [
+            { id: 1, name: "Front Squat", logged_as: [], logged_as_mixed: false },
+            { id: 2, name: "Press" },
+          ],
+        }),
+      );
+      expect(c.exercises[0].logged_as).toEqual([]);
+      expect(c.exercises[0].logged_as_mixed).toBe(false);
+    });
+
     it("a new exercise is initialized with pads, keys and unplaced", async () => {
       routeFetch();
       const c = syncPage();
