@@ -12,6 +12,7 @@ from store_project.meso.models import Prescription
 from store_project.meso.tests.test_coach_logs_709 import all_sets
 from store_project.meso.tests.test_coach_logs_709 import cells
 from store_project.meso.tests.test_coach_logs_709 import patch_text
+from store_project.meso.tests.test_coach_logs_709 import redo
 from store_project.meso.tests.test_coach_logs_709 import skip_row
 from store_project.meso.tests.test_coach_logs_709 import start
 from store_project.meso.tests.test_coach_logs_709 import undo
@@ -68,6 +69,35 @@ class TestRestoreKeepsTokenOnAnUnchangedLine:
             exercise_slot=s.squat.exercise_slot, client_token="t1"
         ).exists()
         assert LoggedSet.objects.filter(session_log__session=s.session).count() == 0
+
+
+def _replay_lands_once(client, s):
+    n_actions = PlanAction.objects.filter(plan=s.plan).count()
+    again = coach_write(client, s, "225 x 5", intent="new", kind="set", token="t1")
+    assert again.status_code == 200
+    assert again.json()["relocated_from"] == 1
+    assert [c.text for c in cells(s).values()].count("225 x 5") == 1
+    assert len(all_sets(s)) == 1
+    assert PlanAction.objects.filter(plan=s.plan).count() == n_actions
+
+
+class TestRestoreReturnsTheRecordedToken:
+    def test_replay_after_undo_and_redo_of_the_write_lands_once(self, client):
+        s = seed()
+        _tokened_set(client, s)
+        undo(client, s)
+        redo(client, s)
+        _replay_lands_once(client, s)
+
+    def test_replay_after_undoing_a_same_text_chip_flip_lands_once(self, client):
+        s = seed()
+        _tokened_set(client, s)
+        flip = coach_write(client, s, "225 x 5", line=2, kind="cue")
+        assert flip.status_code == 200, flip.content
+        assert cells(s)[2].client_token == "t1"
+        undo(client, s)
+        assert cells(s)[2].is_coach_set
+        _replay_lands_once(client, s)
 
 
 def _blank_athlete_line(client, s):
