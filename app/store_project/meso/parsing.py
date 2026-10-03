@@ -490,15 +490,20 @@ def _classify_one_set_comma(head, segments):
         return None
     for index, raw_segment in enumerate(segments[1:], start=1):
         segment = raw_segment.strip().rstrip(".")
-        if not segment or _RPE.match(segment):
+        if not segment:
+            continue
+        # A comma inside a number (``22,5kg``, ``1,000``, ``RPE 8,5``) split it
+        # across two segments. Refuse rather than store the front half (or, after
+        # an RPE, read its tail as the load), as the leading load position does.
+        tail = segments[index + 1] if index + 1 < len(segments) else ""
+        split_number = re.search(r"\d$", raw_segment) and re.match(r"\d", tail)
+        if _RPE.match(segment):
+            if split_number:
+                return {"kind": "unresolved-set", "warn": True}
             continue
         if not _LOAD.match(segment):
             return None
-        # A comma inside the load (``22,5kg``, ``1,000``) split it across two
-        # segments. Refuse rather than store the front half, as the leading
-        # load position does.
-        tail = segments[index + 1] if index + 1 < len(segments) else ""
-        if re.search(r"\d$", raw_segment) and re.match(r"\d", tail):
+        if split_number:
             return {"kind": "unresolved-set", "warn": True}
         if not _load_is_plausible(segment):
             return {"kind": "unresolved-set", "warn": True}
@@ -906,9 +911,12 @@ def reads_as_one_set(text):
     load = parsed.get("load")
     if not load:
         return False
-    # One definite count. A rep RANGE (``225 x 8-10``) or AMRAP (``AMRAP @
-    # 135``) is a target to aim at, which a performed set never is.
+    # One definite count. A rep RANGE (``225 x 8-10``), an RPE range
+    # (``1 x 5, RPE 8-9, 225``) or AMRAP (``AMRAP @ 135``) is a target to aim
+    # at, which a performed set never is.
     if parsed.get("reps_range") or parsed.get("amrap"):
+        return False
+    if "-" in str(parsed.get("rpe", "")):
         return False
     if not any(parsed.get(k) for k in ("reps", "duration")):
         return False

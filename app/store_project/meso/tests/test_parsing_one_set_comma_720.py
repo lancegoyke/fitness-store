@@ -61,6 +61,9 @@ def test_one_set_comma_load(text, expected):
         # plan's unit) would be a different set from 22.5 kg.
         "1x5, 22,5kg",
         "1x1, 1,000",
+        # ...and a decimal-comma RPE before the load must not leave its tail
+        # to be read as the load (``5``).
+        "1x5, RPE 8,5, 100kg",
     ],
 )
 def test_unreadable_load_is_unresolved_not_one_pound(text):
@@ -76,7 +79,18 @@ def test_strict_default_true(text):
     assert reads_as_one_set(text) is True
 
 
-@pytest.mark.parametrize("text", ["1x5, 8", "1x5, 85%", "3x5, 225"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1x5, 8",
+        "1x5, 85%",
+        "3x5, 225",
+        # Review: an RPE range is a target, like a rep range. The canonical
+        # prescription order (``compose_prescription_text``) must not log.
+        "1 x 5, RPE 8-9, 225",
+        "225x5, RPE 8-9",
+    ],
+)
 def test_strict_default_still_false(text):
     assert reads_as_one_set(text) is False
 
