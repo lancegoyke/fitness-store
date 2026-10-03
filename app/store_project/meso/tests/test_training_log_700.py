@@ -636,6 +636,45 @@ def test_pr_unit_follows_the_newest_training_date_not_the_last_created(client, a
     assert "Kg Lift" not in body
 
 
+def test_a_newest_unit_with_no_record_gives_way_to_one_that_has_records(
+    client, athlete
+):
+    # The newest counted set is a bodyweight pull-up on a kg plan: it counts, but
+    # Epley can't size it, so kg has no record. The older lb squat does.
+    lb = world(athlete, unit=Unit.POUNDS, lift="Back Squat")
+    kg = world(athlete, unit=Unit.KILOGRAMS, lift="Pull-up")
+    lset(
+        make_log(athlete, lb.session, date=today() - datetime.timedelta(days=9)),
+        lb.cell,
+        1,
+        load="225",
+        unit="lb",
+    )
+    lset(
+        make_log(athlete, kg.session, date=today() - datetime.timedelta(days=2)),
+        kg.cell,
+        1,
+        load="BW",
+        reps="8",
+    )
+    lb.link.end(by="coach")
+    kg.link.end(by="coach")
+    client.force_login(athlete)
+    body = html(client.get(reverse(HOME_URL)))
+    assert "Back Squat" in body
+    assert re.search(r"\d+ lb</span>", body)
+
+
+def test_service_worker_never_stores_the_training_log(client):
+    # The log is an online page: the worker sends it to the network only and
+    # falls back to the offline page, never a stored copy that a second
+    # athlete on the same phone could reopen. Behaviour is driven in the e2e
+    # suite; this pins the wiring.
+    body = client.get(reverse("meso:service_worker")).content.decode()
+    assert f'const LOG_URL = "{reverse(LOG_URL)}"' in body
+    assert "startsWith(LOG_URL)" in body
+
+
 # -- 17. the summary line --------------------------------------------------------
 
 

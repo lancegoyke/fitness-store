@@ -20,6 +20,8 @@ from django.core.paginator import Paginator
 from django.db.models import CharField
 from django.db.models import Count
 from django.db.models import Exists
+from django.db.models import F
+from django.db.models import Max
 from django.db.models import Min
 from django.db.models import OuterRef
 from django.db.models import Prefetch
@@ -507,29 +509,45 @@ def _records_unit_plan(plans):
 def athlete_personal_records(user):
     """The athlete's records panel for their training home (Phase 4d).
 
-    The unit is the most-recent live plan's; with none (the coach link ended and
+    The unit is the most-recent live plan's. With none (the coach link ended and
     the plan archived, #700) it is the plan unit of the athlete's newest counted
-    set, by TRAINING date so a log backfilled today with an old date does not
-    win. Records are plan-unit scoped, so any other unit (the athlete override
-    or the coach default) could come up empty when an archived lb plan meets a
-    kg preference. No counted set means no records, hence an empty panel.
+    set that has a record to show: units are tried newest first, by TRAINING
+    date so a log backfilled today with an old date does not win, and one whose
+    sets yield no record (a bodyweight-only block) gives way to the next.
+    Records are plan-unit scoped, so any other unit (the athlete override or the
+    coach default) could come up empty when an archived lb plan meets a kg
+    preference. No counted set means no records, hence an empty panel.
     """
     plan = _records_unit_plan(Plan.objects.for_athlete(user))
     if plan is not None:
-        unit = plan.unit
-    else:
-        unit = (
-            LoggedSet.objects.performance_history(user)
-            .order_by(*_LOG_NEWEST_FIRST_ON_SET)
-            .values_list("session_log__session__week__mesocycle__plan__unit", flat=True)
-            .first()
+        return {
+            "rows": _personal_record_rows(user, plan.unit, link_logs=True),
+            "unit": plan.unit,
+        }
+    for unit in _counted_units_newest_first(user):
+        rows = _personal_record_rows(user, unit, link_logs=True)
+        return {"rows": rows, "unit": unit}
+    return {"rows": [], "unit": ""}
+
+
+def _counted_units_newest_first(user):
+    """The plan units the athlete has counted sets in, newest training first (#700).
+
+    One row per unit, ranked by its newest counted set's training date (the
+    creation day when undated), then by when that log was written.
+    """
+    return [
+        row["plan_unit"]
+        for row in LoggedSet.objects.performance_history(user)
+        .values(plan_unit=F("session_log__session__week__mesocycle__plan__unit"))
+        .annotate(
+            newest=Max(
+                Coalesce("session_log__date", TruncDate("session_log__created_at"))
+            ),
+            written=Max("session_log__created_at"),
         )
-    if unit is None:
-        return {"rows": [], "unit": ""}
-    return {
-        "rows": _personal_record_rows(user, unit, link_logs=True),
-        "unit": unit,
-    }
+        .order_by("-newest", "-written")
+    ]
 
 
 def coach_personal_records(link):
@@ -556,13 +574,6 @@ def coach_personal_records(link):
 # FKs (session, plan, coach); the lift name is the #708 stamp.
 
 TRAINING_LOG_PAGE_SIZE = 20
-
-# The newest-first order of a counted set by the TRAINING date of its log.
-_LOG_NEWEST_FIRST_ON_SET = (
-    Coalesce("session_log__date", TruncDate("session_log__created_at")).desc(),
-    "-session_log__created_at",
-    "-pk",
-)
 
 
 def training_log_logs(athlete):

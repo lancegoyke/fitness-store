@@ -3892,7 +3892,7 @@ def manifest_webmanifest(request):
 #     "Finish session" button. A cached page would still post `sets`, which the
 #     server now ignores, so installed clients need a fresh cache namespace.
 # v17: the athlete home gains the Training log link and the read-only
-#     `/meso/me/log/` pages (#700).
+#     `/meso/me/log/` pages (#700), which the worker never stores (online only).
 PWA_CACHE_VERSION = "meso-pwa-v17"
 
 
@@ -3910,6 +3910,7 @@ def service_worker(request):
             "cache_version": PWA_CACHE_VERSION,
             "offline_url": reverse("meso:offline"),
             "home_url": reverse("meso:athlete_home"),
+            "log_url": reverse("meso:athlete_log"),
             "static_url": settings.STATIC_URL,
         },
         request=request,
