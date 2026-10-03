@@ -397,4 +397,4 @@ class TestCellWriteAndPwa:
         assert counts(resp.json()["progress"]) == {"logged": 0, "prescribed": 4}
 
     def test_pwa_cache_version_bumped(self):
-        assert views.PWA_CACHE_VERSION == "meso-pwa-v14"
+        assert views.PWA_CACHE_VERSION == "meso-pwa-v15"

@@ -1245,7 +1245,7 @@ def grid_cell_for(exercise_slot, week):
     )
 
 
-def serialize_mesocycle_grid(mesocycle):
+def serialize_mesocycle_grid(mesocycle, sync_v=None):
     """The P1 multi-week table: every live day × row × week cell, densely.
 
     Unlike ``serialize_plan``'s single-week ``program`` (one week's sessions),
@@ -1265,6 +1265,25 @@ def serialize_mesocycle_grid(mesocycle):
     "current" (deliver-target) week's mesocycle. ``serialize_plan`` itself is
     untouched — it stays the agent's own context source (``service.py``).
     """
+    # #709 PR 2: the change stamp must be no newer than ANY row below,
+    # including the Plan and Mesocycle rows themselves. A write committing
+    # later can then pair NEW rows with an OLD stamp (harmless, the next poll
+    # refetches) but never OLD rows with a NEW stamp, which would let a client
+    # believe a stale grid is current (#718).
+    #
+    # A caller that already loaded the plan (the access check) passes
+    # ``plan.sync_version`` from THAT row, so the stamp and the plan data come
+    # from one read and the mesocycle was loaded after it. With none passed we
+    # read the stamp first and then re-fetch the mesocycle and its plan, since
+    # the instances we were handed may predate it.
+    if sync_v is None:
+        sync_v = models.read_plan_sync(mesocycle.plan_id)
+        mesocycle = (
+            models.Mesocycle.objects.select_related("plan__relationship__athlete")
+            .filter(pk=mesocycle.pk)
+            .first()
+            or mesocycle
+        )
     plan = mesocycle.plan
     weeks = list(mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index"))
     week_ids = [w.pk for w in weeks]
@@ -1398,6 +1417,7 @@ def serialize_mesocycle_grid(mesocycle):
 
     readouts = week_readouts(weeks, exercise_slot_ids, cells_by_key, plan.unit)
     return {
+        "sync_v": sync_v,
         "plan": {
             "id": plan.pk,
             "title": plan.title,

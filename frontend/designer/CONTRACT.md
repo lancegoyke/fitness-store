@@ -167,6 +167,50 @@ MesoGrid | null` and `history: GridHistory`, hydrated once from
   listed here or it silently drops on the next refetch (regression-tested:
   `useGrid.test.ts` "refetchGrid carries the full payload through").
 
+### usePlanSync and the remote merge (#709 PR 2, live session sync)
+
+`usePlanSync({planId, mesocycleId, getVersion, onGrid})` polls
+`GET /meso/api/plan/<id>/sync/?v=<stamp>&mesocycle=<id>` and hands a
+`{changed:true, grid}` answer to `onGrid` (`useGrid.applyRemoteGrid`). It
+returns `{markActive}`.
+
+- **Cadence:** 3s while active (a local write via `useGrid`'s `onActivity`, or
+  a remote merge that changed something, in the last 2 minutes); idle it backs
+  off 3 -> 6 -> 12 -> 30s and stays at 30s. `markActive` snaps a pending long
+  wait back to 3s.
+- **Visibility/focus:** only while `document.visibilityState` is visible;
+  polls at once on `visibilitychange` -> visible and on window `focus`.
+  Never two polls in flight.
+- **Stops/errors:** 404/403 stop it for good with one `console.warn` and no
+  banner. A network error or 5xx backs off on the same ladder, silently. No
+  known stamp (old server, no `sync_v` in the hydration) means no polling.
+- The stamp sent is `useGrid.getSyncV()`: the `sync_v` of the last FETCHED
+  grid merged, never a write answer's (a write answer at 7 says nothing about
+  another party's write at 6).
+
+`useGrid.applyRemoteGrid(grid): boolean` (also what `refetchGrid` now calls,
+which closes #718) merges a fetched grid; it returns whether anything visible
+changed. Rules, in order:
+
+1. A grid stamped BELOW the last one merged is ignored whole. A stamp-less
+   grid (old server) is taken as before.
+2. Structure (weeks, days, rows, plan, athlete, phases, history) comes from
+   the fetched grid.
+3. **Per-cell freshness guard.** `adoptedV[cellKey]` is the `sync_v` of the
+   last write answer adopted for that (slot, week) cell: `cell_line_write` 200
+   AND 422 answers, and `prescription_patch` answers for line 0. If
+   `adoptedV[cellKey] > fetched.sync_v` the LOCAL cell stays.
+4. Otherwise the fetched cell is taken, except its line-0 `text` while a
+   line-0 `patchCell` for that cell is in flight; then queued and unsaved
+   line writes are re-applied over it (`reapplyWrites`).
+5. A row with an unanswered `patchRowColumns`/`renameExercise` keeps its
+   local name, exercise link, tempo, rest and note.
+
+Inputs never resync over a dirty draft: `CellSubLineInput`, `GridCellEditor`
+(line 0), `RowColumnInput` and `RowNameEditor` skip the prop -> draft copy
+while their dirty flag is set. Line keys are line numbers, so a merge never
+remounts an input.
+
 ### RETIRED: usePlanData / useAutosave / useDeletes / useUndoRedo
 
 Issue #455 phase A5 deleted these four hooks (and their specs) outright —

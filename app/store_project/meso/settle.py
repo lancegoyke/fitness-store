@@ -75,6 +75,7 @@ from .models import LoggedSet
 from .models import Plan
 from .models import Session
 from .models import SessionLog
+from .models import bump_plan_sync
 from .models import newest_session_logs
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,11 @@ def settle_log(pk, *, cutoff):
         # recording the athlete's own activity/workout-day, not the sweep's.
         log.status = SessionLog.Status.DONE
         log.save(update_fields=["status"])
+        # #709 PR 2: the flip changes what both screens show (status, "Logged"
+        # chip), so it advances the plan's live-sync stamp. Sync-only: the
+        # sweep is no edit, and ``modified`` orders the coach's working plan.
+        # LOCK ORDER: the Plan row lock was taken first, above (#588).
+        bump_plan_sync(plan_id)
 
         # Only THIS log's sets can have changed what DONE-only derivation sees
         # — refresh exactly the lifts they reference, not the whole session.

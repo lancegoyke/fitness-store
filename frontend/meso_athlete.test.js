@@ -3763,12 +3763,11 @@ describe("#709 — applyExerciseLines", () => {
     expect(lines(ex)).toEqual([1]);
   });
 
-  it("a line with a save running counts as dirty", () => {
+  it("a line with a save running is left exactly where it is (its answer reconciles it)", () => {
     const { c, ex } = setup([{ line: 1, text: "a", savedText: "a" }]);
     c._lineSavesRunning["1:1"] = 1;
     c.applyExerciseLines(ex, { sub_lines: [srv(1, "b")], coach_lines: [] });
-    expect(ex.sub_lines.find((l) => l.text === "a")).toBeTruthy();
-    expect(lines(ex)).toEqual([1, 2]);
+    expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([[1, "a"]]);
   });
 
   it("never leaves two entries on one number or an entry on a cue", () => {
@@ -3880,7 +3879,7 @@ describe("#709 — nothing typed is lost, stale text is blanked, keys are stable
       sub_lines: full.map((l) => srv(l.line, l.text)),
       coach_lines: [{ line: 1, text: "cue" }],
     });
-    expect(ex.unplaced).toEqual([{ text: "typed" }]);
+    expect(ex.unplaced).toEqual([{ text: "typed", token: "" }]);
     expect(ex.sub_lines.some((l) => l.text === "typed")).toBe(false);
     expect(c.readQueue()).toHaveLength(1);
     expect(c.readQueue()[0].body).toEqual({ exercise_id: 1, line: 1, text: "typed" });
@@ -3893,7 +3892,7 @@ describe("#709 — nothing typed is lost, stale text is blanked, keys are stable
       { exercises: [{ id: 1, pad_lines: 1, coach_lines: coach }] },
       { queue: [{ kind: "cell", id: "q1", url: NOTE_CELL_URL, body: { exercise_id: 1, line: 1, text: "100 x 5" } }] },
     );
-    expect(c.exercises[0].unplaced).toEqual([{ text: "100 x 5" }]);
+    expect(c.exercises[0].unplaced).toEqual([{ text: "100 x 5", token: "" }]);
     expect(c.readQueue()).toHaveLength(1);
   });
 
@@ -4108,5 +4107,858 @@ describe("#709 — merge keeps an edit; an unconfirmed new line stays new", () =
     expect(c.exercises[0].sub_lines[0].newToken).toBe("tok-1");
     await c.flushQueue();
     expect(sent()).toEqual({ exercise_id: 1, line: 1, text: "225 x 5", new: true, token: "tok-1" });
+  });
+});
+
+// ---- live session sync (#709 PR 2) ----
+const SYNC_URL = "/meso/api/me/session/42/sync/";
+
+// A poll answer: `exercises` are page-payload-shaped entries.
+function syncBody(over = {}) {
+  return {
+    ok: true,
+    changed: true,
+    sync_v: 8,
+    status: "pending",
+    notes: "",
+    progress: { logged: 0, prescribed: 4, as_of: 5 },
+    exercises: [],
+    ...over,
+  };
+}
+
+// Route fetch by url: the sync poll, the cell write and the log write each get
+// a handler returning a res() stub.
+function routeFetch({ sync, cell, log } = {}) {
+  const calls = { sync: [], cell: [], log: [] };
+  global.fetch = vi.fn((url, opts) => {
+    if (String(url).startsWith(SYNC_URL)) {
+      calls.sync.push(String(url));
+      return Promise.resolve(sync ? sync(String(url)) : res({ body: { ok: true, changed: false, sync_v: 5 } }));
+    }
+    if (url === NOTE_CELL_URL) {
+      calls.cell.push(JSON.parse(opts.body));
+      return Promise.resolve(cell ? cell(JSON.parse(opts.body)) : res({ body: {} }));
+    }
+    calls.log.push(JSON.parse(opts.body));
+    return Promise.resolve(log ? log(JSON.parse(opts.body)) : res({ body: logBody() }));
+  });
+  return calls;
+}
+
+// Loggers whose window/document listeners outlive their test: stopped after
+// each, so they don't answer the next test's focus events.
+const syncPages = [];
+
+function syncPage(data = {}) {
+  const c = initWith({
+    sync_v: 5,
+    sync_url: SYNC_URL,
+    exercises: [
+      { id: 1, name: "Squat", pad_lines: 3 },
+      { id: 2, name: "Press", pad_lines: 2 },
+    ],
+    ...data,
+  });
+  syncPages.push(c);
+  return c;
+}
+
+const tick = (ms = 3000) => vi.advanceTimersByTimeAsync(ms);
+
+function setVisibility(state) {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+}
+
+describe("live session sync (#709)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    for (const c of syncPages.splice(0)) c._pollStopped = true;
+    delete document.visibilityState;
+    vi.useRealTimers();
+  });
+
+  describe("polling", () => {
+    it("polls the sync url with the page's stamp every 3s while active", async () => {
+      const calls = routeFetch();
+      syncPage();
+      expect(calls.sync).toHaveLength(0);
+      await tick(3000);
+      expect(calls.sync).toEqual([SYNC_URL + "?v=5"]);
+      await tick(3000);
+      expect(calls.sync).toHaveLength(2);
+    });
+
+    it("backs off 6 / 12 / 30s once idle for two minutes", async () => {
+      const calls = routeFetch();
+      syncPage();
+      await tick(121000);
+      const active = calls.sync.length;
+      expect(active).toBeGreaterThan(30);
+      await tick(60000);
+      const idle = calls.sync.length - active;
+      expect(idle).toBeGreaterThan(0);
+      expect(idle).toBeLessThanOrEqual(4);
+    });
+
+    it("a hidden page does not poll; becoming visible polls at once", async () => {
+      const calls = routeFetch();
+      setVisibility("hidden");
+      syncPage();
+      await tick(60000);
+      expect(calls.sync).toHaveLength(0);
+      setVisibility("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await tick(0);
+      expect(calls.sync).toHaveLength(1);
+    });
+
+    it("an offline page does not poll; online triggers a poll", async () => {
+      const calls = routeFetch();
+      const online = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+      syncPage();
+      await tick(60000);
+      expect(calls.sync).toHaveLength(0);
+      online.mockReturnValue(true);
+      window.dispatchEvent(new Event("online"));
+      await tick(0);
+      expect(calls.sync).toHaveLength(1);
+    });
+
+    it("window focus polls at once", async () => {
+      const calls = routeFetch();
+      syncPage();
+      window.dispatchEvent(new Event("focus"));
+      await tick(0);
+      expect(calls.sync).toHaveLength(1);
+    });
+
+    it("never has two polls in flight", async () => {
+      let release;
+      const calls = routeFetch({
+        sync: () => new Promise((r) => (release = () => r(res({ body: { ok: true, changed: false, sync_v: 5 } })))),
+      });
+      syncPage();
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus"));
+      await tick(20000);
+      expect(calls.sync).toHaveLength(1);
+      release();
+      await tick(3000);
+      expect(calls.sync.length).toBeGreaterThan(1);
+    });
+
+    it("a 404 backs off to 60s and stops for good only after 10 in a row", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const calls = routeFetch({ sync: () => res({ ok: false, status: 404 }) });
+      syncPage();
+      await tick(3000);
+      expect(calls.sync).toHaveLength(1);
+      await tick(30000);
+      expect(calls.sync).toHaveLength(1);
+      await tick(30000);
+      expect(calls.sync).toHaveLength(2);
+      await tick(60000 * 12);
+      expect(calls.sync).toHaveLength(10);
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a poll that finds the route again resets the 404 run", async () => {
+      let n = 0;
+      const calls = routeFetch({
+        sync: () => {
+          n += 1;
+          return n === 1 || n === 3
+            ? res({ ok: false, status: 404 })
+            : res({ body: { ok: true, changed: false, sync_v: 5 } });
+        },
+      });
+      const c = syncPage();
+      await tick(3000);
+      await tick(60000);
+      await tick(3000);
+      expect(c._poll404s).toBe(1);
+      expect(calls.sync.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("a network error backs off silently and keeps polling", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      let n = 0;
+      const calls = routeFetch({
+        sync: () => {
+          n += 1;
+          throw new TypeError("Failed to fetch");
+        },
+      });
+      syncPage();
+      await tick(40000);
+      expect(n).toBeGreaterThan(1);
+      expect(calls.sync.length).toBeLessThan(8);
+      expect(err).not.toHaveBeenCalled();
+    });
+
+    it("sends the newest stamp after a change", async () => {
+      const calls = routeFetch({ sync: () => res({ body: syncBody({ sync_v: 9 }) }) });
+      syncPage();
+      await tick(3000);
+      await tick(3000);
+      expect(calls.sync[1]).toBe(SYNC_URL + "?v=9");
+    });
+
+    it("does not poll without a stamp (an older server)", async () => {
+      const calls = routeFetch();
+      initWith({ sync_url: SYNC_URL, exercises: [{ id: 1, pad_lines: 1 }] });
+      await tick(10000);
+      expect(calls.sync).toHaveLength(0);
+      syncPage();
+      await tick(3000);
+      expect(calls.sync).toHaveLength(1);
+    });
+  });
+
+  describe("merge", () => {
+    async function pollWith(c, body) {
+      routeFetch({ sync: () => res({ body }) });
+      window.dispatchEvent(new Event("focus"));
+      await tick(0);
+    }
+
+    it("a stale poll leaves an exercise alone once a write answer is adopted", async () => {
+      routeFetch({
+        cell: (b) => res({ body: { ok: true, sync_v: 7, cell: { line: b.line, text: b.text } } }),
+      });
+      const c = syncPage();
+      const ex = c.exercises[0];
+      ex.sub_lines[0].text = "225 x 5";
+      await c.saveCell(ex, 1);
+      expect(ex.sub_lines[0].savedText).toBe("225 x 5");
+      await pollWith(
+        c,
+        syncBody({
+          sync_v: 6,
+          exercises: [
+            { id: 1, name: "Squat", sub_lines: [{ line: 1, text: "old" }] },
+            { id: 2, name: "Press", sub_lines: [{ line: 1, text: "from coach", entered_by_coach: true }] },
+          ],
+        }),
+      );
+      expect(ex.sub_lines[0].text).toBe("225 x 5");
+      // Another exercise, no write answer: merged.
+      expect(c.exercises[1].sub_lines[0].text).toBe("from coach");
+    });
+
+    it("a 422 answer's stamp guards the exercise too", async () => {
+      routeFetch({ cell: () => res({ ok: false, status: 422, body: { ok: false, sync_v: 9 } }) });
+      const c = syncPage();
+      const ex = c.exercises[0];
+      ex.coach_lines = [{ line: 1, text: "cue" }];
+      ex.sub_lines[0].text = "x";
+      await c.saveCell(ex, 1);
+      await pollWith(
+        c,
+        syncBody({
+          sync_v: 8,
+          exercises: [
+            { id: 1, name: "Squat", coach_lines: [], sub_lines: [] },
+            { id: 2, name: "Press", coach_lines: [{ line: 1, text: "other" }] },
+          ],
+        }),
+      );
+      expect(ex.coach_lines).toEqual([{ line: 1, text: "cue" }]);
+      expect(c.exercises[1].coach_lines).toEqual([{ line: 1, text: "other" }]);
+    });
+
+    it("a new coach line appears; a clean line takes the server text and keeps its key", async () => {
+      routeFetch();
+      const c = syncPage();
+      const ex = c.exercises[0];
+      const key = ex.sub_lines[0]._k;
+      await pollWith(
+        c,
+        syncBody({
+          exercises: [
+            {
+              id: 1,
+              name: "Squat",
+              coach_lines: [{ line: 2, text: "tempo 3-1-1" }],
+              sub_lines: [{ line: 1, text: "225 x 5", entered_by_coach: true }],
+            },
+            { id: 2, name: "Press" },
+          ],
+        }),
+      );
+      expect(ex.coach_lines).toEqual([{ line: 2, text: "tempo 3-1-1" }]);
+      expect(ex.sub_lines[0]).toMatchObject({ line: 1, text: "225 x 5", savedText: "225 x 5", entered_by_coach: true });
+      expect(ex.sub_lines[0]._k).toBe(key);
+      expect(lineNumbers(ex)).toEqual([1, 3]);
+    });
+
+    it("a focused clean line takes new server text only if it differs from savedText", async () => {
+      routeFetch();
+      const c = syncPage();
+      const ex = c.exercises[0];
+      ex.sub_lines[0].text = "225 x 5";
+      ex.sub_lines[0].savedText = "225 x 5";
+      const same = { id: 1, name: "Squat", sub_lines: [{ line: 1, text: "225 x 5" }] };
+      await pollWith(c, syncBody({ sync_v: 8, exercises: [same, { id: 2, name: "Press" }] }));
+      expect(ex.sub_lines[0].text).toBe("225 x 5");
+      const changed = { id: 1, name: "Squat", sub_lines: [{ line: 1, text: "230 x 5" }] };
+      await pollWith(c, syncBody({ sync_v: 9, exercises: [changed, { id: 2, name: "Press" }] }));
+      expect(ex.sub_lines[0].text).toBe("230 x 5");
+      expect(ex.sub_lines[0].savedText).toBe("230 x 5");
+    });
+
+    it("a dirty line is untouched, and a line mid-save too", async () => {
+      routeFetch();
+      const c = syncPage();
+      const ex = c.exercises[0];
+      const dirty = ex.sub_lines[0];
+      dirty.text = "typed";
+      const running = ex.sub_lines[1];
+      running.text = "saving";
+      c._lineSavesRunning["1:2"] = 1;
+      await pollWith(
+        c,
+        syncBody({
+          exercises: [
+            { id: 1, name: "Squat", coach_lines: [{ line: 4, text: "cue" }], sub_lines: [] },
+            { id: 2, name: "Press" },
+          ],
+        }),
+      );
+      expect(ex.coach_lines).toEqual([{ line: 4, text: "cue" }]);
+      expect(ex.sub_lines.find((l) => l._k === dirty._k)).toMatchObject({ line: 1, text: "typed" });
+      expect(ex.sub_lines.find((l) => l._k === running._k)).toMatchObject({ line: 2, text: "saving" });
+    });
+
+    it("a queued line is untouched", async () => {
+      routeFetch();
+      const c = syncPage();
+      const ex = c.exercises[0];
+      ex.sub_lines[0].text = "offline text";
+      ex.sub_lines[0].queued = true;
+      await pollWith(
+        c,
+        syncBody({
+          exercises: [
+            { id: 1, name: "Squat", coach_lines: [{ line: 5, text: "cue" }], sub_lines: [] },
+            { id: 2, name: "Press" },
+          ],
+        }),
+      );
+      expect(ex.sub_lines[0]).toMatchObject({ text: "offline text", queued: true });
+      expect(ex.coach_lines).toEqual([{ line: 5, text: "cue" }]);
+    });
+
+    it("logged_readonly and the exercise's own fields are taken", async () => {
+      routeFetch();
+      const c = syncPage();
+      await pollWith(
+        c,
+        syncBody({
+          exercises: [
+            { id: 1, name: "Squat", target: "5 x 5", text: "5 x 5 @ 80%", logged_readonly: [{ text: "from before" }] },
+            { id: 2, name: "Press" },
+          ],
+        }),
+      );
+      expect(c.exercises[0].logged_readonly).toEqual([{ text: "from before" }]);
+      expect(c.exercises[0].target).toBe("5 x 5");
+      expect(c.exercises[0].text).toBe("5 x 5 @ 80%");
+    });
+
+    it("a new exercise is initialized with pads, keys and unplaced", async () => {
+      routeFetch();
+      const c = syncPage();
+      await pollWith(
+        c,
+        syncBody({
+          exercises: [
+            { id: 1, name: "Squat" },
+            { id: 2, name: "Press" },
+            { id: 3, name: "Row", pad_lines: 2, one_rm: "100", one_rm_source: "logged" },
+          ],
+        }),
+      );
+      expect(c.exercises.map((e) => e.id)).toEqual([1, 2, 3]);
+      const row = c.exercises[2];
+      expect(lineNumbers(row)).toEqual([1, 2]);
+      expect(row.sub_lines.every((l) => l._k && l.savedText === "")).toBe(true);
+      expect(row.unplaced).toEqual([]);
+      expect(row.one_rm).toBe("100");
+      expect(row.e1rm).toBe("");
+    });
+
+    it("a removed exercise goes, unless it holds a dirty or queued line", async () => {
+      routeFetch();
+      const c = syncPage({
+        exercises: [
+          { id: 1, pad_lines: 1 },
+          { id: 2, pad_lines: 1 },
+          { id: 3, pad_lines: 1 },
+        ],
+      });
+      c.exercises[1].sub_lines[0].text = "typed";
+      c.enqueueCell({ exercise_id: 3, line: 1, text: "queued" });
+      await pollWith(c, syncBody({ exercises: [{ id: 1 }] }));
+      expect(c.exercises.map((e) => e.id)).toEqual([1, 2, 3]);
+      expect(c.readQueue()).toHaveLength(1);
+      c.exercises[1].sub_lines[0].text = "";
+      c.dropEntry(c.readQueue()[0]);
+      await pollWith(c, syncBody({ sync_v: 9, exercises: [{ id: 1 }] }));
+      expect(c.exercises.map((e) => e.id)).toEqual([1]);
+    });
+
+    it("progress is applied, ordered by as_of", async () => {
+      routeFetch();
+      const c = syncPage();
+      c.applyProgress({ logged: 3, prescribed: 4, as_of: 50 });
+      await pollWith(c, syncBody({ progress: { logged: 1, prescribed: 4, as_of: 10 } }));
+      expect(c.progress.logged).toBe(3);
+      await pollWith(c, syncBody({ sync_v: 9, progress: { logged: 4, prescribed: 4, as_of: 90 } }));
+      expect(c.progress.logged).toBe(4);
+    });
+
+    it("status is adopted, but not during finish() or with a queued log", async () => {
+      routeFetch();
+      const c = syncPage();
+      await pollWith(c, syncBody({ status: "done" }));
+      expect(c.status).toBe("done");
+      c.status = "pending";
+      c.saving = true;
+      await pollWith(c, syncBody({ sync_v: 9, status: "done" }));
+      expect(c.status).toBe("pending");
+      c.saving = false;
+      c.enqueue({ status: "done" });
+      await pollWith(c, syncBody({ sync_v: 10, status: "done" }));
+      expect(c.status).toBe("pending");
+    });
+
+    it("status older than an adopted log answer is not adopted", async () => {
+      const calls = routeFetch({ log: () => res({ body: { ...logBody("done"), sync_v: 9 } }) });
+      const c = syncPage();
+      await c.finish();
+      expect(calls.log).toHaveLength(1);
+      expect(c.status).toBe("done");
+      await pollWith(c, syncBody({ sync_v: 8, status: "pending" }));
+      expect(c.status).toBe("done");
+      await pollWith(c, syncBody({ sync_v: 10, status: "pending" }));
+      expect(c.status).toBe("pending");
+    });
+
+    it("notes are adopted only when clean", async () => {
+      routeFetch();
+      const c = syncPage();
+      await pollWith(c, syncBody({ notes: "coach saw it" }));
+      expect(c.notes).toBe("coach saw it");
+      expect(c._notesSavedText).toBe("coach saw it");
+      c.notes = "typing";
+      c.noteInput();
+      await pollWith(c, syncBody({ sync_v: 9, notes: "other" }));
+      expect(c.notes).toBe("typing");
+    });
+  });
+});
+
+describe("two queued new lines, the coach logs on line 1 meanwhile (e2e)", () => {
+  // A server that holds the coach's set on line 1 and files a `new` write on a
+  // taken number onto the next free one, answering like the real endpoint.
+  function fakeServer() {
+    const stack = new Map([[1, "5 @ 225"]]);
+    const posted = [];
+    global.fetch = vi.fn(async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      posted.push(body);
+      let line = body.line;
+      let relocated = false;
+      if (body.new && stack.has(line)) {
+        relocated = true;
+        const from = line;
+        line = 1;
+        while (stack.has(line)) line += 1;
+        stack.set(line, body.text);
+        return res({ body: relocatedAnswer(from, line, body.text) });
+      }
+      stack.set(line, body.text);
+      return res({ body: relocatedAnswer(null, line, body.text) });
+    });
+    const relocatedAnswer = (from, line, text) => ({
+      ok: true,
+      sync_v: 9,
+      progress: { logged: 0, prescribed: 4 },
+      ...(from ? { relocated_from: from } : {}),
+      cell: { line, text, warn: false, warn_reason: "", entered_by_coach: false },
+      exercise_lines: {
+        coach_lines: [],
+        sub_lines: [...stack].map(([l, t]) => ({ line: l, text: t, entered_by_coach: l === 1 })),
+      },
+    });
+    return posted;
+  }
+
+  it("converges to each line exactly once", async () => {
+    const posted = fakeServer();
+    const c = initWith({ exercises: [{ id: 1, pad_lines: 2 }] });
+    const ex = c.exercises[0];
+    ex.sub_lines[0].text = "225 x 5";
+    ex.sub_lines[1].text = "230 x 5";
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("offline"));
+    await c.saveCell(ex, 1);
+    await c.saveCell(ex, 2);
+    expect(c.readQueue()).toHaveLength(2);
+    const server = fakeServer();
+    await c.flushQueue();
+    expect(server.length).toBeGreaterThanOrEqual(2);
+    expect(ex.sub_lines.map((l) => l.text)).toEqual(["5 @ 225", "225 x 5", "230 x 5"]);
+    expect(ex.sub_lines.map((l) => l.line)).toEqual([1, 2, 3]);
+    expect(c.readQueue()).toEqual([]);
+    expect(posted).toEqual([]);
+  });
+});
+
+describe("live session sync: review round 1 (#709)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    for (const c of syncPages.splice(0)) c._pollStopped = true;
+    document.body.querySelectorAll("input.focus-probe").forEach((n) => n.remove());
+    delete document.visibilityState;
+    vi.useRealTimers();
+  });
+
+  const focusOn = (attr, id) => {
+    const input = document.createElement("input");
+    input.className = "focus-probe";
+    input.dataset[attr] = String(id);
+    document.body.appendChild(input);
+    input.focus();
+    return input;
+  };
+  const srvLine = (line, text, token = "", extra = {}) => ({ line, text, token, ...extra });
+
+  describe("1. a landed write is recognized by its token", () => {
+    function landed(text) {
+      const c = syncPage({ exercises: [{ id: 1, pad_lines: 1 }] });
+      const ex = c.exercises[0];
+      const entry = ex.sub_lines[0];
+      entry.text = text;
+      entry.savedText = undefined; // the answer was lost
+      entry.newToken = "tk";
+      c.enqueueCell({ exercise_id: 1, line: 1, text, new: true, token: "tk" });
+      return { c, ex, entry };
+    }
+    const stack = {
+      coach_lines: [],
+      sub_lines: [
+        srvLine(1, "5 @ 225", "", { entered_by_coach: true }),
+        srvLine(2, "225 x 5", "tk"),
+      ],
+    };
+
+    it("an edited entry keeps its text, re-keys onto the landed line and re-posts with the token", () => {
+      const { c, ex, entry } = landed("230 x 5");
+      c.applyExerciseLines(ex, stack);
+      expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([
+        [1, "5 @ 225"],
+        [2, "230 x 5"],
+      ]);
+      expect(ex.sub_lines[1]).toBe(entry);
+      expect(entry.savedText).toBe("225 x 5");
+      expect(entry.newToken).toBe("tk");
+      expect(c.readQueue().map((q) => q.body)).toEqual([
+        { exercise_id: 1, line: 2, text: "230 x 5", new: true, token: "tk" },
+      ]);
+    });
+
+    it("an unedited entry just becomes the server's line, once", () => {
+      const { c, ex, entry } = landed("225 x 5");
+      c.applyExerciseLines(ex, stack);
+      expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([
+        [1, "5 @ 225"],
+        [2, "225 x 5"],
+      ]);
+      expect(ex.sub_lines[1]).toBe(entry);
+      expect(entry.newToken).toBeUndefined();
+      expect(c.readQueue()).toEqual([]);
+    });
+
+    it("with no token match it behaves as before (displaced as someone else's text)", () => {
+      const { c, ex } = landed("230 x 5");
+      c.applyExerciseLines(ex, {
+        coach_lines: [],
+        sub_lines: [srvLine(1, "5 @ 225", "", { entered_by_coach: true })],
+      });
+      expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([
+        [1, "5 @ 225"],
+        [2, "230 x 5"],
+      ]);
+    });
+  });
+
+  describe("2. a save running is left alone", () => {
+    it("a merge neither moves it nor adds its write's server line a second time", () => {
+      const c = syncPage({ exercises: [{ id: 1, pad_lines: 1 }] });
+      const ex = c.exercises[0];
+      ex.sub_lines[0].text = "225 x 5";
+      ex.sub_lines[0].newToken = "tk";
+      c._lineSavesRunning["1:1"] = 1;
+      c.applyExerciseLines(ex, {
+        coach_lines: [],
+        sub_lines: [srvLine(1, "5 @ 225", "", { entered_by_coach: true }), srvLine(2, "225 x 5", "tk")],
+      });
+      expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([[1, "225 x 5"]]);
+    });
+
+    it("a poll merged while the answer body is being read leaves one copy", async () => {
+      let gate;
+      const held = new Promise((r) => (gate = r));
+      const calls = routeFetch({
+        cell: (b) => ({
+          ok: true,
+          status: 200,
+          redirected: false,
+          json: async () => {
+            await held;
+            return { ok: true, sync_v: 12, cell: { line: b.line, text: b.text } };
+          },
+        }),
+      });
+      const c = syncPage({ exercises: [{ id: 1, pad_lines: 1 }] });
+      const ex = c.exercises[0];
+      ex.sub_lines[0].text = "225 x 5";
+      const save = c.saveCell(ex, 1);
+      await tick(0);
+      c.applySync(
+        syncBody({
+          sync_v: 11,
+          exercises: [
+            { id: 1, coach_lines: [], sub_lines: [srvLine(2, "225 x 5", calls.cell[0].token)] },
+          ],
+        }),
+      );
+      gate();
+      await save;
+      expect(ex.sub_lines.map((l) => [l.line, l.text])).toEqual([[1, "225 x 5"]]);
+      expect(c.readQueue()).toEqual([]);
+    });
+
+    it("an early return removes a clean copy carrying the same token, never a dirty one", () => {
+      const c = syncPage({ exercises: [{ id: 1, pad_lines: 1 }] });
+      const ex = c.exercises[0];
+      const keep = { line: 2, text: "a", savedText: "a", _k: "k1" };
+      const copy = { line: 1, text: "a", savedText: "a", serverToken: "tk", _k: "k2" };
+      const edited = { line: 3, text: "b", savedText: "a", serverToken: "tk", _k: "k3" };
+      ex.sub_lines = [copy, keep, edited];
+      c._dropTokenCopies(ex, keep, "tk");
+      expect(ex.sub_lines.map((l) => l._k)).toEqual(["k1", "k3"]);
+    });
+  });
+
+  describe("3. focus", () => {
+    const body = (v, ex1) =>
+      syncBody({
+        sync_v: v,
+        exercises: [
+          ex1,
+          { id: 2, name: "Press", coach_lines: [{ line: 1, text: "cue 2" }] },
+        ],
+      });
+
+    it("a focused clean line does not take the coach's text; the exercise waits, the poll retries fast", async () => {
+      const calls = routeFetch({
+        sync: () =>
+          res({ body: body(8, { id: 1, name: "Squat", sub_lines: [srvLine(1, "5 @ 225", "", { entered_by_coach: true })] }) }),
+      });
+      const c = syncPage();
+      const input = focusOn("mesoEx", 1);
+      await tick(3000);
+      expect(c.exercises[0].sub_lines[0].text).toBe("");
+      expect(c.exercises[1].coach_lines).toEqual([{ line: 1, text: "cue 2" }]);
+      await tick(3000);
+      expect(calls.sync).toEqual([SYNC_URL + "?v=5", SYNC_URL + "?v=5"]);
+      input.blur();
+      await tick(3000);
+      expect(c.exercises[0].sub_lines[0].text).toBe("5 @ 225");
+      await tick(3000);
+      expect(calls.sync[3]).toBe(SYNC_URL + "?v=8");
+    });
+
+    it("a focused dirty line is never renumbered", async () => {
+      routeFetch({
+        sync: () =>
+          res({
+            body: body(8, {
+              id: 1,
+              name: "Squat",
+              coach_lines: [{ line: 1, text: "cue" }],
+              sub_lines: [],
+            }),
+          }),
+      });
+      const c = syncPage();
+      const line = c.exercises[0].sub_lines[0];
+      line.text = "half-typed";
+      focusOn("mesoEx", 1);
+      await tick(3000);
+      expect(c.exercises[0].sub_lines[0]).toBe(line);
+      expect(line.line).toBe(1);
+      expect(c.exercises[0].coach_lines).toEqual([]);
+    });
+
+    it("the 1RM input's focus holds its exercise too", async () => {
+      routeFetch({ sync: () => res({ body: body(8, { id: 1, name: "Squat", coach_lines: [{ line: 3, text: "cue" }] }) }) });
+      const c = syncPage();
+      focusOn("mesoEx", 1);
+      await tick(3000);
+      expect(c.exercises[0].coach_lines).toEqual([]);
+    });
+  });
+
+  describe("5. a log answer with no stamp", () => {
+    it("counts as current as of the stamp held", async () => {
+      routeFetch({ log: () => res({ body: logBody("done") }) });
+      const c = syncPage();
+      await c.finish();
+      expect(c._logV).toBe(5);
+    });
+
+    it("an older in-flight poll cannot revert the status", async () => {
+      let release;
+      routeFetch({
+        sync: () => new Promise((r) => (release = () => r(res({ body: syncBody({ sync_v: 8, status: "pending" }) })))),
+        log: () => res({ body: logBody("done") }),
+      });
+      const c = syncPage();
+      c.pollNow();
+      await tick(0);
+      await c.finish();
+      expect(c.status).toBe("done");
+      release();
+      await tick(0);
+      expect(c.status).toBe("done");
+    });
+  });
+
+  describe("1RM", () => {
+    const withOneRm = (sx) => syncBody({ exercises: [{ id: 1, name: "Squat", ...sx }, { id: 2, name: "Press" }] });
+    async function poll(c, body) {
+      routeFetch({ sync: () => res({ body }) });
+      window.dispatchEvent(new Event("focus"));
+      await tick(0);
+    }
+
+    it("a manual value seeds the input, a logged one the placeholder", async () => {
+      const c = syncPage();
+      await poll(c, withOneRm({ one_rm: "140", one_rm_source: "manual" }));
+      expect([c.exercises[0].e1rm, c.exercises[0].one_rm]).toEqual(["140", ""]);
+      await poll(c, { ...withOneRm({ one_rm: "150", one_rm_source: "logged" }), sync_v: 9 });
+      expect([c.exercises[0].e1rm, c.exercises[0].one_rm]).toEqual(["", "150"]);
+    });
+
+    it("is not taken while the input has a save pending or running", async () => {
+      const c = syncPage();
+      c.exercises[0].e1rm = "typed";
+      c._oneRmTimers[1] = 1;
+      await poll(c, withOneRm({ one_rm: "140", one_rm_source: "manual" }));
+      expect(c.exercises[0].e1rm).toBe("typed");
+      delete c._oneRmTimers[1];
+      c._oneRmBusy[1] = 1;
+      await poll(c, { ...withOneRm({ one_rm: "140", one_rm_source: "manual" }), sync_v: 9 });
+      expect(c.exercises[0].e1rm).toBe("typed");
+      c._oneRmBusy[1] = 0;
+      await poll(c, { ...withOneRm({ one_rm: "140", one_rm_source: "manual" }), sync_v: 10 });
+      expect(c.exercises[0].e1rm).toBe("140");
+    });
+  });
+});
+
+describe("live session sync: final round (#709)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    for (const c of syncPages.splice(0)) c._pollStopped = true;
+    vi.useRealTimers();
+  });
+
+  it("unplaced text whose write landed is removed by a later merge", () => {
+    const c = syncPage({ exercises: [{ id: 1, pad_lines: 1 }] });
+    const ex = c.exercises[0];
+    const entry = ex.sub_lines[0];
+    entry.text = "230 x 5";
+    entry.savedText = undefined;
+    entry.newToken = "tk";
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "230 x 5", new: true, token: "tk" });
+    // Another queued write already targets the landed line's number, so the
+    // retarget is refused and the edit is parked.
+    c.enqueueCell({ exercise_id: 1, line: 2, text: "other", new: true, token: "ot" });
+    const stack = {
+      coach_lines: [],
+      sub_lines: [
+        { line: 1, text: "5 @ 225", token: "", entered_by_coach: true },
+        { line: 2, text: "225 x 5", token: "tk" },
+      ],
+    };
+    c.applyExerciseLines(ex, stack);
+    expect(ex.unplaced).toEqual([{ text: "230 x 5", token: "tk" }]);
+    // The replay lands through the token; the next merge sees the line.
+    c.applyExerciseLines(ex, stack);
+    expect(ex.unplaced).toEqual([]);
+  });
+
+  it("an unplaced item without a matching token stays", () => {
+    const c = syncPage({ exercises: [{ id: 1, pad_lines: 1 }] });
+    const ex = c.exercises[0];
+    ex.unplaced = [{ text: "a", token: "x" }, { text: "b", token: "tk" }];
+    c.applyExerciseLines(ex, { coach_lines: [], sub_lines: [{ line: 2, text: "b", token: "tk" }] });
+    expect(ex.unplaced).toEqual([{ text: "a", token: "x" }]);
+  });
+
+  it("an exercise with a pending or running 1RM save is kept though the poll omits it", async () => {
+    routeFetch({ sync: () => res({ body: syncBody({ exercises: [{ id: 1, name: "Squat" }] }) }) });
+    const c = syncPage();
+    c._oneRmTimers[2] = 1;
+    window.dispatchEvent(new Event("focus"));
+    await tick(0);
+    expect(c.exercises.map((e) => e.id)).toEqual([1, 2]);
+    delete c._oneRmTimers[2];
+    c._oneRmBusy[2] = 1;
+    window.dispatchEvent(new Event("focus"));
+    await tick(3000);
+    expect(c.exercises.map((e) => e.id)).toEqual([1, 2]);
+    c._oneRmBusy[2] = 0;
+    window.dispatchEvent(new Event("focus"));
+    await tick(3000);
+    expect(c.exercises.map((e) => e.id)).toEqual([1]);
+  });
+
+  it("a 1RM answer's stamp guards the exercise against an older poll", async () => {
+    const c = syncPage();
+    c.oneRmUrl = "/meso/api/me/session/42/one-rm/";
+    c.exercises[0].e1rm = "150";
+    const calls = routeFetch({
+      sync: () =>
+        res({
+          body: syncBody({
+            sync_v: 10,
+            exercises: [{ id: 1, name: "Squat", one_rm: "100", one_rm_source: "manual" }, { id: 2, name: "Press" }],
+          }),
+        }),
+    });
+    const base = global.fetch;
+    global.fetch = vi.fn((url, opts) =>
+      url === c.oneRmUrl
+        ? Promise.resolve(res({ body: { ok: true, one_rm: "150", source: "manual", sync_v: 12 } }))
+        : base(url, opts),
+    );
+    await c._postOneRm(c.exercises[0]);
+    expect(c.exerciseV[1]).toBe(12);
+    window.dispatchEvent(new Event("focus"));
+    await tick(0);
+    expect(calls.sync).toHaveLength(1);
+    expect(c.exercises[0].e1rm).toBe("150");
   });
 });

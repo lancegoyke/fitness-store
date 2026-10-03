@@ -2497,3 +2497,76 @@ describe("coach set lines, kind chips, refusals and retry (#709)", () => {
     });
   });
 });
+
+// --- #709 PR 2: a remote merge never clobbers a dirty draft -------------------
+describe("dirty drafts survive a remote change (#709 PR 2)", () => {
+  const gridWith = (c: Partial<GridCell>, r: Partial<GridRow> = {}) =>
+    grid({ days: [day({ rows: [row({ ...r, cells: { "1": cell(c) } })] })] });
+
+  it("line 0: a dirty draft stays while the prop changes; a clean one follows", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<MesoTable {...baseProps({ grid: gridWith({ text: "3 x 5" }) })} />);
+    const input = screen.getByTestId("cell-text-100");
+    await user.click(input);
+    await user.type(input, " mine");
+    rerender(<MesoTable {...baseProps({ grid: gridWith({ text: "5 x 5 remote" }) })} />);
+    expect(screen.getByTestId("cell-text-100")).toHaveValue("3 x 5 mine");
+  });
+
+  it("line 0: a clean draft takes the remote text", () => {
+    const { rerender } = render(<MesoTable {...baseProps({ grid: gridWith({ text: "3 x 5" }) })} />);
+    rerender(<MesoTable {...baseProps({ grid: gridWith({ text: "5 x 5 remote" }) })} />);
+    expect(screen.getByTestId("cell-text-100")).toHaveValue("5 x 5 remote");
+  });
+
+  it("row column: a dirty tempo draft stays", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<MesoTable {...baseProps({ grid: gridWith({}, { tempo: "3010" }) })} />);
+    const input = screen.getByTestId("row-tempo-9");
+    await user.click(input);
+    await user.type(input, "x");
+    rerender(<MesoTable {...baseProps({ grid: gridWith({}, { tempo: "2020" }) })} />);
+    expect(screen.getByTestId("row-tempo-9")).toHaveValue("3010x");
+  });
+
+  it("row name: a dirty name draft stays", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<MesoTable {...baseProps({ grid: gridWith({}, { name: "Squat" }) })} />);
+    const input = screen.getByTestId("row-name-9");
+    await user.click(input);
+    await user.type(input, "s");
+    rerender(<MesoTable {...baseProps({ grid: gridWith({}, { name: "Back squat" }) })} />);
+    expect(screen.getByTestId("row-name-9")).toHaveValue("Squats");
+  });
+
+  it("a clean row column and name follow the remote value", () => {
+    const { rerender } = render(<MesoTable {...baseProps({ grid: gridWith({}, { tempo: "3010", name: "Squat" }) })} />);
+    rerender(<MesoTable {...baseProps({ grid: gridWith({}, { tempo: "2020", name: "Back squat" }) })} />);
+    expect(screen.getByTestId("row-tempo-9")).toHaveValue("2020");
+    expect(screen.getByTestId("row-name-9")).toHaveValue("Back squat");
+  });
+
+  it("a dirty sub-line draft stays while a new athlete line joins the roll-up", async () => {
+    const user = userEvent.setup();
+    const mine = { id: 1, line: 1, text: "tempo", athlete_authored: false };
+    const { rerender } = render(<MesoTable {...baseProps({ grid: gridWith({ lines: [mine] }) })} />);
+    const input = screen.getByTestId("cell-line-100-1");
+    await user.click(input);
+    await user.type(input, "!");
+    rerender(
+      <MesoTable
+        {...baseProps({
+          grid: gridWith({
+            lines: [
+              { ...mine, text: "tempo remote" },
+              { id: 2, line: 2, text: "225 x 5", athlete_authored: true },
+            ],
+            athlete_summary: { sets: 1, load: "225", unit: "lb", rpe: "" },
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("cell-line-100-1")).toHaveValue("tempo!");
+    expect(screen.getByTestId("cell-athlete-marker-100")).toHaveTextContent("✓ 1 set");
+  });
+});

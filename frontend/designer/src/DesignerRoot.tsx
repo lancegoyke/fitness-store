@@ -10,7 +10,7 @@
 // renders a blank island rather than a degraded one-week grid; see
 // views.py's MesoDesignerView.get_context_data), not just an optional
 // enhancement layered onto a separate #meso-plan-data payload.
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import "./designer.css";
 
 import { TopBar } from "./components/TopBar";
@@ -23,6 +23,7 @@ import type { PeriodStyle } from "./components/BlockView";
 import { AthletePreview } from "./components/AthletePreview";
 
 import { useGrid } from "./hooks/useGrid";
+import { usePlanSync } from "./hooks/usePlanSync";
 import type { Id } from "./hooks/useGrid";
 import { useTableReorder } from "./hooks/useTableReorder";
 import { useUndoKeyboard } from "./hooks/useUndoKeyboard";
@@ -171,7 +172,22 @@ export function DesignerRoot() {
   // re-source off `gridState.grid` (plan/athlete/phases/weeks/days),
   // additive fields serialize_mesocycle_grid now carries for exactly this
   // reason (see serializers.py).
-  const gridState = useGrid({ planId, csrf, initialGrid: hydrated?.gridData ?? null });
+  // #709 PR 2: a local write switches the live-sync poll to its fast cadence
+  // (through a ref: usePlanSync needs useGrid's merge, so it is built after).
+  const activityRef = useRef<() => void>(() => {});
+  const gridState = useGrid({
+    planId,
+    csrf,
+    initialGrid: hydrated?.gridData ?? null,
+    onActivity: () => activityRef.current(),
+  });
+  const planSync = usePlanSync({
+    planId,
+    mesocycleId,
+    getVersion: gridState.getSyncV,
+    onGrid: gridState.applyRemoteGrid,
+  });
+  activityRef.current = planSync.markActive;
 
   // The global Ctrl/Cmd+Z window shortcut now always routes to the grid's
   // own undo/redo — there's only one undo/redo owner left, so the

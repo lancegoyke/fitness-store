@@ -18,7 +18,7 @@
 // to exercise useGridNav through the retired WeekGrid and are dropped, not
 // ported (verified: useTableNav.test.tsx's "focus restoration across a grid
 // swap" describe block already covers every tier those blocks pinned).
-import { render, screen, cleanup, waitFor, fireEvent, within } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DesignerRoot } from "./DesignerRoot";
 import type { MesoGrid } from "./lib/api";
@@ -214,7 +214,7 @@ describe("hydration: full payload", () => {
         "Old program",
       ),
     );
-    expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/");
+    expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/?mesocycle=1");
   });
 
   it("renames the block in Periodization and refreshes every block label after undo", async () => {
@@ -262,7 +262,7 @@ describe("hydration: full payload", () => {
     await waitFor(() => expect(screen.getByText("Block 1 · Wk 1")).toBeInTheDocument());
     await user.click(screen.getByText("Periodization"));
     expect(screen.getByRole("button", { name: "Rename block: Block 1" })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/");
+    expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/?mesocycle=1");
   });
 
   it("hydrates the chat thread from #meso-chat-thread when present", () => {
@@ -442,7 +442,7 @@ describe("table view (issue #455 phase A5: the only view left besides periodizat
     fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/undo/", expect.anything()));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/?mesocycle=1"));
   });
 });
 
@@ -578,5 +578,45 @@ describe("hydration: missing or malformed payload", () => {
 
     expect(spy).toHaveBeenCalled();
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("live sync (#709 PR 2)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a new athlete line arriving through a poll shows up in the roll-up marker", async () => {
+    vi.useFakeTimers();
+    jsonScript("meso-grid-data", gridPayload({ sync_v: 4 }));
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    const remote = gridPayload({ sync_v: 5 }) as any;
+    remote.days[0].rows[0].cells["1"] = {
+      prescription_id: 100,
+      text: "3 x 5, RPE 8, 100",
+      skipped: false,
+      lines: [{ id: 9, line: 1, text: "225 x 5", athlete_authored: true }],
+      athlete_summary: { sets: 1, load: "225", unit: "lb", rpe: "" },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true, changed: true, sync_v: 5, grid: remote }) });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    expect(screen.queryByTestId("cell-athlete-marker-100")).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/meso/api/plan/7/sync/?v=4&mesocycle=1");
+    expect(screen.getByTestId("cell-athlete-marker-100")).toHaveTextContent("✓ 1 set");
+    // the remote change marks the poll active: the next poll is 3s later
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]![0]).toBe("/meso/api/plan/7/sync/?v=5&mesocycle=1");
   });
 });

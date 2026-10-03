@@ -503,6 +503,7 @@ class TestSubLinePresenter:
                 "text": "RPE 8",
                 "warn": False,
                 "warn_reason": "",
+                "token": "",
                 "entered_by_coach": False,
             }
         ]
@@ -516,6 +517,7 @@ class TestSubLinePresenter:
                 "text": "RPE 8",
                 "warn": False,
                 "warn_reason": "",
+                "token": "",
                 "entered_by_coach": False,
             }
         ]
@@ -606,6 +608,7 @@ class TestSubLinePresenter:
                 "text": "225 x 5",
                 "warn": False,
                 "warn_reason": "",
+                "token": "",
                 "entered_by_coach": False,
             }
         ]

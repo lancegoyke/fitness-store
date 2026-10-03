@@ -488,6 +488,30 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
       }
     }
 
+    // #709 PR 2: a data merge (a live-sync poll, a refetch) must never move
+    // focus off an input that is still connected and focused. Its coordinate
+    // can still change under it (the ghost's line number is max+1, so an
+    // arriving athlete line renumbers it), which used to make the anchor
+    // "hollow", fall back to line 0 and blur-commit a half-typed draft. Adopt
+    // the focused input's own identity as the anchor instead, without focusing.
+    if (active && active !== document.body && active.isConnected) {
+      const key = active.getAttribute("data-grid-cell");
+      if (key) {
+        const [rowPart, weekPart, field, linePart] = key.split(":");
+        commitAnchor(
+          {
+            rowId: Number(rowPart),
+            weekId: weekPart === "row" ? null : Number(weekPart),
+            field: field as TableColumn,
+            line: linePart === undefined ? 0 : Number(linePart),
+          },
+          flat,
+          false,
+        );
+        return;
+      }
+    }
+
     const prev = anchorRef.current;
     if (prev === null) {
       commitAnchor(firstCellOf(flat), flat, false);

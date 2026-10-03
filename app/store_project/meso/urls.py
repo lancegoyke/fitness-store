@@ -89,6 +89,13 @@ urlpatterns = [
         views.athlete_set_one_rm,
         name="athlete_set_one_rm",
     ),
+    # Live session sync (#709 PR 2): the athlete page's "did anything change?"
+    # poll. Network-only (the service worker never answers /meso/api/).
+    path(
+        "api/me/session/<int:pk>/sync/",
+        views.athlete_session_sync,
+        name="athlete_session_sync",
+    ),
     # Athlete freeform sub-line tracking (Phase 4a): upsert one (slot × week ×
     # line) cell the athlete authored — undo-isolated from the coach.
     path(
@@ -264,6 +271,12 @@ urlpatterns = [
         "api/plan/<int:plan_id>/grid/",
         views.api_mesocycle_grid,
         name="api_mesocycle_grid",
+    ),
+    # Live session sync (#709 PR 2): the designer's "did anything change?" poll.
+    path(
+        "api/plan/<int:plan_id>/sync/",
+        views.api_plan_sync,
+        name="api_plan_sync",
     ),
     path(
         "api/plan/<int:plan_id>/title/",

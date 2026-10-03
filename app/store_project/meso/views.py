@@ -40,6 +40,7 @@ from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
@@ -108,7 +109,9 @@ from .models import SessionSlot
 from .models import Unit
 from .models import Week
 from .models import WeekDelivery
+from .models import bump_plan_sync
 from .models import newest_session_logs
+from .models import read_plan_sync
 from .models import sub_line_warn_reason
 from .names import athlete_name
 from .names import clean_name
@@ -368,7 +371,10 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         # island instead, per CONTRACT.md).
         mesocycle = _default_grid_mesocycle(plan)
         if mesocycle is not None:
-            ctx["grid_data"] = serialize_mesocycle_grid(mesocycle)
+            # The stamp from the plan row loaded above, before the mesocycle.
+            ctx["grid_data"] = serialize_mesocycle_grid(
+                mesocycle, sync_v=plan.sync_version
+            )
         # The persisted agent conversation, rebuilt from this plan's proposal
         # batches so the chat survives a reload (the JS hydrates ``messages``
         # from it, falling back to the greeting when empty).
@@ -2116,7 +2122,11 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         # through ``get()`` (and so this same context build) too.
         if self.request.method == "GET":
             track(EventName.SESSION_OPENED, actor=self.request.user, subject=session)
-        sess = presenters.athlete_session(session, self.request.user)
+        sess = presenters.athlete_session(
+            session,
+            self.request.user,
+            sync_v=session.week.mesocycle.plan.sync_version,
+        )
         ctx["active"] = "training"
         ctx["session"] = sess
         ctx["log_data"] = presenters.athlete_log_payload(sess)
@@ -2129,6 +2139,33 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         ctx.update(_pwa_context())
         return ctx
+
+
+@login_required
+@require_GET
+@never_cache
+def athlete_session_sync(request, pk):
+    """Live-sync poll for the athlete's logger (#709 PR 2).
+
+    ``?v=<last seen sync_v>`` (required). Scoped by ``_athlete_session_or_404``
+    (one query, whose ``select_related`` reaches the plan, so the stamp comes
+    free): a foreign, archived or deleted session is a flat 404. Unchanged is
+    that one query and nothing else. Changed returns the same payload the page
+    hydrates from (``athlete_log_payload``), with ``sync_v`` read before its
+    rows by ``athlete_session``, so the client can merge it with the freshness
+    guard (#718).
+    """
+    since, bad = _sync_since_or_400(request)
+    if bad is not None:
+        return bad
+    session = _athlete_session_or_404(request.user, pk)
+    current = session.week.mesocycle.plan.sync_version
+    if current == since:
+        return JsonResponse({"ok": True, "changed": False, "sync_v": current})
+    payload = presenters.athlete_log_payload(
+        presenters.athlete_session(session, request.user, sync_v=current)
+    )
+    return JsonResponse({"ok": True, "changed": True, **payload})
 
 
 @login_required
@@ -2258,9 +2295,17 @@ def athlete_log_session(request, pk):
                         "progress": presenters.athlete_set_progress(
                             session, request.user
                         ),
+                        "sync_v": read_plan_sync(plan.pk),
                     }
                 )
             log = SessionLog.objects.create_for_pair(session, request.user)
+            created_log = True
+        else:
+            created_log = False
+        # What the athlete's page and the coach's grid can SEE of this log
+        # before the save (#709 PR 2): status, notes and date. ``last_activity_at``
+        # moves on every post but is shown nowhere, so it never counts.
+        shown_before = (log.status, log.notes, log.date)
         # session_completed analytics (#509): captured before this save changes
         # anything, so it describes the log's state walking in.
         was_done = log.status == SessionLog.Status.DONE
@@ -2289,6 +2334,16 @@ def athlete_log_session(request, pk):
         # athlete's, so a coach undo never reaps it (#719).
         log.opened_by_coach = False
         log.save()
+        # Live-sync stamp (#709 PR 2): only when something visible changed (a
+        # new log, a status flip, new notes, a new date). The page posts notes
+        # on a debounce and Finish twice is idempotent, so an unconditional bump
+        # would make every echo wake the other screen's poller for nothing.
+        # Sync-only: ``modified`` orders the coach's working-plan redirect.
+        # LOCK ORDER: the Plan row lock was taken first, at the top of this
+        # block (#588), before the Session lock, so this UPDATE only re-enters
+        # a lock already held.
+        if created_log or shown_before != (log.status, log.notes, log.date):
+            _bump_sync(plan)
         # Refresh the athlete's persisted 1RM for this session's lifts from their
         # *completed* logs. Run on every post, not only a done one: the estimate
         # is derived from DONE logs only, so a PENDING -> DONE flip changes its
@@ -2308,6 +2363,8 @@ def athlete_log_session(request, pk):
             ],
             session.week.mesocycle.plan.unit,
         )
+        # The stamp after this post's own bump, read in the same transaction.
+        sync_v = read_plan_sync(plan.pk)
     if has_legacy_sets:
         track(
             EventName.LEGACY_SETS_IGNORED,
@@ -2332,6 +2389,7 @@ def athlete_log_session(request, pk):
                 "notes": log.notes,
             },
             "progress": presenters.athlete_set_progress(session, request.user),
+            "sync_v": sync_v,
         }
     )
 
@@ -2373,12 +2431,19 @@ def athlete_set_one_rm(request, pk):
     if not ok:
         return HttpResponseBadRequest("value must be a positive number or blank.")
 
-    row = meso_one_rm.set_manual_one_rm(
-        request.user,
-        prescriptions[presc_id],
-        value,
-        session.week.mesocycle.plan.unit,
-    )
+    plan = session.week.mesocycle.plan
+    with transaction.atomic():
+        # #709 PR 2: the 1RM shows on both screens (the athlete's helper, the
+        # coach's badge), so this write advances the sync stamp. LOCK ORDER:
+        # Plan first; nothing in ``set_manual_one_rm`` locks a Session or
+        # Prescription, so the Plan -> Session -> Prescription order holds.
+        # Bumped on every accepted call: telling "unchanged" apart would need
+        # the manual row read first, and a clear re-derives from logs.
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
+        row = meso_one_rm.set_manual_one_rm(
+            request.user, prescriptions[presc_id], value, plan.unit
+        )
+        _bump_sync(plan)
     return JsonResponse(
         {
             "ok": True,
@@ -2639,6 +2704,9 @@ def athlete_cell_write(request, pk):
                             "exercise_lines": presenters.athlete_exercise_lines(
                                 session, request.user, line_zero[exercise_id]
                             ),
+                            # #709 PR 2: read inside the transaction (see the
+                            # 200 path); the page ranks this fresh stack by it.
+                            "sync_v": read_plan_sync(plan.pk),
                         },
                         status=422,
                     )
@@ -2659,6 +2727,7 @@ def athlete_cell_write(request, pk):
                         "exercise_lines": presenters.athlete_exercise_lines(
                             session, request.user, line_zero[exercise_id]
                         ),
+                        "sync_v": read_plan_sync(plan.pk),
                     },
                     status=422,
                 )
@@ -2791,6 +2860,19 @@ def athlete_cell_write(request, pk):
             SessionLog.objects.filter(session=session, athlete=request.user).update(
                 last_activity_at=timezone.now(), opened_by_coach=False
             )
+            # #709 PR 2: the un-skip repair (unchanged text, a set derived now)
+            # skips `_touch_plan` above but changes the count and the line's
+            # warning, so the stamp must move or another tab never sees it.
+            # A second bump on a real text edit costs one UPDATE and is
+            # harmless; the Plan row is already locked at the top of the block.
+            if text == previous_text:
+                _bump_sync(plan)
+        # #709 PR 2: the stamp after this write's own bump, read inside the
+        # transaction so it is at least that bump and never reflects a commit
+        # newer than the cell this answer carries (#718). A query, so it is
+        # skipped on a poisoned connection exactly like the two above; the
+        # poisoned branch below answers 503 and never uses it.
+        sync_v = None if connection.needs_rollback else read_plan_sync(plan.pk)
         # #571 CAPTURE (shape 2): the LAST statement in the block, deliberately
         # — a plain attribute read, not a query, so it's safe to run even
         # against a poisoned connection. `Atomic.__exit__` clears
@@ -2842,6 +2924,7 @@ def athlete_cell_write(request, pk):
         {
             "ok": True,
             **extra,
+            "sync_v": sync_v,
             "cell": {
                 "id": cell.pk,
                 "exercise_slot_id": slot.pk,
@@ -3756,7 +3839,7 @@ def manifest_webmanifest(request):
 #     page loses its Set rows and gains the progress header and the single
 #     "Finish session" button. A cached page would still post `sets`, which the
 #     server now ignores, so installed clients need a fresh cache namespace.
-PWA_CACHE_VERSION = "meso-pwa-v14"
+PWA_CACHE_VERSION = "meso-pwa-v15"
 
 
 @require_GET
@@ -5001,9 +5084,36 @@ def _touch_plan(plan):
     The autosave/deliver endpoints write *child* rows (prescriptions, weeks),
     which would otherwise leave ``Plan.modified`` stale — and ``_coach_working_plan``
     orders the bare designer/deliver redirect target by it. ``modified`` is
-    ``auto_now``, so saving the field stamps it now.
+    ``auto_now``, so a plain ``save`` would stamp it; the UPDATE below sets it
+    explicitly instead.
+
+    One statement: ``modified`` and the live-sync ``sync_version`` (#709 PR 2)
+    move together in a single UPDATE, so a poller can never see one without the
+    other. The stamp is mirrored onto the instance for callers that read
+    ``plan.modified`` after.
+
+    LOCK ORDER: every caller inside a transaction holds the Plan row lock
+    already (``plan_deliver`` runs it in autocommit, holding no other row lock,
+    so it cannot invert the order either) (its own
+    ``select_for_update(no_key=True)`` or ``record_plan_action``) before this
+    runs, so the UPDATE's row lock is a re-entrant no-op and adds nothing to the
+    Plan -> Session -> Prescription order. Don't call it before that lock in a
+    path that goes on to lock a Session or Prescription.
     """
-    plan.save(update_fields=["modified"])
+    now = timezone.now()
+    bump_plan_sync(plan.pk, modified=now)
+    plan.modified = now
+
+
+def _bump_sync(plan):
+    """Sync-only bump (#709 PR 2): advance ``sync_version``, leave ``modified``.
+
+    For athlete-side writes (Finish, notes, settle) that change what the coach's
+    grid and the athlete's page show but must not reorder the coach's "working
+    plan" redirect, which sorts on ``Plan.modified``. Same lock-order contract
+    as ``_touch_plan``: the Plan row is already locked by the caller.
+    """
+    bump_plan_sync(plan.pk)
 
 
 def _cell_or_404(plan, pk):
@@ -5168,6 +5278,10 @@ def prescription_patch(request, plan_id, pk):
                 # #715: the row's new identity has no stored 1RM yet.
                 meso_one_rm.refresh_after_identity_change(plan, [slot])
             _touch_plan(plan)
+        # The stamp AFTER this write (#709 PR 2), read in the same transaction
+        # so it is at least this write's bump: the client records it as the
+        # freshness of the cell it just adopted (#718).
+        sync_v = read_plan_sync(plan.pk)
     # Row-level reply + refreshed history: this endpoint records an undo action
     # but doesn't re-serialize the plan, so without `history` the client's undo
     # affordance would stay stale until the next full envelope.
@@ -5176,6 +5290,7 @@ def prescription_patch(request, plan_id, pk):
             "ok": True,
             "prescription": serialize_prescription(cell),
             "history": serialize_plan_history(plan),
+            "sync_v": sync_v,
         }
     )
 
@@ -5563,18 +5678,85 @@ def api_mesocycle_grid(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
+    mesocycle, bad = _grid_mesocycle_or_400(request, plan)
+    if bad is not None:
+        return bad
+    return JsonResponse(
+        {
+            "ok": True,
+            **serialize_mesocycle_grid(mesocycle, sync_v=plan.sync_version),
+        }
+    )
+
+
+def _grid_mesocycle_or_400(request, plan):
+    """The block a grid read targets: ``?mesocycle=<id>`` or the plan's default.
+
+    Shared by ``api_mesocycle_grid`` and the live-sync poll so both resolve a
+    block identically. Returns ``(mesocycle, None)`` or ``(None, 400 response)``;
+    404s (foreign block, plan with no block) raise.
+    """
     raw_mesocycle_id = request.GET.get("mesocycle")
     if raw_mesocycle_id is not None:
         try:
             mesocycle_id = int(raw_mesocycle_id)
         except (TypeError, ValueError):
-            return HttpResponseBadRequest("mesocycle must be an integer.")
-        mesocycle = get_object_or_404(Mesocycle, pk=mesocycle_id, plan=plan)
-    else:
-        mesocycle = _default_grid_mesocycle(plan)
-        if mesocycle is None:
-            raise Http404("This plan has no block yet.")
-    return JsonResponse({"ok": True, **serialize_mesocycle_grid(mesocycle)})
+            return None, HttpResponseBadRequest("mesocycle must be an integer.")
+        return get_object_or_404(Mesocycle, pk=mesocycle_id, plan=plan), None
+    mesocycle = _default_grid_mesocycle(plan)
+    if mesocycle is None:
+        raise Http404("This plan has no block yet.")
+    return mesocycle, None
+
+
+def _sync_since_or_400(request):
+    """The client's last-seen ``sync_version`` from ``?v=``, or a 400.
+
+    Returns ``(v, None)`` / ``(None, response)``. A bare ``int()`` would accept
+    ``" 7 "`` and ``"+7"``; ``isdecimal`` keeps the contract to plain digits.
+    """
+    raw = request.GET.get("v", "")
+    # 18 digits stays inside a signed bigint (and a JS safe integer's reach in
+    # practice); a longer string is never a real stamp and would overflow the
+    # database comparison's parameter, so it is a 400 rather than a 500.
+    if not raw.isascii() or not raw.isdecimal() or len(raw) > 18:
+        return None, HttpResponseBadRequest("v must be a non-negative integer.")
+    return int(raw), None
+
+
+@login_required
+@require_GET
+@never_cache
+def api_plan_sync(request, plan_id):
+    """Live-sync poll for the designer (#709 PR 2): "did anything change?".
+
+    ``?v=<last seen sync_v>`` (required). Unchanged costs exactly ONE query —
+    the plan row with its relationship, enough for the same access rule as
+    ``api_mesocycle_grid`` (``Plan.is_editable_by``; 404 unknown, 403 foreign) —
+    so a tab polling every few seconds is cheap. Changed returns the whole grid
+    (``serialize_mesocycle_grid``, whose own ``sync_v`` is read before its rows,
+    so the stamp is never newer than the rows). Read-only and not
+    billing-gated, like the grid read: an over-limit coach still sees live
+    changes. The service worker never answers ``/meso/api/``, so this always
+    reaches the network.
+    """
+    since, bad = _sync_since_or_400(request)
+    if bad is not None:
+        return bad
+    plan = Plan.objects.select_related("relationship").filter(pk=plan_id).first()
+    if plan is None:
+        raise Http404("Unknown plan")
+    if not plan.is_editable_by(request.user):
+        return HttpResponseForbidden("You do not own this plan.")
+    if plan.sync_version == since:
+        return JsonResponse({"ok": True, "changed": False, "sync_v": plan.sync_version})
+    mesocycle, bad = _grid_mesocycle_or_400(request, plan)
+    if bad is not None:
+        return bad
+    grid = serialize_mesocycle_grid(mesocycle, sync_v=plan.sync_version)
+    return JsonResponse(
+        {"ok": True, "changed": True, "sync_v": grid["sync_v"], "grid": grid}
+    )
 
 
 @login_required
@@ -6234,6 +6416,11 @@ def cell_line_write(request, plan_id, slot_id):
                 "code": code,
                 "error": error,
                 "grid_cell": serializers.grid_cell_for(slot, week),
+                # #709 PR 2: always called inside the write's transaction, so
+                # this is the stamp as that transaction sees it (a refusal
+                # bumps nothing, but its ``grid_cell`` is a fresh read the
+                # client may adopt, and it needs the stamp to rank it, #718).
+                "sync_v": read_plan_sync(plan.pk),
                 **extra,
             },
             status=422,
@@ -6291,6 +6478,7 @@ def cell_line_write(request, plan_id, slot_id):
                     "cell": _coach_cell_payload(prior, slot, week),
                     "grid_cell": serializers.grid_cell_for(slot, week),
                     "history": serialize_plan_history(plan),
+                    "sync_v": read_plan_sync(plan.pk),
                 }
                 if prior.line != line:
                     body["relocated_from"] = line
@@ -6356,6 +6544,7 @@ def cell_line_write(request, plan_id, slot_id):
                     "cell": _coach_cell_payload(existing, slot, week),
                     "grid_cell": serializers.grid_cell_for(slot, week),
                     "history": serialize_plan_history(plan),
+                    "sync_v": read_plan_sync(plan.pk),
                 }
             )
 
@@ -6473,11 +6662,15 @@ def cell_line_write(request, plan_id, slot_id):
                         last_activity_at=timezone.now()
                     )
         _touch_plan(plan)
+        # The stamp after this write's own bump, read in the same transaction
+        # (#709 PR 2): the designer records it against this cell (#718).
+        sync_v = read_plan_sync(plan.pk)
     body = {
         "ok": True,
         "cell": _coach_cell_payload(cell, slot, week),
         "grid_cell": serializers.grid_cell_for(slot, week),
         "history": serialize_plan_history(plan),
+        "sync_v": sync_v,
     }
     if relocated_from is not None:
         body["relocated_from"] = relocated_from
@@ -6669,7 +6862,14 @@ def coach_set_one_rm(request, plan_id, pk):
     if not ok:
         return HttpResponseBadRequest("value must be a positive number or blank.")
 
-    row = meso_one_rm.set_manual_one_rm(plan.athlete, prescription, value, plan.unit)
+    with transaction.atomic():
+        # #709 PR 2: see ``athlete_set_one_rm``: Plan lock first, sync-only
+        # bump on every accepted call, no Session/Prescription lock taken.
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
+        row = meso_one_rm.set_manual_one_rm(
+            plan.athlete, prescription, value, plan.unit
+        )
+        _bump_sync(plan)
     return JsonResponse(
         {
             "ok": True,
@@ -7493,6 +7693,11 @@ def batch_apply(request, batch_id):
             )
         record_plan_action(batch.plan, "Applied agent changes")
         result = agent_apply.apply_batch(batch)
+        # An apply rewrites the program but never went through ``_touch_plan``
+        # (#709 PR 2): without it the coach's other tab and the athlete's page
+        # would never see the agent's edits until a reload. The Plan row lock
+        # was taken at the top of this block, so the UPDATE re-enters it.
+        _touch_plan(batch.plan)
     track(
         EventName.BATCH_APPLIED,
         actor=request.user,
