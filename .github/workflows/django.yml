@@ -236,6 +236,8 @@ jobs:
       # test_live_sync_postgres is the #709 PR 2 / #718 read-order race: a grid read
       # that overlaps a write must never return a NEW sync_version over OLD rows,
       # which needs a second connection that shares the database (not SQLite).
+      # test_training_log_700 is #700's read of every counted set: the newest-log
+      # subquery, the notes regex and the training-date order must hold on Postgres.
       # Add a new Postgres-only file here in the same commit that creates it.
       - name: Run the PostgreSQL-only tests
         run: |
@@ -264,4 +266,5 @@ jobs:
             app/store_project/meso/tests/test_lift_identity_708.py \
             app/store_project/meso/tests/test_coach_athlete_collision_postgres.py \
             app/store_project/meso/tests/test_coach_logs_709.py \
-            app/store_project/meso/tests/test_live_sync_postgres.py
+            app/store_project/meso/tests/test_live_sync_postgres.py \
+            app/store_project/meso/tests/test_training_log_700.py
