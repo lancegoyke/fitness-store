@@ -12,6 +12,7 @@ The reseed rebuild is covered in ``test_seed_demo.py::TestReseedReconciles``;
 """
 
 import logging
+from datetime import timedelta
 
 import pytest
 from django.db import transaction
@@ -164,7 +165,7 @@ class TestDemoAndSandboxPathsStillWork:
         assert row.exercise_slot_id == cell.exercise_slot_id
 
         SandboxSession.objects.filter(user=user).update(
-            expires_at=timezone.now() - timezone.timedelta(hours=1)
+            expires_at=timezone.now() - timedelta(hours=1)
         )
         caplog.set_level(logging.ERROR, logger=sandbox.logger.name)
 

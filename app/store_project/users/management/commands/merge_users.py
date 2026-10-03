@@ -67,7 +67,6 @@ class Command(BaseCommand):
         self.stdout.write(f"- Books: {books_count}")
         self.stdout.write(f"- Total Products: {products_count}")
 
-        # Show user data comparison
         # Meso data is never moved by this command (see the refusal below).
         # Imported here, not at module level, to avoid coupling users' command
         # imports to Meso during Django's app-loading phase.
@@ -116,7 +115,7 @@ class Command(BaseCommand):
                 f"{source_email} has Meso training history ({own_logs} session "
                 f"logs of their own, {coached_logs} on plans they coach). "
                 "merge_users does not move Meso data, and deleting the account "
-                "would delete or strand it. Move it first; nothing was changed."
+                "would delete or strand it, so nothing was changed."
             )
 
         # Confirm before proceeding
