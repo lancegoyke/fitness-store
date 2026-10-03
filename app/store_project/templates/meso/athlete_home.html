@@ -173,7 +173,7 @@
     {% empty %}
       <div class="meso-card meso-card--pad">
         {% if has_training_log %}
-          <p class="meso-row-meta">No active program right now. Your past workouts are still in your <a href="{% url 'meso:athlete_log' %}">Training log</a>.</p>
+          <p class="meso-row-meta">No active program right now. Your past workouts are still in your <a href="{% url 'meso:athlete_log' %}" style="color:var(--accent);font-weight:650;text-decoration:none;">Training log</a>.</p>
         {% else %}
           <p class="meso-row-meta">No active programs yet. Once a coach starts you on a program, it shows up here.</p>
         {% endif %}

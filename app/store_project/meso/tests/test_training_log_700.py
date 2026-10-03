@@ -528,6 +528,25 @@ def test_renamed_lift_keeps_the_name_it_was_logged_as(client, athlete, squat_log
     assert "Front Squat" not in page
 
 
+def test_unanchored_legacy_sets_still_show(client, athlete):
+    # ``performance_history`` doesn't require an anchor, so neither does the log:
+    # a stamped set lost both pointers keeps its lift name, an unstamped one
+    # still shows, and neither drops off the page.
+    w = world(athlete)
+    log = make_log(athlete, w.session, date=today())
+    lset(log, w.cell, 1)
+    stamped = LoggedSet.objects.create(
+        session_log=log, set_number=2, reps="8", load="40", exercise_name="Carry"
+    )
+    bare = LoggedSet.objects.create(session_log=log, set_number=3, reps="10")
+    assert stamped.anchor_slot_id is None and bare.anchor_slot_id is None
+    client.force_login(athlete)
+    page = html(client.get(reverse(WORKOUT_URL, kwargs={"log_pk": log.pk})))
+    assert {stamped.pk, bare.pk} <= logged_set_ids(page)
+    assert "Carry" in page
+    assert "Unnamed exercise" in page
+
+
 def test_coach_entered_set_says_so_athlete_set_does_not(client, athlete):
     w = world(athlete)
     log = make_log(athlete, w.session, date=today())
