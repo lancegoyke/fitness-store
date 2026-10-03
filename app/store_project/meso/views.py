@@ -2285,6 +2285,9 @@ def athlete_log_session(request, pk):
         # else: a re-save with no date keeps the existing workout date.
         if has_notes:
             log.notes = notes
+        # Any post here (a start, a date, notes, Finish) makes the log the
+        # athlete's, so a coach undo never reaps it (#719).
+        log.opened_by_coach = False
         log.save()
         # Refresh the athlete's persisted 1RM for this session's lifts from their
         # *completed* logs. Run on every post, not only a done one: the estimate
@@ -2784,8 +2787,9 @@ def athlete_cell_write(request, pk):
                 or _line_sets(session, request.user, cell) != sets_before
             )
         ):
+            # A real athlete edit also makes the log theirs (#719).
             SessionLog.objects.filter(session=session, athlete=request.user).update(
-                last_activity_at=timezone.now()
+                last_activity_at=timezone.now(), opened_by_coach=False
             )
         # #571 CAPTURE (shape 2): the LAST statement in the block, deliberately
         # — a plain attribute read, not a query, so it's safe to run even
@@ -2927,7 +2931,7 @@ def _upsert_parsed_set(
     *,
     previous_text="",
     unit=None,
-    skipped_clears=False,
+    by_coach=False,
 ):
     """Parse ``cell``'s just-committed text and upsert its derivative ``LoggedSet``.
 
@@ -3015,13 +3019,16 @@ def _upsert_parsed_set(
             # which deliberately preserves work the athlete already did. Bail
             # before touching anything; the cell's text is saved either way.
             #
-            # ``skipped_clears`` (#709) is the COACH's own entry changing on a
-            # skipped row: the coach set line they typed, blanked, flipped to a
-            # cue or undid. That is not a stale page's blur, so the delete
-            # below still runs for the rows the line was showing, and nothing
-            # new is created. Otherwise the old set would survive and keep
-            # counting once the row is un-skipped.
-            if line_zero_cell.skipped and not skipped_clears:
+            # ``by_coach`` (#709) marks a COACH action: a grid write, an
+            # undo/redo re-derive, or the un-skip re-derive (#717). On a skipped
+            # row that is the coach's own entry changing (the coach set line
+            # they typed, blanked, flipped to a cue or undid), not a stale
+            # page's blur, so the delete below still runs for the rows the line
+            # was showing, and nothing new is created. Otherwise the old set
+            # would survive and keep counting once the row is un-skipped. A
+            # coach action also deletes only coach-entered rows, and reaps only
+            # a log its own set opened (#719).
+            if line_zero_cell.skipped and not by_coach:
                 return []
 
             parsed = parse_performed(cell.text)
@@ -3054,7 +3061,10 @@ def _upsert_parsed_set(
                 # parsed draft would pose as the newest log in recent-log
                 # grounding, and record provenance would lose its workout date.
                 log = SessionLog.objects.create_for_pair(
-                    session, athlete, date=timezone.localdate()
+                    session,
+                    athlete,
+                    date=timezone.localdate(),
+                    opened_by_coach=bool(by_coach and cell.entered_by_coach),
                 )
 
             # Replace only the rows THIS LINE WAS SHOWING. A set the line no
@@ -3078,11 +3088,17 @@ def _upsert_parsed_set(
             # instead is the same call the retired structured logger's
             # replace-delete made with its trainable/hidden skips: a row this
             # path cannot account for is history, not draft state.
+            #
+            # A coach action (#719) replaces only a row the COACH entered: it
+            # never deletes or replaces a set the athlete entered, which
+            # includes a pre-#709 reclaim's survivor and a set whose line the
+            # athlete's stale page blanked while the row was skipped.
+            mine_qs = log.sets.filter(source_line=cell, prescription=line_zero_cell)
+            if by_coach:
+                mine_qs = mine_qs.filter(entered_by_coach=True)
             mine = [
                 row
-                for row in log.sets.filter(
-                    source_line=cell, prescription=line_zero_cell
-                )
+                for row in mine_qs
                 if parsing.performed_text_shows(
                     previous_text, reps=row.reps, load=row.load, rpe=row.rpe
                 )
@@ -3178,6 +3194,15 @@ def _upsert_parsed_set(
                     # this filter to adopt the orphan, or widening it to
                     # dedupe against ``exercise_slot``, is a write-path
                     # decision that belongs to C2, not this comment fix.
+                    #
+                    # Deliberately over ALL rows on the line, even on a coach
+                    # path (#719): this can count an athlete-entered row with
+                    # the same values as this line's set rather than minting a
+                    # same-valued twin (two rows one line shows would both
+                    # count behind one visible line, see
+                    # ``models.parsed_set_is_hidden``) — #709's "one
+                    # performance logged twice stays one set". No coach action
+                    # can later delete that row (the ``mine`` rule above).
                     existing = next(
                         (
                             row
@@ -3267,6 +3292,7 @@ def _upsert_parsed_set(
                                 source_line=cell,
                                 set_number=number,
                                 unit=unit,
+                                entered_by_coach=cell.entered_by_coach,
                                 **values,
                             )
                             is_new_set = previous is None
@@ -3296,7 +3322,7 @@ def _upsert_parsed_set(
             # — too narrow: a first blur whose values overrun the column limits
             # creates the log, then declines to insert, and left an empty one
             # behind. The invariant is simply that an empty log is noise.
-            if created is None and _reap_empty_pending_log(log):
+            if created is None and _reap_empty_pending_log(log, by_coach=by_coach):
                 return []
 
             # Editing a cell on an already-DONE log changes the very sets the
@@ -3328,7 +3354,8 @@ def _upsert_parsed_set(
 
         # Not for a set the coach entered (#709): the event is attributed to
         # the athlete as actor, and they didn't log this one.
-        if is_new_set and not cell.entered_by_coach:
+        # Nor for any coach action, even one that derives the athlete's own line.
+        if is_new_set and not cell.entered_by_coach and not by_coach:
             track(EventName.SET_LOGGED, actor=athlete, subject=log, via="typed")
 
         # The toast read gets its OWN savepoint, deliberately. Inside the one
@@ -3362,6 +3389,53 @@ def _upsert_parsed_set(
             athlete.pk,
         )
     return new_records
+
+
+def _rederive_unskipped_row(plan, line_zero):
+    """Re-derive every performance line of a row the coach just un-skipped (#717).
+
+    While a row is skipped the writer clears a coach set line's set when the
+    coach edits it, creates nothing, and bails on an athlete's stale blur, so
+    an un-skipped row can hold set lines whose text claims a set the log
+    doesn't have. This brings them back, for coach set lines AND the athlete's
+    own set lines (before this the athlete's set only returned on their next
+    blur, and a coach set line's never did).
+
+    Safe for athlete lines, and why ``previous_text=""``: with an empty
+    previous text the writer replaces nothing (``mine`` is empty), adopts a row
+    that already shows the text (so an untouched set keeps its pk), and creates
+    only the set the line's own text claims and doesn't have — exactly what
+    the athlete's next blur would create. It never deletes or reverts
+    anything, so "a coach undo must never revert or destroy athlete data"
+    holds.
+
+    No-op on a template, on a sub-line, on a row that is still skipped, or when
+    the day has no live session. Call it under the Plan and Session locks.
+    """
+    if plan.athlete is None or line_zero.line != 0 or line_zero.skipped:
+        return
+    session = Session.objects.filter(
+        week_id=line_zero.week_id,
+        session_slot_id=line_zero.exercise_slot.session_slot_id,
+        deleted_at__isnull=True,
+    ).first()
+    if session is None:
+        return
+    for cell in Prescription.objects.filter(
+        exercise_slot_id=line_zero.exercise_slot_id,
+        week_id=line_zero.week_id,
+        line__gte=1,
+        athlete_authored=True,
+    ).order_by("line"):
+        _upsert_parsed_set(
+            session,
+            plan.athlete,
+            line_zero,
+            cell,
+            previous_text="",
+            unit=plan.unit,
+            by_coach=True,
+        )
 
 
 def _first_free_set_number(taken, start):
@@ -5906,7 +5980,7 @@ def _json_object_body(request):
     return payload, None
 
 
-def _reap_empty_pending_log(log):
+def _reap_empty_pending_log(log, *, by_coach=False):
     """Delete ``log`` if it now holds nothing at all. Returns whether it went.
 
     ``_scroll_hint``, ``_athlete_default_plan_id`` and ``serialize_recent_logs``
@@ -5918,7 +5992,14 @@ def _reap_empty_pending_log(log):
     Only PENDING, only with no notes, only with no remaining sets. A DONE log is
     a finished performance and is never reaped, and neither is one carrying the
     athlete's notes — those hold information even with zero sets.
+
+    A coach action (``by_coach``) reaps only a log its own set opened
+    (``opened_by_coach``): an athlete-started log (created by their blur or the
+    log endpoint, or one they dated or annotated since) is theirs even when
+    empty (#719.1). The athlete's own paths are unchanged.
     """
+    if by_coach and not log.opened_by_coach:
+        return False
     if (
         log.status != SessionLog.Status.PENDING
         or (log.notes or "").strip()
@@ -5952,23 +6033,52 @@ def prescription_skip(request, plan_id, pk):
         return JsonResponse(
             {"ok": False, "error": "skipped must be a boolean."}, status=400
         )
+    if cell.line != 0:
+        return JsonResponse(
+            {
+                "ok": False,
+                "code": "not_line_zero",
+                "error": (
+                    "Only an exercise's prescription line can be skipped, "
+                    "not one of its sub-lines."
+                ),
+            },
+            status=422,
+        )
 
     with transaction.atomic():
+        # Plan lock first (``record_plan_action`` takes it), then Session, then
+        # the Prescription — decisions.md § Row-lock order.
         record_plan_action(
             plan, f"Skipped {cell.name}" if skipped else f"Restored {cell.name}"
         )
+        if plan.athlete is not None:
+            # The same Session lock ``cell_line_write`` takes, so an un-skip's
+            # re-derive can't interleave with the athlete's blur.
+            Session.objects.select_for_update(of=("self",)).filter(
+                week=cell.week,
+                session_slot=cell.exercise_slot.session_slot,
+                deleted_at__isnull=True,
+            ).first()
+        was_skipped = (
+            Prescription.objects.filter(pk=cell.pk)
+            .values_list("skipped", flat=True)
+            .first()
+        )
         cell.skipped = skipped
         cell.save(update_fields=["skipped"])
-        # Deliberately does NOT touch already-derived LoggedSets. Skipping a row
-        # the athlete has already performed does not un-perform it: this
-        # codebase's settled position is that a set logged against a
+        # Skipping deliberately does NOT touch already-derived LoggedSets.
+        # Skipping a row the athlete has already performed does not un-perform
+        # it: this codebase's settled position is that a set logged against a
         # since-skipped cell is HISTORY, not draft state, and wiping it would
         # silently destroy the athlete's record. A parsed set is no different
-        # from a structured (legacy) one here. What 5a does add is a guard
-        # on the CREATE side — `_upsert_parsed_set` won't mint a NEW set for a
-        # row that is currently skipped — which is a separate question from
-        # preserving one already earned. Leaving them also means unskipping needs
-        # no re-derive: nothing was destroyed to restore.
+        # from a structured (legacy) one here. `_upsert_parsed_set` also won't
+        # mint a NEW set for a row that is currently skipped. Un-skipping DOES
+        # re-derive (#717): edits made to the row's lines while it was skipped
+        # (a coach set line cleared by the writer, an athlete's typed text)
+        # left set lines without their sets.
+        if was_skipped and not skipped:
+            _rederive_unskipped_row(plan, cell)
         _touch_plan(plan)
     return JsonResponse({"ok": True, "history": serialize_plan_history(plan)})
 
@@ -6328,7 +6438,7 @@ def cell_line_write(request, plan_id, slot_id):
                     cell,
                     previous_text=previous_text,
                     unit=plan.unit,
-                    skipped_clears=True,
+                    by_coach=True,
                 )
                 # Someone is working on this log, so settle (5b) shouldn't
                 # finish it from under them. The bump can only delay settle,

@@ -2425,6 +2425,16 @@ class SessionLog(models.Model):
     last_activity_at = models.DateTimeField(
         _("Last activity"), default=timezone.now, db_default=Now()
     )
+    # #719: True while a COACH's set is the only reason this log exists, i.e.
+    # a coach grid write created it and the athlete has not touched it since
+    # (their blur, the log endpoint and a real edit all clear it). A coach undo
+    # may reap an empty log only when this is set: an athlete-started or
+    # athlete-dated log is theirs even with no sets and no notes. `db_default`
+    # for the same rolling-deploy reason as `last_activity_at`; existing rows
+    # read False ("the athlete's"), so a coach path never reaps one.
+    opened_by_coach = models.BooleanField(
+        _("Opened by coach"), default=False, db_default=False
+    )
 
     objects = SessionLogQuerySet.as_manager()
 
@@ -3112,6 +3122,15 @@ class LoggedSet(models.Model):
         blank=True,
         related_name="parsed_sets",
         verbose_name=_("Source line"),
+    )
+    # #719: True when this row was derived from a line the COACH entered (a
+    # coach set line, #709). A coach path (a grid write, an undo/redo, an
+    # un-skip) may delete only such rows, never one the athlete entered — and
+    # the line alone can't tell them apart: a pre-#709 reclaim's survivor, or a
+    # row whose line the athlete's stale page blanked while the row was
+    # skipped, sits on a line the coach now shows with the same text.
+    entered_by_coach = models.BooleanField(
+        _("Entered by coach"), default=False, db_default=False
     )
     objects = LoggedSetQuerySet.as_manager()
 

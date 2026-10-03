@@ -72,6 +72,13 @@ the coach's own entry, and coach history treats it as one:
   capture excludes it, and a restore skips it. The writer also never removes a
   set from a skipped row (its read-only bail), so undoing a coach set on a row
   skipped since leaves that set in place.
+- Undoing or redoing a skip that UN-skips a row re-derives that row's
+  performance lines too, coach set lines and the athlete's own (#717): the
+  writer cleared a coach set line's set while the row was skipped, and nothing
+  else brings it back. That re-derive only adds the sets the lines' text claims
+  and never removes or reverts one. Coach actions in general never delete a set
+  the athlete entered (``LoggedSet.entered_by_coach``) and reap only a log their
+  own set opened (``SessionLog.opened_by_coach``) (#719).
 
 Since #709 ``cell_line_write`` refuses (422) a changed write to a non-empty
 athlete-entered line, so new history can only take a BLANK athlete line; the
@@ -416,8 +423,22 @@ def _rederive_coach_lines(plan, changes):
             cell,
             previous_text=previous_text,
             unit=plan.unit,
-            skipped_clears=True,
+            by_coach=True,
         )
+
+
+def _rederive_unskipped_rows(plan, cells):
+    """Re-derive the performance lines of each line-0 cell a restore un-skipped (#717).
+
+    The same helper ``prescription_skip`` calls on an un-skip; imported lazily
+    because ``views`` imports this module.
+    """
+    if not cells:
+        return
+    from .views import _rederive_unskipped_row
+
+    for cell in cells:
+        _rederive_unskipped_row(plan, cell)
 
 
 def restore_plan_snapshot(plan, snapshot):
@@ -797,6 +818,9 @@ def restore_plan_snapshot(plan, snapshot):
     # (cell, its text before this restore) for every line whose coach-set
     # state or text this restore changes — see ``_rederive_coach_lines``.
     rederive = []
+    # Line-0 cells this restore un-skipped; their performance lines re-derive at
+    # the very end (#717).
+    unskipped = []
     for pk, row in cell_rows.items():
         if pk in colliding_pks_to_skip:
             # A skip is otherwise a silent outcome: the endpoint answers
@@ -843,6 +867,7 @@ def restore_plan_snapshot(plan, snapshot):
         # What the line was before this write, for the #709 re-derive below. A
         # pk the purge already removed comes back from nothing.
         before = (cell.text, cell.is_coach_set) if pk in existing_cells else ("", False)
+        was_skipped = pk in existing_cells and cell.skipped
         cell.exercise_slot_id = row["exercise_slot_id"]
         cell.week_id = row["week_id"]
         cell.line = row.get("line", 0)
@@ -862,6 +887,8 @@ def restore_plan_snapshot(plan, snapshot):
             cell.athlete_authored = coach_set
             cell.entered_by_coach = coach_set
         cell.save()
+        if cell.line == 0 and was_skipped and not cell.skipped:
+            unskipped.append(cell)
         if (before[1] or cell.is_coach_set) and before != (
             cell.text,
             cell.is_coach_set,
@@ -1137,6 +1164,12 @@ def restore_plan_snapshot(plan, snapshot):
             models.Prescription.objects.filter(
                 pk__in=doomed_pks, week__mesocycle__plan=plan
             ).delete()
+
+    # #717: a row this restore un-skipped gets its performance lines re-derived,
+    # last, after the stray purge. The restore already holds the Plan lock and
+    # has UPDATEd the Session rows above, so the Plan -> Session -> Prescription
+    # lock order holds (decisions.md § Row-lock order).
+    _rederive_unskipped_rows(plan, unskipped)
 
 
 def record_plan_action(plan, label, *, athlete_cell_pks=()):
