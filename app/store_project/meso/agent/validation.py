@@ -333,6 +333,15 @@ def clean_change(raw, plan, *, mesocycle, forbidden=None):
         exercise_slot__deleted_at__isnull=True,
         week__deleted_at__isnull=True,
     )
+    # The agent never targets a sub-line: sub-lines (cues and the athlete's or
+    # coach's set lines) are written only through ``cell_line_write``, which
+    # applies the #709 kind rules; an agent rewrite would bypass them and could
+    # rewrite the athlete's own performance line (#732).
+    if presc is not None and presc.line != 0:
+        errors.append(
+            f"prescription {presc.pk} is a sub-line; "
+            "the agent only changes a row's prescription line"
+        )
     session = _resolve(
         Session,
         raw.get("session_id"),
