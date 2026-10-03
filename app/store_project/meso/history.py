@@ -868,15 +868,18 @@ def restore_plan_snapshot(plan, snapshot):
         # pk the purge already removed comes back from nothing.
         before = (cell.text, cell.is_coach_set) if pk in existing_cells else ("", False)
         was_skipped = pk in existing_cells and cell.skipped
+        # The line's identity before the write, for the replay-token decision
+        # below. A recreated pk has no prior state.
+        prior_line = (
+            (cell.text, cell.athlete_authored, cell.entered_by_coach)
+            if pk in existing_cells
+            else None
+        )
         cell.exercise_slot_id = row["exercise_slot_id"]
         cell.week_id = row["week_id"]
         cell.line = row.get("line", 0)
         cell.text = row.get("text", "")
         cell.skipped = row["skipped"]
-        # A restored line is no longer the result of the new-line write that
-        # stamped it (#709 replay token): a late replay of that write must not
-        # find this cell and report it as where its text landed.
-        cell.client_token = ""
         if kind == _HANDBACK:
             cell.athlete_authored = True
             cell.entered_by_coach = False
@@ -886,6 +889,13 @@ def restore_plan_snapshot(plan, snapshot):
             coach_set = bool(row.get("entered_by_coach"))
             cell.athlete_authored = coach_set
             cell.entered_by_coach = coach_set
+        # A line the restore changes (or recreates) is no longer the result of
+        # the new-line write that stamped it (#709 replay token): a late
+        # replay of that write must not find it. A line it leaves exactly as it
+        # was still is, and clearing its token made a lost-response replay
+        # relocate again and land twice (#726).
+        if prior_line != (cell.text, cell.athlete_authored, cell.entered_by_coach):
+            cell.client_token = ""
         cell.save()
         if cell.line == 0 and was_skipped and not cell.skipped:
             unskipped.append(cell)

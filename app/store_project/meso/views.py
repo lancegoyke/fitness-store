@@ -5246,6 +5246,20 @@ def prescription_patch(request, plan_id, pk):
                     },
                     status=422,
                 )
+            else:
+                # A blank athlete-entered sub-line. Only `cell_line_write`
+                # applies the kind rules (cue vs coach set, the started-session
+                # default) and the #703 handback capture; written here the
+                # coach's text would read as the athlete's own performance line
+                # and derive a set no coach action can remove (#727).
+                return JsonResponse(
+                    {
+                        "ok": False,
+                        "code": "blank_athlete_line",
+                        "error": "Edit this line in the grid.",
+                    },
+                    status=422,
+                )
         if "text" in updates and updates["text"] != cell.text:
             # The text changes, so the new-line token (if any) no longer names
             # the write that is latest on this cell.

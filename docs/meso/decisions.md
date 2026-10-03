@@ -894,6 +894,9 @@ lost. A sub-line (`Prescription`, line >= 1) is one of three kinds:
 - **Coach:** edits cues and their own set lines. A changed write onto a
   non-empty athlete set line is a 422 `athlete_line`, from `cell_line_write`
   and from `prescription_patch`.
+  `prescription_patch` refuses any changed text on a performance line (athlete
+  or coach, blank or not), because only `cell_line_write` applies the kind
+  rules (#727).
 - **The coach's new line** is a set line only when the athlete has started the
   session (has a `SessionLog`) and the text is unambiguously one performed set
   (`parsing.reads_as_one_set`: no %, no bare count of 20 or less before an `x`,
