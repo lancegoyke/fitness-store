@@ -2450,7 +2450,7 @@ class SessionLog(models.Model):
 
     session = models.ForeignKey(
         Session,
-        on_delete=models.CASCADE,
+        on_delete=models.RESTRICT,
         related_name="logs",
         verbose_name=_("Session"),
     )
@@ -3108,7 +3108,7 @@ class LoggedSet(models.Model):
     # matching transitional read-side fallback.
     exercise_slot = models.ForeignKey(
         ExerciseSlot,
-        on_delete=models.CASCADE,
+        on_delete=models.RESTRICT,
         null=True,
         blank=True,
         related_name="logged_sets",
