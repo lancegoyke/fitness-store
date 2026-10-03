@@ -526,7 +526,8 @@ def athlete_personal_records(user):
         }
     for unit in _counted_units_newest_first(user):
         rows = _personal_record_rows(user, unit, link_logs=True)
-        return {"rows": rows, "unit": unit}
+        if rows:
+            return {"rows": rows, "unit": unit}
     return {"rows": [], "unit": ""}
 
 

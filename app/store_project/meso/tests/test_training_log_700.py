@@ -690,3 +690,12 @@ def test_single_set_summary_has_no_top_word(client, athlete):
     body = html(client.get(reverse(LOG_URL)))
     assert "Back Squat 1 set, 140 kg × 5" in body
     assert ", top " not in body
+
+
+def test_log_pages_are_never_stored_by_the_browser(client, athlete, squat_log):
+    client.force_login(athlete)
+    for url in (
+        reverse(LOG_URL),
+        reverse(WORKOUT_URL, kwargs={"log_pk": squat_log.log.pk}),
+    ):
+        assert "no-store" in client.get(url)["Cache-Control"]

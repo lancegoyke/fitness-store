@@ -39,6 +39,7 @@ from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
@@ -2105,6 +2106,10 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
+# Online-only pages (#700): ``no-store`` keeps the browser's HTTP and
+# back-forward caches from holding one athlete's history past a logout, the
+# same reason the service worker never stores them.
+@method_decorator(never_cache, name="dispatch")
 class AthleteTrainingLogView(LoginRequiredMixin, TemplateView):
     """The athlete's Training log (#700): every workout they logged, newest first.
 
@@ -2127,6 +2132,7 @@ class AthleteTrainingLogView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
+@method_decorator(never_cache, name="dispatch")
 class AthleteWorkoutView(LoginRequiredMixin, TemplateView):
     """One logged workout, read-only (#700).
 
