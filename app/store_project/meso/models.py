@@ -2364,6 +2364,9 @@ class SessionLogQuerySet(models.QuerySet):
         (staff-only, same instant; no row is doubled or lost). The insert runs in its
         own savepoint so a lost race does not poison the caller's transaction,
         and the loser adopts the winner's row rather than raising or doubling.
+
+        The locked writers that can meet an unlocked admin/seed insert include
+        ``prescription_skip``'s un-skip and the undo/redo re-derives (#719).
         """
         try:
             with transaction.atomic():
@@ -2424,6 +2427,17 @@ class SessionLog(models.Model):
     # settles one quiet period after deploy — by design, no backfill.
     last_activity_at = models.DateTimeField(
         _("Last activity"), default=timezone.now, db_default=Now()
+    )
+    # #719: True while a COACH action is the only reason this log exists, i.e.
+    # a coach action (a grid write, an un-skip re-derive) created it and the
+    # athlete has not touched it since (a real edit of theirs, or any post to
+    # the log endpoint, clears it). A coach action may reap an empty log only
+    # when this is set: an athlete-started or
+    # athlete-dated log is theirs even with no sets and no notes. `db_default`
+    # for the same rolling-deploy reason as `last_activity_at`; existing rows
+    # read False ("the athlete's"), so a coach path never reaps one.
+    opened_by_coach = models.BooleanField(
+        _("Opened by coach"), default=False, db_default=False
     )
 
     objects = SessionLogQuerySet.as_manager()
@@ -3112,6 +3126,15 @@ class LoggedSet(models.Model):
         blank=True,
         related_name="parsed_sets",
         verbose_name=_("Source line"),
+    )
+    # #719: True when this row was derived from a line the COACH entered (a
+    # coach set line, #709). A coach path (a grid write, an undo/redo, an
+    # un-skip) may delete only such rows, never one the athlete entered — and
+    # the line alone can't tell them apart: a pre-#709 reclaim's survivor, or a
+    # row whose line the athlete's stale page blanked while the row was
+    # skipped, sits on a line the coach now shows with the same text.
+    entered_by_coach = models.BooleanField(
+        _("Entered by coach"), default=False, db_default=False
     )
     objects = LoggedSetQuerySet.as_manager()
 

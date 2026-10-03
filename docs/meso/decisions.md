@@ -909,6 +909,37 @@ lost. A sub-line (`Prescription`, line >= 1) is one of three kinds:
 - **Undo/redo** of the coach's own set lines re-derives their sets; an athlete
   edit of a coach set line makes it athlete data, which undo never touches.
   See `history.py`'s module docstring.
+- **Un-skip** (the skip button, or undoing a skip) re-derives the row's
+  performance lines, coach set lines and the athlete's own (#717). It only adds
+  the sets the lines' text claims; it never removes or reverts one.
+- **A coach action never deletes an athlete-entered `LoggedSet`**
+  (`LoggedSet.entered_by_coach`) and counts an identical one rather than
+  twinning it (#719.2); an athlete's row on a line the coach now shows becomes
+  read-only history if the values differ.
+- **A coach action reaps only a log its own set opened**
+  (`SessionLog.opened_by_coach`, cleared by any athlete post or real edit)
+  (#719.1). Only a line-0 cell can be skipped (422 `not_line_zero`, #719.3).
+
+Accepted (#719):
+
+1. A log a coach action opened is reaped by its undo, and a later redo creates
+   a new one dated the redo day.
+2. Old code running beside 0065 (the seconds of a rolling deploy, or a
+   rollback) knows neither column. A `LoggedSet` it writes defaults to
+   athlete-entered, so no coach action can replace or delete it. It can't clear
+   `opened_by_coach` either, so an athlete's start or date posted through it
+   leaves a coach-opened log reapable by a later coach undo. Prod had 0 coach
+   set lines when this shipped. After any rollback, re-run both:
+   `LoggedSet.objects.filter(source_line__athlete_authored=True,
+   source_line__entered_by_coach=True).update(entered_by_coach=True)` and
+   `SessionLog.objects.filter(opened_by_coach=True).update(opened_by_coach=False)`
+   (False never reaps).
+3. Skipping never removes a set, so undoing an un-skip keeps the sets it
+   derived. A coach set line's set can then be missing while its row is
+   skipped (a coach edit on a skipped row clears it and creates nothing, #709),
+   for example midway through undoing and redoing edits made there. Every
+   un-skip, by button, undo or redo, re-derives the row, so an un-skipped row
+   always shows the sets its lines claim.
 
 ## Decision log
 

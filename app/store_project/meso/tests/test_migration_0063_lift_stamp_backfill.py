@@ -41,6 +41,9 @@ def test_backfill_stamps_unstamped_rows_and_leaves_stamped_ones():
         # current ``Prescription``, whose later columns (#709's 0064) don't
         # exist at 0062. Rolling back drops them and keeps the rows.
         s = seed()
+        # Also before the rollback: `SessionLog` gained `opened_by_coach`
+        # (#719), which the current model would insert at 0062.
+        log = SessionLogFactory(session=s.session, athlete=s.athlete)
         executor.migrate([MESO_0062])
         executor.loader.build_graph()
 
@@ -48,7 +51,6 @@ def test_backfill_stamps_unstamped_rows_and_leaves_stamped_ones():
         slot = s.squat.exercise_slot
         slot.exercise = ex
         slot.save(update_fields=["exercise"])
-        log = SessionLogFactory(session=s.session, athlete=s.athlete)
 
         HistoricalLoggedSet = executor.loader.project_state([MESO_0062]).apps.get_model(
             "meso", "LoggedSet"

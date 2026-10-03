@@ -276,8 +276,10 @@ class TestUndoRedo:
         undo(client, s)
         assert not all_sets(s)
         assert not cells(s) or not sub_cell(s.squat, 1).text
-        # the coach's set was the only thing in a pending log, so undo reaps it
-        assert not SessionLog.objects.filter(session=s.session).exists()
+        # the athlete started this log (``start``), so it is theirs even empty:
+        # a coach undo reaps only a log its own set opened (#719.1; the reap
+        # itself is covered in test_coach_set_undo_skip_717_719.py)
+        assert SessionLog.objects.filter(session=s.session).exists()
 
         redo(client, s)
         cell = sub_cell(s.squat, 1)
