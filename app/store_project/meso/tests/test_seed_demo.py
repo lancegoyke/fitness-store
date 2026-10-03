@@ -732,6 +732,12 @@ class TestReseedReconciles:
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
         plan = _plan_for(coach, MAYA_EMAIL)  # the individual sample plan
+        # #700: logs outlive structure — the stale shape being mimicked had no
+        # logs under the missing rows.
+        LoggedSet.objects.filter(
+            exercise_slot__session_slot__mesocycle__plan=plan
+        ).delete()
+        SessionLog.objects.filter(session__week__mesocycle__plan=plan).delete()
         plan.mesocycles.all().delete()  # stale plan row with no children
         assert plan.mesocycles.count() == 0
 
@@ -750,14 +756,28 @@ class TestReseedReconciles:
         # Mimic the old partial shape: drop the weeks of every non-Hypertrophy
         # block (leaving the mesocycle rows in place).
         stale = plan.mesocycles.exclude(name="Hypertrophy")
+        # #700: logs outlive structure — the stale shape being mimicked had no
+        # logs under the missing rows.
+        LoggedSet.objects.filter(
+            session_log__session__week__mesocycle__in=stale
+        ).delete()
+        SessionLog.objects.filter(session__week__mesocycle__in=stale).delete()
         Week.objects.filter(mesocycle__in=stale).delete()
         assert not Week.objects.filter(mesocycle__in=stale).exists()
+
+        # Hypertrophy keeps its logs, so the seed's own rebuild (#700) has to
+        # clear them itself before it can drop the blocks.
+        assert SessionLog.objects.filter(session__week__mesocycle__plan=plan).exists()
 
         seed()
         for mesocycle in plan.mesocycles.all():
             assert mesocycle.weeks.exists()  # every block materialized again
             for week in mesocycle.weeks.all():
                 assert week.sessions.exists()
+        # the history logger re-logged Maya's fresh plan
+        assert SessionLog.objects.filter(
+            session__week__mesocycle__plan=plan, athlete__email=MAYA_EMAIL
+        ).exists()
 
 
 class TestDelete:

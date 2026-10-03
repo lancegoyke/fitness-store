@@ -162,6 +162,11 @@ class CoachSubscriptionAdmin(admin.ModelAdmin):
 class MesocycleInline(admin.TabularInline):
     model = Mesocycle
     extra = 0
+    # #700: an inline delete runs obj.delete() with no confirmation page; a
+    # block/week/session holding an athlete's logs now refuses (RESTRICT),
+    # which would surface as a 500 here. Delete from the model's own admin
+    # page, which lists the restricted logs.
+    can_delete = False
 
 
 @admin.register(Plan)
@@ -181,17 +186,17 @@ class PlanAdmin(CascadeLockDeleteMixin, admin.ModelAdmin):
 class WeekInline(admin.TabularInline):
     model = Week
     extra = 0
+    # #700: same as ``MesocycleInline`` (no confirmation page, RESTRICT -> 500).
+    can_delete = False
 
 
 class SessionSlotInline(admin.TabularInline):
     model = SessionSlot
     extra = 0
-    # #578 C1: an inline delete calls ``obj.delete()`` straight from
-    # ``BaseModelFormSet.save_existing_objects()`` — no confirmation page
-    # renders, so the "CASCADE is the loud option" story in
-    # ``LoggedSet.exercise_slot``'s model comment only holds on this model's
-    # OWN admin page (``SessionSlotAdmin``), not here. Mirrors
-    # ``WeekDeliveryInline``'s ``can_delete = False``.
+    # #578 C1 / #700: an inline delete runs ``obj.delete()`` with no
+    # confirmation page. With an athlete's logs below this slot it raises
+    # RestrictedError (a 500 here); it would still silently CASCADE the
+    # ``Prescription`` cells. Delete from ``SessionSlotAdmin`` instead.
     can_delete = False
 
 
@@ -206,11 +211,9 @@ class ExerciseSlotInline(admin.TabularInline):
     model = ExerciseSlot
     extra = 0
     raw_id_fields = ("exercise",)
-    # #578 C1: same reasoning as ``SessionSlotInline`` — an inline delete
-    # skips the confirmation page entirely, so a single Save here would
-    # silently CASCADE to this slot's ``Prescription`` and ``LoggedSet`` rows
-    # (an athlete's performed history) with no warning shown. The loud path
-    # stays this model's OWN admin page (``ExerciseSlotAdmin``).
+    # #578 C1 / #700: same as ``SessionSlotInline`` — no confirmation page;
+    # logs below raise RestrictedError (500), ``Prescription`` cells would
+    # still silently CASCADE. Delete from ``ExerciseSlotAdmin`` instead.
     can_delete = False
 
 
@@ -236,6 +239,8 @@ class SessionInline(admin.TabularInline):
     model = Session
     extra = 0
     raw_id_fields = ("session_slot",)
+    # #700: same as ``MesocycleInline`` (no confirmation page, RESTRICT -> 500).
+    can_delete = False
 
 
 class WeekDeliveryInline(admin.TabularInline):

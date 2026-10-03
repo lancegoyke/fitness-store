@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
 from django.db import transaction
+from django.db.models import Q
 
 from store_project.challenges.models import Record
 from store_project.pages.models import Page
@@ -9,6 +10,37 @@ from store_project.products.models import Book
 from store_project.products.models import Program
 
 User = get_user_model()
+
+
+def _meso_log_counts(user):
+    """``(own, coached)``: Meso session logs a delete of ``user`` would take or hit (#700).
+
+    Meso data is never moved by this command. Imported here, not at module
+    level, to avoid coupling users' command imports to Meso during Django's
+    app-loading phase.
+    """
+    from store_project.meso.models import SessionLog
+
+    own = SessionLog.objects.filter(athlete=user).count()
+    coached = (
+        SessionLog.objects.filter(
+            Q(session__week__mesocycle__plan__relationship__coach=user)
+            | Q(session__week__mesocycle__plan__owner=user)
+        )
+        .exclude(athlete=user)
+        .distinct()
+        .count()
+    )
+    return own, coached
+
+
+def _history_refusal(email, own, coached):
+    return CommandError(
+        f"{email} has Meso training history ({own} session logs of their own, "
+        f"{coached} on plans they coach). merge_users does not move Meso data, "
+        "and deleting the account would delete or strand it, so nothing was "
+        "changed."
+    )
 
 
 class Command(BaseCommand):
@@ -66,6 +98,10 @@ class Command(BaseCommand):
         self.stdout.write(f"- Books: {books_count}")
         self.stdout.write(f"- Total Products: {products_count}")
 
+        own_logs, coached_logs = _meso_log_counts(source_user)
+        self.stdout.write(f"- Meso session logs (own): {own_logs}")
+        self.stdout.write(f"- Meso session logs (their athletes'): {coached_logs}")
+
         # Show user data comparison
         self.stdout.write("\nUser Data Comparison:")
         self.stdout.write(f"Name: '{source_user.name}' → '{target_user.name}'")
@@ -77,8 +113,23 @@ class Command(BaseCommand):
         )
 
         if dry_run:
+            if own_logs or coached_logs:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"\nWARNING: {source_email} has Meso training history "
+                        f"({own_logs} own session logs, {coached_logs} on plans "
+                        "they coach); a real run would refuse."
+                    )
+                )
             self.stdout.write(self.style.WARNING("\n[DRY RUN] No changes will be made"))
             return
+
+        # #700: logs outlive structure. Deleting the source would delete its own
+        # logs (SessionLog.athlete CASCADE) and, for a coach, hit RESTRICT on
+        # its athletes' logs. Refuse before asking; re-checked under the locks
+        # below, since the source can log a set while this waits for "yes".
+        if own_logs or coached_logs:
+            raise _history_refusal(source_email, own_logs, coached_logs)
 
         # Confirm before proceeding
         confirm = input(
@@ -147,6 +198,14 @@ class Command(BaseCommand):
 
                 lock_coach_mutexes([source_user.pk])
                 lock_cascade_parents([source_user.pk])
+                # #700: count again now the source's links and plans are locked.
+                # Every athlete log write takes its Plan row first, so a log
+                # committed since the prompt is visible here and a later one
+                # waits behind this transaction. Raising rolls back the
+                # transfers above.
+                own_logs, coached_logs = _meso_log_counts(source_user)
+                if own_logs or coached_logs:
+                    raise _history_refusal(source_email, own_logs, coached_logs)
                 source_user.delete()
                 self.stdout.write(f"✓ Deleted source user {source_email}")
 
@@ -156,5 +215,7 @@ class Command(BaseCommand):
                     )
                 )
 
+        except CommandError:
+            raise
         except Exception as e:
             raise CommandError(f"Error during merge: {str(e)}")

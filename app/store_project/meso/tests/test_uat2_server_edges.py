@@ -257,6 +257,9 @@ class TestCascadeDeleteOpensASeat:
     def test_deleting_the_coach_does_not_blow_up(
         self, django_capture_on_commit_callbacks
     ):
+        # Holds because the athlete has no logs. Since #700 a coach whose
+        # athlete has logs refuses (RestrictedError) — see
+        # test_logs_outlive_structure_700.py.
         coach = UserFactory()
         CoachAthleteFactory(coach=coach, athlete=UserFactory(), status=ACTIVE)
 
