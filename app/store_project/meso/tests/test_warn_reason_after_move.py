@@ -160,27 +160,26 @@ class TestUnskipStillPermitsTheRepost:
         resp = skip_cell(client, s.plan, s.squat, skipped=False)
         assert resp.status_code == 200
 
-        # Read-only: the line's reason once the row is loggable again but
-        # still has nothing backing it. Pinning the SPECIFIC string (not just
-        # "truthy" or "not elsewhere") so a future change that collapses this
-        # into "elsewhere" — the one reason the client won't repost — is
-        # caught here rather than by a duplicated set in production.
+        # Since #717 the un-skip itself re-derives the athlete's typed line, so
+        # the set exists the moment the row is loggable again and the line has
+        # no warning. (Before, it read "unlogged" until the athlete's repost.)
+        # Pinned as "not elsewhere" all the same: that is the one reason the
+        # client won't repost.
+        line_1 = sub_cell(s.squat, 1)
+        assert LoggedSet.objects.filter(source_line=line_1).count() == 1
         ctx = presenters.athlete_session(s.session, s.athlete)
         squat_ctx = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
         sub_line_1 = next(line for line in squat_ctx["sub_lines"] if line["line"] == 1)
-        assert sub_line_1["warn"] is True
-        assert sub_line_1["warn_reason"] == "unlogged"
+        assert sub_line_1["warn"] is False
+        assert sub_line_1["warn_reason"] != "elsewhere"
 
-        # The actual repost: the client re-sends the unchanged text now that
-        # the row is loggable again, and it must still mint the set. Once the
-        # set exists and backs the line, the response's own reason clears to
-        # "" (no warning at all) — also pinned, so this can't quietly regress
-        # into disagreeing with the presenter's next render.
+        # The athlete's repost of the unchanged text (a client that hadn't
+        # seen the un-skip yet) adopts that set: still ONE row, reason clear.
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert resp.status_code == 200
         assert resp.json()["cell"]["warn_reason"] == ""
-        assert LoggedSet.objects.filter(source_line=sub_cell(s.squat, 1)).exists()
+        assert LoggedSet.objects.filter(source_line=line_1).count() == 1
 
 
 class TestCellWarnReasonUnit:

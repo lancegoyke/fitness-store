@@ -271,7 +271,10 @@ class TestBackfillMigration:
             prescription_b = OldPrescription.objects.create(
                 exercise_slot_id=slot_b.pk, week_id=week.pk, line=0, text="3x8"
             )
-            log = SessionLog.objects.create(session=session, athlete=athlete)
+            # Historical too: `SessionLog` gained `opened_by_coach` (#719).
+            log = old_apps.get_model("meso", "SessionLog").objects.create(
+                session_id=session.pk, athlete_id=athlete.pk
+            )
 
             OldLoggedSet = old_apps.get_model("meso", "LoggedSet")
             with_prescription = OldLoggedSet.objects.create(
