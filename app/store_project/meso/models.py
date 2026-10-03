@@ -2427,7 +2427,7 @@ class SessionLog(models.Model):
     )
     # #719: True while a COACH's set is the only reason this log exists, i.e.
     # a coach grid write created it and the athlete has not touched it since
-    # (their blur, the log endpoint and a real edit all clear it). A coach undo
+    # (a real edit of theirs, or any post to the log endpoint, clears it). A coach undo
     # may reap an empty log only when this is set: an athlete-started or
     # athlete-dated log is theirs even with no sets and no notes. `db_default`
     # for the same rolling-deploy reason as `last_activity_at`; existing rows
