@@ -40,8 +40,9 @@ for every other delete.
     inline a log hangs below): an inline delete runs `obj.delete()` with no
     confirmation page, so a refusal there would be a 500. Delete from the
     row's own admin page instead.
-  - `merge_users` refuses, before it asks for confirmation, when the source
-    account has Meso logs of its own or logs on plans it coaches or owns. It
+  - `merge_users` refuses when the source account has Meso logs of its own
+    or logs on plans it coaches or owns: before it asks for confirmation, and
+    again under the delete's locks (a log can land while it waits). It
     never moved Meso data, and deleting the source would delete its own history
     (CASCADE through `athlete`) or hit RESTRICT. Moving Meso data between
     accounts is not built.

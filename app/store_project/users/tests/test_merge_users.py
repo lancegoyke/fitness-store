@@ -93,3 +93,26 @@ def test_dry_run_reports_the_counts_and_changes_nothing():
     assert User.objects.filter(pk=s.athlete.pk).exists()
     assert SessionLog.objects.filter(pk=log.pk).exists()
     assert LoggedSet.objects.filter(pk=row.pk).exists()
+
+
+def test_refuses_a_log_written_while_it_waited_for_confirmation(monkeypatch):
+    # The pre-prompt check sees no logs; the athlete logs a set while staff
+    # read the plan, then staff answer "yes". The under-lock recount refuses.
+    s = seed()
+    target = UserFactory(points=7)
+    created = {}
+
+    def log_then_confirm(*args, **kwargs):
+        created["log"], created["row"] = _log(s)
+        return "yes"
+
+    monkeypatch.setattr("builtins.input", log_then_confirm)
+
+    with pytest.raises(CommandError, match="Meso training history"):
+        _merge(s.athlete, target)
+
+    assert User.objects.filter(pk=s.athlete.pk).exists()
+    assert SessionLog.objects.filter(pk=created["log"].pk).exists()
+    assert LoggedSet.objects.filter(pk=created["row"].pk).exists()
+    target.refresh_from_db()
+    assert target.points == 7  # the transfers rolled back
