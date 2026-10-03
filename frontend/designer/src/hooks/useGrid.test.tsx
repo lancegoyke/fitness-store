@@ -6,6 +6,7 @@
 // grid/), mirroring usePlanData/useReorder's ref-guard idiom so concurrent
 // structural ops can't race.
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MesoTable } from "../components/MesoTable";
 import { useGrid } from "./useGrid";
 import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid } from "../lib/api";
@@ -555,7 +556,7 @@ describe("addExercise", () => {
     expect(calls[0]![0]).toBe("/meso/api/plan/7/session/11/exercise/");
     expect(calls[0]![1].method).toBe("POST");
     expect(calls[0]![1].body).toBe(null);
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
     expect(result.current.grid?.days[0]?.rows).toHaveLength(2);
   });
 });
@@ -575,7 +576,7 @@ describe("removeExercise", () => {
 
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/delete/");
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
     expect(result.current.grid?.days[0]?.rows).toHaveLength(0);
   });
 });
@@ -596,7 +597,7 @@ describe("addDay", () => {
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0]![0]).toBe("/meso/api/plan/7/session/");
     expect(JSON.parse(calls[0]![1].body as string)).toEqual({ week_id: 1 });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
     expect(result.current.grid?.days).toHaveLength(2);
   });
 
@@ -630,7 +631,7 @@ describe("removeDay", () => {
 
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0]![0]).toBe("/meso/api/plan/7/session/11/delete/");
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
     expect(result.current.grid?.days).toHaveLength(0);
   });
 });
@@ -654,7 +655,7 @@ describe("addWeek", () => {
     // The new week must land in the block this grid is SHOWING, so the post
     // names it rather than letting the server pick a default that can diverge.
     expect(JSON.parse(calls[0]![1].body)).toEqual({ mesocycle_id: 1 });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
     expect(result.current.grid?.weeks).toHaveLength(2);
   });
 });
@@ -673,7 +674,7 @@ describe("removeWeek", () => {
 
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0]![0]).toBe("/meso/api/plan/7/week/1/delete/");
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
   });
 });
 
@@ -700,7 +701,7 @@ describe("undo/redo", () => {
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0]![0]).toBe("/meso/api/plan/7/undo/");
     expect(JSON.parse(calls[0]![1].body as string)).toEqual({ week_id: 1 });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
     expect(result.current.history.can_undo).toBe(false);
     expect(result.current.history.can_redo).toBe(true);
   });
@@ -721,7 +722,7 @@ describe("undo/redo", () => {
 
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0]![0]).toBe("/meso/api/plan/7/redo/");
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
   });
 
   it("undo is a no-op when history.can_undo is false", async () => {
@@ -802,9 +803,9 @@ describe("reorder -> undo integration (issue #455 phase A2)", () => {
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls.map((c) => c[0])).toEqual([
       "/meso/api/plan/7/session/11/reorder/",
-      "/meso/api/plan/7/grid/",
+      "/meso/api/plan/7/grid/?mesocycle=1",
       "/meso/api/plan/7/undo/",
-      "/meso/api/plan/7/grid/",
+      "/meso/api/plan/7/grid/?mesocycle=1",
     ]);
     expect(result.current.history.can_undo).toBe(false);
     expect(result.current.history.redo_label).toBe("Reordered exercises");
@@ -822,7 +823,7 @@ describe("refetchGrid", () => {
     });
 
     const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(url).toBe("/meso/api/plan/7/grid/");
+    expect(url).toBe("/meso/api/plan/7/grid/?mesocycle=1");
     expect(opts).toBeUndefined();
     expect(result.current.grid?.mesocycle.name).toBe("Renamed block");
   });
@@ -886,7 +887,7 @@ describe("reorderExercises", () => {
     expect(calls[0]![0]).toBe("/meso/api/plan/7/session/11/reorder/");
     expect(calls[0]![1].method).toBe("POST");
     expect(sentBody()).toEqual({ order: [201, 202] });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
   });
 
   it("console.errors and does not refetch on POST failure", async () => {
@@ -919,7 +920,7 @@ describe("reorderDays", () => {
     expect(calls[0]![0]).toBe("/meso/api/plan/7/week/1/reorder/");
     expect(calls[0]![1].method).toBe("POST");
     expect(sentBody()).toEqual({ order: [10, 11] });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
   });
 });
 
@@ -946,7 +947,7 @@ describe("skipCell", () => {
     expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/skip/");
     expect(calls[0]![1].method).toBe("POST");
     expect(JSON.parse(calls[0]![1].body as string)).toEqual({ skipped: true });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
     expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.skipped).toBe(true);
   });
 
@@ -963,7 +964,7 @@ describe("skipCell", () => {
 
     expect(sentBody()).toEqual({ skipped: false });
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
   });
 });
 
@@ -983,7 +984,7 @@ describe("fillAcrossWeeks", () => {
     expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/fill/");
     expect(calls[0]![1].method).toBe("POST");
     expect(sentBody()).toEqual({});
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
   });
 
   it("flushes a pending cell autosave before POSTing fill/, so fill never races a stale value to the server", async () => {
@@ -1029,7 +1030,7 @@ describe("fillAcrossWeeks", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/"); // the autosave
     expect(fetchMock.mock.calls[1]![0]).toBe("/meso/api/plan/7/prescription/100/fill/"); // fill only after
-    expect(fetchMock.mock.calls[2]![0]).toBe("/meso/api/plan/7/grid/"); // then the refetch
+    expect(fetchMock.mock.calls[2]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1"); // then the refetch
   });
 });
 
@@ -1050,7 +1051,7 @@ describe("addExerciseThisWeek", () => {
     expect(calls[0]![0]).toBe("/meso/api/plan/7/session/11/exercise/");
     expect(calls[0]![1].method).toBe("POST");
     expect(JSON.parse(calls[0]![1].body as string)).toEqual({ week_id: 2 });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/?mesocycle=1");
   });
 });
 
@@ -1782,5 +1783,315 @@ describe("saveError banner state (#709)", () => {
       await result.current.refetchGrid();
     });
     expect(result.current.saveError).not.toBe(null);
+  });
+});
+
+// --- #709 PR 2: remote merge + per-cell freshness guard ----------------------
+describe("remote merge (#709 PR 2)", () => {
+  const withV = (v: number, c: GridCell = cell(), extra: Partial<MesoGrid> = {}) =>
+    grid({ sync_v: v, days: [day({ rows: [row({ cells: { "1": c } })] })], ...extra });
+  const cellOf = (g: MesoGrid | null) => g?.days[0]?.rows[0]?.cells["1"];
+  const lineTexts = (g: MesoGrid | null) => (cellOf(g)?.lines ?? []).map((l) => l.text);
+
+  it("#718: a structural refetch older than an adopted write answer keeps the local cell", async () => {
+    const { result } = setup(withV(5));
+    globalThis.fetch = vi
+      .fn()
+      // the write answer, stamped 7
+      .mockResolvedValueOnce(
+        res({
+          ok: true,
+          sync_v: 7,
+          grid_cell: { lines: [{ line: 1, text: "RPE 8" }] },
+          history: { can_undo: true, can_redo: false, undo_label: "x", redo_label: "" },
+        }),
+      )
+      // a refetch that read BEFORE that write committed: stamp 6, old cell
+      .mockResolvedValueOnce(res({ ok: true, ...withV(6) })) as unknown as typeof fetch;
+
+    await act(async () => {
+      result.current.writeCellLine(9, 1, 1, "RPE 8", { intent: "new" });
+    });
+    await waitFor(() => expect(lineTexts(result.current.grid)).toEqual(["RPE 8"]));
+    await act(async () => {
+      await result.current.refetchGrid();
+    });
+    expect(lineTexts(result.current.grid)).toEqual(["RPE 8"]);
+  });
+
+  it("a refetch at or past the adopted stamp takes the server cell", async () => {
+    const { result } = setup(withV(5));
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        res({ ok: true, sync_v: 7, grid_cell: { lines: [{ line: 1, text: "RPE 8" }] } }),
+      )
+      .mockResolvedValueOnce(
+        res({ ok: true, ...withV(8, cell({ lines: [{ line: 1, text: "RPE 9" }] })) }),
+      ) as unknown as typeof fetch;
+    await act(async () => {
+      result.current.writeCellLine(9, 1, 1, "RPE 8", { intent: "new" });
+    });
+    await waitFor(() => expect(lineTexts(result.current.grid)).toEqual(["RPE 8"]));
+    await act(async () => {
+      await result.current.refetchGrid();
+    });
+    expect(lineTexts(result.current.grid)).toEqual(["RPE 9"]);
+  });
+
+  it("the guard covers a 422 answer's stamp too", async () => {
+    const { result } = setup(withV(5));
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        res(
+          { ok: false, code: "no_free_line", error: "full", sync_v: 7, grid_cell: { lines: [{ line: 1, text: "A" }] } },
+          false,
+          422,
+        ),
+      ) as unknown as typeof fetch;
+    await act(async () => {
+      result.current.writeCellLine(9, 1, 1, "B", { intent: "new" });
+    });
+    await waitFor(() => expect(lineTexts(result.current.grid)).toContain("A"));
+    act(() => {
+      result.current.applyRemoteGrid(withV(6));
+    });
+    expect(lineTexts(result.current.grid)).toContain("A");
+  });
+
+  it("line 0: a patchCell answer's stamp guards the cell against an older fetched text", async () => {
+    const { result } = setup(withV(5));
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, sync_v: 9 })) as unknown as typeof fetch;
+    await act(async () => {
+      result.current.patchCell(100, { text: "5 x 5" });
+    });
+    await act(async () => {
+      result.current.applyRemoteGrid(withV(8, cell({ text: "old" })));
+    });
+    expect(cellOf(result.current.grid)?.text).toBe("5 x 5");
+    await act(async () => {
+      result.current.applyRemoteGrid(withV(10, cell({ text: "newer remote" })));
+    });
+    expect(cellOf(result.current.grid)?.text).toBe("newer remote");
+  });
+
+  it("line 0: a fetched text never replaces a cell whose line-0 write is still in flight", async () => {
+    const { result } = setup(withV(5));
+    let release!: (v: unknown) => void;
+    globalThis.fetch = vi.fn(() => new Promise((r) => (release = r))) as unknown as typeof fetch;
+    act(() => {
+      result.current.patchCell(100, { text: "typing" });
+    });
+    act(() => {
+      result.current.applyRemoteGrid(withV(50, cell({ text: "remote", lines: [{ line: 1, text: "theirs" }] })));
+    });
+    expect(cellOf(result.current.grid)?.text).toBe("typing");
+    // the rest of the fetched cell still lands
+    expect(lineTexts(result.current.grid)).toEqual(["theirs"]);
+    await act(async () => release(res({ ok: true, sync_v: 51 })));
+    act(() => {
+      result.current.applyRemoteGrid(withV(52, cell({ text: "remote 2" })));
+    });
+    expect(cellOf(result.current.grid)?.text).toBe("remote 2");
+  });
+
+  it("a merge that suppressed a newer line-0 text does not advance the stamp; the next one reconciles", async () => {
+    const { result } = setup(withV(5, cell({ text: "a" })));
+    let release!: (v: unknown) => void;
+    globalThis.fetch = vi.fn(() => new Promise((r) => (release = r))) as unknown as typeof fetch;
+    act(() => {
+      result.current.patchCell(100, { text: "mine" });
+    });
+    act(() => {
+      result.current.applyRemoteGrid(withV(6, cell({ text: "other tab" })));
+    });
+    expect(cellOf(result.current.grid)?.text).toBe("mine");
+    expect(result.current.getSyncV()).toBe(5); // a poll at v=5 will see v6+ as changed
+    await act(async () => release(res({ ok: true, sync_v: 7 })));
+    act(() => {
+      result.current.applyRemoteGrid(withV(7, cell({ text: "other tab" })));
+    });
+    expect(cellOf(result.current.grid)?.text).toBe("other tab");
+    expect(result.current.getSyncV()).toBe(7);
+  });
+
+  it("keeps a queued line write painted over a remote cell that gained an athlete line", async () => {
+    const { result } = setup(withV(5));
+    globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "mine", { intent: "new" });
+    });
+    act(() => {
+      result.current.applyRemoteGrid(
+        withV(6, cell({ lines: [{ id: 5, line: 1, text: "225 x 5", athlete_authored: true }] })),
+      );
+    });
+    expect(lineTexts(result.current.grid)).toEqual(["225 x 5", "mine"]);
+  });
+
+  it("takes the structure (rows, weeks, plan) from the fetched grid", () => {
+    const { result } = setup(withV(5));
+    act(() => {
+      result.current.applyRemoteGrid(
+        withV(6, cell(), { plan: { id: 7, title: "Renamed", goal: "", status: "active", unit: "kg" } }),
+      );
+    });
+    expect(result.current.grid?.plan?.title).toBe("Renamed");
+    expect(result.current.getSyncV()).toBe(6);
+  });
+
+  it("ignores a whole fetched grid older than one already merged", () => {
+    const { result } = setup(withV(5));
+    act(() => {
+      result.current.applyRemoteGrid(withV(10, cell({ text: "ten" })));
+    });
+    let changed = true;
+    act(() => {
+      changed = result.current.applyRemoteGrid(withV(8, cell({ text: "eight" })));
+    });
+    expect(changed).toBe(false);
+    expect(cellOf(result.current.grid)?.text).toBe("ten");
+    expect(result.current.getSyncV()).toBe(10);
+  });
+
+  it("reports whether the merge changed anything", () => {
+    const { result } = setup(withV(5));
+    let changed = true;
+    act(() => {
+      changed = result.current.applyRemoteGrid(withV(6));
+    });
+    expect(changed).toBe(false);
+    act(() => {
+      changed = result.current.applyRemoteGrid(withV(7, cell({ lines: [{ line: 1, text: "x" }] })));
+    });
+    expect(changed).toBe(true);
+  });
+
+  it("keeps a row's columns while its own write is in flight", () => {
+    const { result } = setup(withV(5));
+    globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+    act(() => {
+      result.current.patchRowColumns(9, { tempo: "3010" });
+    });
+    act(() => {
+      result.current.applyRemoteGrid(
+        withV(6, cell(), { days: [day({ rows: [row({ tempo: "", name: "Back squat" })] })] }),
+      );
+    });
+    expect(result.current.grid?.days[0]?.rows[0]?.tempo).toBe("3010");
+    expect(result.current.grid?.days[0]?.rows[0]?.name).toBe("Squat");
+  });
+
+  it("a fetched grid without a stamp (old server) is taken as before", async () => {
+    const { result } = setup(withV(5));
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true, sync_v: 7, grid_cell: { lines: [{ line: 1, text: "A" }] } }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+    await act(async () => {
+      result.current.writeCellLine(9, 1, 1, "A", { intent: "new" });
+    });
+    await act(async () => {
+      await result.current.refetchGrid();
+    });
+    expect(lineTexts(result.current.grid)).toEqual([]);
+  });
+
+  it("a structural refetch asks for the open block, not the default one", async () => {
+    const { result } = setup(withV(5, cell(), { mesocycle: { id: 42, plan_id: 7, name: "B2", week_count: 1 } }));
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, ...withV(6) })) as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.refetchGrid();
+    });
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toBe(
+      "/meso/api/plan/7/grid/?mesocycle=42",
+    );
+  });
+
+  it("calls onActivity on a local write", () => {
+    const onActivity = vi.fn();
+    const { result } = renderHook(() => useGrid({ planId: 7, csrf: "tok", initialGrid: withV(5), onActivity }));
+    globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+    act(() => {
+      result.current.patchCell(100, { text: "x" });
+    });
+    expect(onActivity).toHaveBeenCalled();
+  });
+});
+
+// --- #709 PR 2 e2e: a merge never moves focus off a live, focused input -------
+describe("focus survives a remote merge (#709 PR 2)", () => {
+  const coachLines = [
+    { id: 1, line: 1, text: "tempo", athlete_authored: false },
+    { id: 2, line: 2, text: "pause", athlete_authored: false },
+  ];
+  const withLines = (v: number, lines: GridCell["lines"], extra: Partial<GridCell> = {}) =>
+    grid({ sync_v: v, days: [day({ rows: [row({ cells: { "1": cell({ lines, ...extra }) } })] })] });
+
+  let api!: ReturnType<typeof useGrid>;
+  function Harness({ initial }: { initial: MesoGrid }) {
+    const g = useGrid({ planId: 7, csrf: "tok", initialGrid: initial });
+    api = g;
+    return (
+      <MesoTable
+        grid={g.grid}
+        busy={g.busy}
+        onPatchCell={g.patchCell}
+        onWriteCellLine={g.writeCellLine}
+        onPatchRowColumns={g.patchRowColumns}
+        onRenameExercise={g.renameExercise}
+        onRenameDay={g.renameDay}
+        onAddExercise={g.addExercise}
+        onRemoveExercise={g.removeExercise}
+        onAddDay={g.addDay}
+        onRemoveDay={g.removeDay}
+        onAddWeek={g.addWeek}
+        onRemoveWeek={g.removeWeek}
+        onSkipCell={g.skipCell}
+        onFillAcrossWeeks={g.fillAcrossWeeks}
+        onAddExerciseThisWeek={g.addExerciseThisWeek}
+        cellUi={g.cellUi}
+        onRetryCellLine={g.retryCellLine}
+        onDismissCellNotice={g.dismissCellNotice}
+        onDiscardRefusal={g.discardRefusal}
+      />
+    );
+  }
+
+  it("a half-typed ghost keeps focus and its draft when an athlete line arrives (nothing is posted)", async () => {
+    const user = userEvent.setup();
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    render(<Harness initial={withLines(5, coachLines)} />);
+    const ghost = screen.getByTestId("cell-line-new-100");
+    await user.click(ghost);
+    await user.type(ghost, "5 @ 2");
+    act(() => {
+      api.applyRemoteGrid(
+        withLines(6, [...coachLines, { id: 3, line: 3, text: "225 x 5", athlete_authored: true }], {
+          athlete_summary: { sets: 1, load: "225", unit: "lb", rpe: "" },
+        }),
+      );
+    });
+    expect(screen.getByTestId("cell-athlete-marker-100")).toBeInTheDocument();
+    const after = screen.getByTestId("cell-line-new-100");
+    expect(after).toBe(ghost);
+    expect(after).toHaveFocus();
+    expect(after).toHaveValue("5 @ 2");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("a structural refetch keeps focus on a focused, still-present sub-line", async () => {
+    const user = userEvent.setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ ok: true, ...withLines(6, coachLines) })) as unknown as typeof fetch;
+    render(<Harness initial={withLines(5, coachLines)} />);
+    const sub = screen.getByTestId("cell-line-100-2");
+    await user.click(sub);
+    await act(async () => {
+      await api.refetchGrid();
+    });
+    expect(screen.getByTestId("cell-line-100-2")).toHaveFocus();
   });
 });

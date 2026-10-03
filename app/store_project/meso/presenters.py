@@ -63,6 +63,7 @@ from .models import WeekDelivery
 from .models import hidden_parsed_set_pks
 from .models import line_shows_a_set
 from .models import newest_session_logs
+from .models import read_plan_sync
 from .models import sub_line_warn_reason
 from .names import athlete_name
 from .names import coach_name
@@ -2054,6 +2055,9 @@ def _performance_sub_lines(line_cells, sets_by_line, elsewhere_by_line):
                 "text": line_cell.text,
                 "warn": reason is not None,
                 "warn_reason": reason or "",
+                # The write's replay handle (#709 PR 2): lets the page
+                # recognise a line it just wrote when the poll brings it back.
+                "token": line_cell.client_token,
                 # Who typed it (#709): a coach set line is performance
                 # the athlete may correct, and correcting it claims it.
                 "entered_by_coach": line_cell.entered_by_coach,
@@ -2105,7 +2109,7 @@ def athlete_exercise_lines(session, athlete, line_zero_cell):
     }
 
 
-def athlete_session(session, athlete):
+def athlete_session(session, athlete, sync_v=None):
     """One session as the athlete's logger page.
 
     ``session`` is already athlete-scoped by the view; this formats the
@@ -2126,6 +2130,19 @@ def athlete_session(session, athlete):
     # Without it, this read and the blur response's
     # (``views._cell_warn_reason_or_blank``) could each pick a different "newest"
     # log for a tied pair and disagree about what backs a line.
+    # #709 PR 2: the plan's change stamp must be no newer than any row below,
+    # including the session/week/mesocycle/plan rows the caller already loaded
+    # (see ``read_plan_sync``). A caller passes ``plan.sync_version`` from that
+    # same select_related read. With none passed, read the stamp first and then
+    # re-fetch those rows, since the instance we were handed may predate it.
+    if sync_v is None:
+        sync_v = read_plan_sync(session.week.mesocycle.plan_id)
+        session = (
+            Session.objects.select_related("week__mesocycle__plan__relationship")
+            .filter(pk=session.pk)
+            .first()
+            or session
+        )
     progress_as_of = _progress_clock()
     log = (
         newest_session_logs(session, athlete)
@@ -2253,6 +2270,7 @@ def athlete_session(session, athlete):
         "unit": plan_unit,
         "progress": progress,
         "progress_as_of": progress_as_of,
+        "sync_v": sync_v,
         "progress_label": progress_label(progress["logged"], progress["prescribed"]),
         "notes": log.notes if log else "",
         "notes_max": MAX_SESSION_NOTES,
@@ -2318,6 +2336,9 @@ def athlete_log_payload(session_ctx):
             "meso:athlete_cell_write", kwargs={"pk": session_ctx["id"]}
         ),
         "status": session_ctx["status"],
+        # The plan's change stamp at read time (#709 PR 2): the live-sync poll's
+        # starting point, and the freshness guard's comparison value.
+        "sync_v": session_ctx["sync_v"],
         # The one session-level note (#524) and its character cap.
         "notes": session_ctx["notes"],
         "notes_max": session_ctx["notes_max"],

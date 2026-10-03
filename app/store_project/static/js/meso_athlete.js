@@ -174,6 +174,14 @@ function postJson(url, body, csrf) {
   return fetch(url, options);
 }
 
+// Live sync (#709): how often the page asks the server whether the session
+// changed. 3s while this tab is "active" (it wrote, or saw a remote change,
+// within POLL_ACTIVE_MS); idle, the gap backs off along the ladder to 30s.
+const POLL_LADDER_MS = [3000, 6000, 12000, 30000];
+const POLL_ACTIVE_MS = 120000;
+const POLL_MISSING_MS = 60000; // after a 404
+const POLL_MAX_404S = 10; // consecutive 404s before polling stops for good
+
 function createLogger() {
   return {
     logUrl: "",
@@ -214,6 +222,21 @@ function createLogger() {
     _notesRunning: 0, // note saves chained and not yet finished
     _notesDirty: false, // this tab's textarea holds text typed here, not yet confirmed
 
+    // ---- live sync (#709) ----
+    syncUrl: "", // the poll endpoint; empty = no polling (an older server)
+    syncV: null, // the change stamp of the page/poll payload last adopted
+    exerciseV: {}, // per exercise: sync_v of the last WRITE ANSWER adopted for it
+    _logV: 0, // sync_v of the last log (finish/notes) answer adopted
+    _pollTimer: null,
+    _pollInFlight: false,
+    _pollStopped: false,
+    _pollIdle: 0, // index into POLL_LADDER_MS while nothing has happened
+    _pollErrors: 0, // consecutive failed polls
+    _poll404s: 0, // consecutive 404s (an old replica mid-deploy answers one)
+    _pollLogTaint: false, // an unstamped log answer landed while a poll was out
+    _oneRmBusy: {}, // per exercise: manual-1RM POSTs running
+    _lastActive: 0, // when this tab last wrote, or last saw a remote change
+
     init() {
       const el = document.getElementById("meso-log-data");
       if (!el) return; // nothing injected → inert (the page renders its fallback)
@@ -234,6 +257,10 @@ function createLogger() {
       this.applyProgress(data.progress);
       this.notes = data.notes || "";
       this.notesMax = data.notes_max || 2000;
+      this.syncV = Number.isInteger(data.sync_v) ? data.sync_v : null;
+      this.syncUrl =
+        data.sync_url ||
+        (this.cellUrl ? this.cellUrl.replace(/cell\/$/, "sync/") : "");
       this._notesSavedText = this.notes;
       // Default the freeform tracking stack (Phase 4a) so the template's
       // `x-for` over `ex.sub_lines` is safe even for an exercise with none.
@@ -260,50 +287,7 @@ function createLogger() {
       // padding takes the first `want` FREE numbers instead of 1..want, still
       // by number and still the same on every reload: coach cues on line 1 and
       // a prescription of 3 pad lines 2, 3 and 4.
-      for (const ex of this.exercises) {
-        if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
-        if (!Array.isArray(ex.coach_lines)) ex.coach_lines = [];
-        // Typed text that has no line to live on (see `applyExerciseLines`).
-        if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
-        const want = Math.min(
-          Math.max(Number.isInteger(ex.pad_lines) ? ex.pad_lines : 1, 1),
-          MAX_CELL_LINE,
-        );
-        const present = new Set(ex.sub_lines.map((l) => l.line));
-        const taken = new Set(ex.coach_lines.map((c) => c.line));
-        let padded = 0;
-        for (let n = 1; n <= MAX_CELL_LINE && padded < want; n += 1) {
-          if (taken.has(n)) continue;
-          padded += 1;
-          if (!present.has(n)) ex.sub_lines.push({ line: n, text: "" });
-        }
-        ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
-        // What the server holds for each line, so a blur that changes nothing
-        // posts nothing (#527). A padded line holds "" — the server has no
-        // text there, or only blank text, which it doesn't render.
-        for (const l of ex.sub_lines) {
-          l.savedText = l.text || "";
-          l.queued = false;
-          l.saveError = false;
-          l.entered_by_coach = !!l.entered_by_coach;
-          if (!l._k) l._k = nextLineKey();
-        }
-      }
-      // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
-      // `one_rm_source`. A `manual` value is the athlete's own number — it seeds
-      // the editable `e1rm` input. A `logged` value is auto-derived from their
-      // logs — it stays in `one_rm` as the placeholder + suggested-load default,
-      // with the input blank so a manual override layers cleanly on top.
-      for (const ex of this.exercises) {
-        const value = ex.one_rm || "";
-        if (ex.one_rm_source === "manual") {
-          ex.e1rm = value;
-          ex.one_rm = "";
-        } else {
-          ex.e1rm = "";
-          ex.one_rm = value;
-        }
-      }
+      for (const ex of this.exercises) this._initExercise(ex);
       const csrfEl = document.getElementById("meso-csrf");
       this.csrf = csrfEl ? csrfEl.dataset.token : "";
       // One-time: promote any 1RM override typed before Phase 2 (per-device
@@ -323,6 +307,54 @@ function createLogger() {
         if (document.visibilityState === "hidden") this.noteBlur();
       });
       window.addEventListener("pagehide", () => this.noteBlur());
+      this.startPolling();
+    },
+
+    // Set one exercise up as the page does at load: default arrays, the
+    // padded stack and each line's server-state bookkeeping, then the 1RM
+    // input split. `init()` runs it over the payload and the poll merge over
+    // an exercise that appeared since.
+    _initExercise(ex) {
+      if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
+      if (!Array.isArray(ex.coach_lines)) ex.coach_lines = [];
+      // Typed text that has no line to live on (see `applyExerciseLines`).
+      if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
+      const want = Math.min(
+        Math.max(Number.isInteger(ex.pad_lines) ? ex.pad_lines : 1, 1),
+        MAX_CELL_LINE,
+      );
+      const present = new Set(ex.sub_lines.map((l) => l.line));
+      const taken = new Set(ex.coach_lines.map((c) => c.line));
+      let padded = 0;
+      for (let n = 1; n <= MAX_CELL_LINE && padded < want; n += 1) {
+        if (taken.has(n)) continue;
+        padded += 1;
+        if (!present.has(n)) ex.sub_lines.push({ line: n, text: "" });
+      }
+      ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
+      // What the server holds for each line, so a blur that changes nothing
+      // posts nothing (#527). A padded line holds "" — the server has no
+      // text there, or only blank text, which it doesn't render.
+      for (const l of ex.sub_lines) {
+        l.savedText = l.text || "";
+        l.queued = false;
+        l.saveError = false;
+        l.entered_by_coach = !!l.entered_by_coach;
+        if (!l._k) l._k = nextLineKey();
+      }
+      // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
+      // `one_rm_source`. A `manual` value is the athlete's own number — it seeds
+      // the editable `e1rm` input. A `logged` value is auto-derived from their
+      // logs — it stays in `one_rm` as the placeholder + suggested-load default,
+      // with the input blank so a manual override layers cleanly on top.
+      const value = ex.one_rm || "";
+      if (ex.one_rm_source === "manual") {
+        ex.e1rm = value;
+        ex.one_rm = "";
+      } else {
+        ex.e1rm = "";
+        ex.one_rm = value;
+      }
     },
 
     // Promote a pre-Phase-2 override (the retired `meso-e1rm` localStorage store,
@@ -382,7 +414,7 @@ function createLogger() {
             // None left: the text still shows, as unplaced. Its outbox entry
             // stays as queued; the flush gets the server's honest 422.
             if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
-            ex.unplaced.push({ text: item.body.text });
+            ex.unplaced.push({ text: item.body.text, token: item.body.token || "" });
             if (item.id) this._ownEntries[item.id] = true;
             continue;
           }
@@ -391,7 +423,7 @@ function createLogger() {
             if (!retargeted) {
               // Couldn't be moved: show it as unplaced, outbox entry kept.
               if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
-              ex.unplaced.push({ text: item.body.text });
+              ex.unplaced.push({ text: item.body.text, token: item.body.token || "" });
               this._ownEntries[item.id] = true;
               continue;
             }
@@ -425,6 +457,314 @@ function createLogger() {
       this.notes = item.body.notes;
       this.noteStatus = "queued";
       if (item.id) this._ownEntries[item.id] = true;
+    },
+
+    // ---- live sync (#709) ----
+    // Rule D: while the coach's designer and this page are both open and
+    // visible, each picks up the other's lines within a few seconds. The page
+    // asks `syncUrl?v=<stamp>`; an unchanged answer is tiny, a changed one
+    // carries the whole session in the page-payload shape and `applySync`
+    // merges it. Nothing here ever overwrites what the athlete holds that the
+    // server may not: that is `applyExerciseLines`' dirty/queued/running rule.
+
+    _canPoll() {
+      return (
+        !!this.syncUrl &&
+        this.syncV !== null &&
+        !this._pollStopped &&
+        (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+        (typeof navigator === "undefined" || navigator.onLine !== false)
+      );
+    },
+
+    startPolling() {
+      if (!this.syncUrl || this.syncV === null) return;
+      this._lastActive = Date.now();
+      const now = () => this.pollNow();
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") this._clearPollTimer();
+        else now();
+      });
+      window.addEventListener("online", now);
+      window.addEventListener("focus", now);
+      this._schedulePoll(POLL_LADDER_MS[0]);
+    },
+
+    _clearPollTimer() {
+      if (this._pollTimer) clearTimeout(this._pollTimer);
+      this._pollTimer = null;
+    },
+
+    _schedulePoll(delay) {
+      this._clearPollTimer();
+      if (!this._canPoll()) return; // the events above restart it
+      this._pollTimer = setTimeout(() => {
+        this._pollTimer = null;
+        this.pollNow();
+      }, delay);
+    },
+
+    // This tab wrote something, or saw the other side change something: poll
+    // at the fast pace again (now, if the timer is sitting on a long gap).
+    _markActive() {
+      this._lastActive = Date.now();
+      if (this._pollIdle > 0) {
+        this._pollIdle = 0;
+        if (this._pollTimer) this._schedulePoll(POLL_LADDER_MS[0]);
+      }
+    },
+
+    // One poll, unless one is already out, polling stopped, or the page is
+    // hidden or offline. Always re-arms the timer itself afterwards.
+    async pollNow() {
+      if (this._pollInFlight || !this._canPoll()) return;
+      this._clearPollTimer();
+      this._pollInFlight = true;
+      this._pollLogTaint = false;
+      let outcome = "error";
+      try {
+        outcome = await this._pollOnce();
+      } catch (e) {
+        outcome = "error";
+      } finally {
+        this._pollInFlight = false;
+      }
+      if (outcome === "stopped") return;
+      if (outcome !== "missing") this._poll404s = 0;
+      if (outcome === "error") this._pollErrors += 1;
+      else this._pollErrors = 0;
+      if (outcome === "changed" || outcome === "deferred") this._markActive();
+      let delay;
+      if (Date.now() - this._lastActive < POLL_ACTIVE_MS) {
+        this._pollIdle = 0;
+        delay = POLL_LADDER_MS[0];
+      } else {
+        this._pollIdle = Math.min(this._pollIdle + 1, POLL_LADDER_MS.length - 1);
+        delay = POLL_LADDER_MS[this._pollIdle];
+      }
+      if (this._pollErrors) {
+        delay = Math.max(
+          delay,
+          POLL_LADDER_MS[Math.min(this._pollErrors, POLL_LADDER_MS.length - 1)],
+        );
+      }
+      if (outcome === "missing") delay = POLL_MISSING_MS;
+      this._schedulePoll(delay);
+    },
+
+    // Resolves to "idle", "changed", "error" or "stopped". A 404 (an older
+    // server mid-deploy, the session gone) stops polling for good; a network
+    // error or any other failure is silent, the write path being what tells
+    // the athlete about lost writes.
+    async _pollOnce() {
+      const url =
+        this.syncUrl + (this.syncUrl.includes("?") ? "&" : "?") + "v=" + this.syncV;
+      let res;
+      try {
+        res = await fetch(url, {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+      } catch (netErr) {
+        return "error";
+      }
+      if (res.status === 404) {
+        // A rolling deploy can send a poll to an old replica that has no
+        // such route: back off and retry, and give up only on a run of them.
+        this._poll404s += 1;
+        if (this._poll404s >= POLL_MAX_404S) {
+          this._pollStopped = true;
+          this._clearPollTimer();
+          console.warn("Live session sync is unavailable; polling stopped.");
+          return "stopped";
+        }
+        return "missing";
+      }
+      if (res.redirected || !res.ok) return "error";
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        return "error";
+      }
+      // Checked after the last await (the body read can outlast a stop).
+      if (this._pollStopped) return "stopped";
+      if (!data || data.ok !== true || !Number.isInteger(data.sync_v)) return "error";
+      if (!data.changed) {
+        this.syncV = Math.max(this.syncV, data.sync_v);
+        return "idle";
+      }
+      const deferred = this.applySync(data);
+      // An exercise skipped for focus must come back changed: the stamp stays
+      // where it was, so the next poll carries it again.
+      if (deferred) return "deferred";
+      this.syncV = Math.max(this.syncV, data.sync_v);
+      return "changed";
+    },
+
+    // Remember the stamp a write answer carried for an exercise (#718, the
+    // athlete side): a poll fetched before that write must not revert it.
+    _adoptWriteV(exerciseId, v) {
+      if (!Number.isInteger(v)) return;
+      if (!(this.exerciseV[exerciseId] >= v)) this.exerciseV[exerciseId] = v;
+    },
+
+    // The same for the session log (status and notes): a log answer's stamp.
+    // An answer with no stamp (readable, but an older server) counts as
+    // current as of the stamp we hold, and taints a poll that is out right
+    // now: that poll may have been read before this write.
+    _adoptLogV(v) {
+      if (Number.isInteger(v)) {
+        if (v > this._logV) this._logV = v;
+        return;
+      }
+      if (this.syncV !== null && this.syncV > this._logV) this._logV = this.syncV;
+      if (this._pollInFlight) this._pollLogTaint = true;
+    },
+
+    // Read `sync_v` off a refused write's body, best effort: a 422 carries it.
+    async _adoptRefusedV(res, exerciseId) {
+      try {
+        const data = await res.json();
+        this._adoptWriteV(exerciseId, data && data.sync_v);
+      } catch (e) {
+        /* an unreadable refusal has no stamp; the guard just stays as it was */
+      }
+    },
+
+    // Merge a changed poll answer. Synchronous, so nothing it checks can move
+    // underneath it. The rules:
+    //
+    //   - An exercise whose `exerciseV` is newer than the answer's `sync_v` is
+    //     skipped whole: a write answer already told us more.
+    //   - Otherwise `applyExerciseLines` merges its lines (dirty, queued and
+    //     running lines are never touched; a clean line takes the server's
+    //     text, even focused, since a clean line's text IS the server's until
+    //     the server says otherwise), and `logged_readonly`, the name, target,
+    //     text and placeholders are the server's.
+    //   - An exercise the answer lacks is dropped, unless a line of it is
+    //     dirty or has an outbox entry.
+    //   - A new exercise is initialized as `init()` does, placed after the one
+    //     before it in the answer.
+    //   - Progress goes through `applyProgress` (its `as_of` rule orders it).
+    //   - Status: adopted unless `finish()` is running, a status is queued, or
+    //     a log answer newer than this one was adopted.
+    //   - Notes: adopted only when not dirty, queued, debouncing or saving,
+    //     and under the same newer-answer rule.
+    applySync(data) {
+      const v = data.sync_v;
+      let deferred = false;
+      if (Array.isArray(data.exercises)) deferred = this._mergeExercises(data.exercises, v);
+      this.applyProgress(data.progress);
+      const logFresh = !(this._logV > v) && !this._pollLogTaint;
+      if (
+        logFresh &&
+        typeof data.status === "string" &&
+        !this.saving &&
+        !this._statusQueued()
+      ) {
+        this.status = data.status;
+      }
+      if (
+        logFresh &&
+        typeof data.notes === "string" &&
+        !this._notesDirty &&
+        !this._noteTimer &&
+        this._notesRunning === 0 &&
+        !this.queuedNotes()
+      ) {
+        this.notes = data.notes;
+        this._notesSavedText = data.notes;
+      }
+      return deferred;
+    },
+
+    // The exercise whose input holds focus (a sub-line or the 1RM), as its id
+    // string; null when focus is elsewhere. The template marks both inputs
+    // with `data-meso-ex`.
+    _focusedExerciseId() {
+      if (typeof document === "undefined") return null;
+      const el = document.activeElement;
+      const id = el && el.dataset ? el.dataset.mesoEx : undefined;
+      return id === undefined ? null : String(id);
+    },
+
+    _statusQueued() {
+      const item = this.queuedLog();
+      return !!item && "status" in item.body;
+    },
+
+    _mergeExercises(incoming, v) {
+      const byId = new Map(incoming.map((x) => [x.id, x]));
+      const stale = (id) => this.exerciseV[id] > v;
+      // Typing in an exercise: Alpine re-inserting a line's node (a renumber)
+      // drops focus and the blur commits a half-typed draft, and a clean line
+      // would change under the cursor. So that exercise waits a round.
+      const focused = this._focusedExerciseId();
+      let deferred = false;
+      for (const ex of this.exercises) {
+        const sx = byId.get(ex.id);
+        if (!sx || stale(ex.id)) continue;
+        if (focused !== null && String(ex.id) === focused) {
+          deferred = true;
+          continue;
+        }
+        this.applyExerciseLines(ex, {
+          sub_lines: sx.sub_lines,
+          coach_lines: sx.coach_lines,
+        });
+        for (const key of ["name", "target", "text", "placeholder", "placeholder_reps"]) {
+          if (key in sx) ex[key] = sx[key];
+        }
+        if ("logged_readonly" in sx) {
+          ex.logged_readonly = Array.isArray(sx.logged_readonly) ? sx.logged_readonly : [];
+        }
+        // The 1RM, unless the athlete is on it: a typed value waiting to be
+        // saved, or a save running. Seeded as `_initExercise` does.
+        if (
+          ("one_rm" in sx || "one_rm_source" in sx) &&
+          !this._oneRmTimers[ex.id] &&
+          !this._oneRmBusy[ex.id]
+        ) {
+          const value = sx.one_rm || "";
+          if (sx.one_rm_source === "manual") {
+            ex.e1rm = value;
+            ex.one_rm = "";
+          } else {
+            ex.e1rm = "";
+            ex.one_rm = value;
+          }
+          ex.one_rm_source = sx.one_rm_source;
+        }
+      }
+      const holds = (ex) =>
+        (ex.sub_lines || []).some((l) => this._lineIsDirty(ex, l)) ||
+        this._queuedLineNumbers(ex).size > 0 ||
+        (ex.unplaced || []).length > 0 ||
+        !!this._oneRmTimers[ex.id] ||
+        (this._oneRmBusy[ex.id] || 0) > 0;
+      this.exercises = this.exercises.filter(
+        (ex) =>
+          byId.has(ex.id) ||
+          stale(ex.id) ||
+          holds(ex) ||
+          (focused !== null && String(ex.id) === focused),
+      );
+      let after = null;
+      for (const sx of incoming) {
+        if (this.exercises.some((e) => e.id === sx.id)) {
+          after = sx.id;
+          continue;
+        }
+        if (stale(sx.id)) continue;
+        const fresh = { ...sx };
+        this._initExercise(fresh);
+        const at = after === null ? -1 : this.exercises.findIndex((e) => e.id === after);
+        this.exercises.splice(at + 1, 0, fresh);
+        after = sx.id;
+      }
+      return deferred;
     },
 
     // ---- derived progress ----
@@ -474,6 +814,7 @@ function createLogger() {
     // should retry.
     async finish() {
       if (this.saving || !this.logUrl) return;
+      this._markActive();
       this.saving = true;
       this.saved = false;
       this.error = false;
@@ -587,6 +928,7 @@ function createLogger() {
         }
         // Only a reply we could read says the server has this write.
         if (ahead) this.settleLog(payload);
+        this._adoptLogV(data.sync_v);
         this.status = data.log.status;
         this.statusBeforeQueued = ""; // the server has this write; nothing to put back
         this.applyProgress(data.progress);
@@ -1043,6 +1385,7 @@ function createLogger() {
       }
       if (item.url === this.logUrl) {
         this.settleLog(item.body);
+        this._adoptLogV(data.sync_v);
       } else {
         this.dropEntry(item);
         return "saved";
@@ -1119,6 +1462,15 @@ function createLogger() {
       if (!this.oneRmUrl || !ex) return;
       const value = (ex.e1rm || "").toString().trim();
       if (value !== "" && parseNum(value) == null) return;
+      this._oneRmBusy[ex.id] = (this._oneRmBusy[ex.id] || 0) + 1;
+      try {
+        await this._postOneRmBody(ex, value);
+      } finally {
+        this._oneRmBusy[ex.id] -= 1;
+      }
+    },
+
+    async _postOneRmBody(ex, value) {
       let res;
       try {
         res = await fetch(this.oneRmUrl, {
@@ -1139,6 +1491,9 @@ function createLogger() {
       } catch (e) {
         return; // stored server-side regardless; the UI reconciles on next load
       }
+      // Like a line write's answer: a poll older than this must not restore
+      // the old value.
+      this._adoptWriteV(ex.id, data && data.sync_v);
       // Drop a stale response: if the field changed since we sent this value, a
       // newer edit (already sent, or still debouncing) owns it — reconciling now
       // would wipe the in-progress value (e.g. a lagging clear over a fresh type).
@@ -1221,6 +1576,7 @@ function createLogger() {
     // thing that survives a closed tab); the POST itself waits for a pause.
     // The status stays blank while typing — "saved offline" there would be noise.
     noteInput() {
+      this._markActive();
       this.noteStatus = "";
       this._notesDirty = true;
       this.enqueueNotes(this.notes);
@@ -1329,6 +1685,7 @@ function createLogger() {
       // Only the keys as sent: a Finish queued alongside stays, and so does
       // text typed since (its key holds a different value now).
       this.settleLog(body);
+      this._adoptLogV(data.sync_v);
       this._notesSavedText = text;
       this._notesDirty = this.notes !== text;
       // Deliberately NOT `data.log.status`: the reply carries the log's
@@ -1469,6 +1826,7 @@ function createLogger() {
     //              "couldn't save" and the athlete's next edit re-attempts.
     //   "skipped"  nothing to send.
     async _postCell(ex, line, fromQueue = false) {
+      this._markActive();
       const entry = (ex.sub_lines || []).find((l) => l.line === line);
       let text;
       // The outbox entry this write stands for.
@@ -1560,6 +1918,9 @@ function createLogger() {
           entry.queued = false;
           entry.saveError = true;
         }
+        // The refusal's stamp too: the server read the write, and a poll older
+        // than it says nothing newer about this exercise.
+        await this._adoptRefusedV(res, ex.id);
         return "rejected";
       }
       if (sent) this.dropEntry(sent);
@@ -1581,10 +1942,14 @@ function createLogger() {
       // out of order; that is safe because `applyProgress` drops any payload
       // whose `as_of` is older than the one already shown.
       this.applyProgress(data.progress);
+      this._adoptWriteV(ex.id, data.sync_v);
       // Checked after the last await: a merge may have renumbered or dropped
       // this entry while the body was being read, and then this reply says
       // nothing about it.
-      if (entry && entry.line !== line) return "saved";
+      if (entry && entry.line !== line) {
+        this._dropTokenCopies(ex, entry, token);
+        return "saved";
+      }
       // The server put the text on another number: re-key the stack.
       if (
         Number.isInteger(data.relocated_from) &&
@@ -1645,6 +2010,7 @@ function createLogger() {
           : text;
       if (held !== text) entry.text = held;
       entry.savedText = held;
+      this._dropTokenCopies(ex, entry, token);
       entry.newToken = undefined; // a 200 confirms the server holds the line
       entry.warn = !!(data.cell && data.cell.warn);
       // WHY it's tinted, not just whether (#572) — `_lineNeedsSending` treats
@@ -1665,6 +2031,16 @@ function createLogger() {
           : null;
       entry.pr = earned ? `${earned.value} ${earned.unit}` : "";
       return "saved";
+    },
+
+    // A clean copy of a write that a merge made from the server's stack (it
+    // carries that write's token) is the same line as `keep`, which this
+    // answer just settled: remove it rather than show the set twice.
+    _dropTokenCopies(ex, keep, token) {
+      if (!token || !Array.isArray(ex.sub_lines)) return;
+      ex.sub_lines = ex.sub_lines.filter(
+        (l) => l === keep || l.serverToken !== token || this._lineIsDirty(ex, l),
+      );
     },
 
     // The lowest number a displaced line can be shown on: not a coach cue, and
@@ -1739,6 +2115,16 @@ function createLogger() {
       );
     },
 
+    // What this page last knew the server to hold on a line: `savedText`, or,
+    // when that is unknown (a write that went out and never answered) but the
+    // line is an unconfirmed NEW write, "" — a new write is only sent where
+    // the server held nothing, so text found there now that isn't this line's
+    // is someone else's. Undefined for any other line with unknown state.
+    _knownServerText(l) {
+      if (l.savedText !== undefined) return l.savedText;
+      return l.newToken ? "" : undefined;
+    },
+
     // Merge the server's whole stack for one exercise into the page: the answer
     // to a relocated write, and what live polling will use. `serverLines` is
     // `{sub_lines: [{line, text, warn, warn_reason, entered_by_coach}],
@@ -1783,11 +2169,48 @@ function createLogger() {
         l.entered_by_coach = !!s.entered_by_coach;
         l.queued = false;
         l.saveError = false;
+        // Which write made this line (the server's `client_token`), so a
+        // later answer for that write can find and replace this copy.
+        l.serverToken = typeof s.token === "string" ? s.token : "";
       };
+      const locals = Array.isArray(ex.sub_lines) ? ex.sub_lines : [];
+      const running = (l) => (this._lineSavesRunning[ex.id + ":" + l.line] || 0) > 0;
+      // A save running for a line owns that line until its answer lands: the
+      // merge never moves, adopts into or drops it, and its write's server
+      // line (same token) is not added a second time.
+      const runningTokens = new Set(
+        locals.filter((l) => running(l) && l.newToken).map((l) => l.newToken),
+      );
+      const byToken = new Map();
+      for (const s of subs.values()) {
+        if (typeof s.token === "string" && s.token) byToken.set(s.token, s);
+      }
+      // Text parked by an EARLIER merge: whose write the server holds after all (its token is on a
+      // server line) did land: it is that line, not an unsaved one.
+      if (Array.isArray(ex.unplaced) && ex.unplaced.length) {
+        ex.unplaced = ex.unplaced.filter((u) => !(u.token && byToken.has(u.token)));
+      }
+      // An unconfirmed new line whose token the server holds IS that server
+      // line: its write landed and only the answer was lost.
+      const own = new Map();
+      for (const l of locals) {
+        if (!running(l) && l.newToken && byToken.has(l.newToken)) {
+          own.set(l, byToken.get(l.newToken));
+        }
+      }
+      const ownLines = new Set([...own.values()].map((x) => x.line));
       const kept = [];
       const displaced = [];
-      for (const l of Array.isArray(ex.sub_lines) ? ex.sub_lines : []) {
+      let moved = false;
+      for (const l of locals) {
+        if (own.has(l)) continue; // placed below
+        if (running(l)) {
+          kept.push(l);
+          continue;
+        }
         const s = subs.get(l.line);
+        // A clean line on a number an own entry moves onto is replaced by it.
+        if (ownLines.has(l.line) && !this._lineIsDirty(ex, l)) continue;
         if (!this._lineIsDirty(ex, l)) {
           if (s) {
             adopt(l, s);
@@ -1805,9 +2228,10 @@ function createLogger() {
           }
         } else if (
           cues.has(l.line) ||
+          ownLines.has(l.line) ||
           (s &&
-            l.savedText !== undefined &&
-            (s.text || "") !== l.savedText &&
+            this._knownServerText(l) !== undefined &&
+            (s.text || "") !== this._knownServerText(l) &&
             (s.text || "") !== (l.text || ""))
         ) {
           // Displaced only when the number changed hands: a coach cue, or
@@ -1820,9 +2244,44 @@ function createLogger() {
           kept.push(l);
         }
       }
+      for (const [l, s] of own) {
+        const oldLine = l.line;
+        const m = s.line;
+        // Another running entry already holds that number: leave this one be.
+        if (oldLine !== m && kept.some((k) => k.line === m)) {
+          kept.push(l);
+          continue;
+        }
+        const queuedItem = this.queuedCell(ex.id, oldLine);
+        if ((l.text || "") === (s.text || "")) {
+          // Nothing typed since: the server's line, under the new number.
+          if (queuedItem && queuedItem.body.text === (s.text || "")) this.dropEntry(queuedItem);
+          adopt(l, s);
+          l.line = m;
+          l.newToken = undefined;
+        } else {
+          // An edit of its own landed line: keep the text and the token, so
+          // the next save goes out as an edit of that line.
+          if (oldLine !== m && queuedItem) {
+            if (!this._retargetOutbox(queuedItem.id, m)) {
+              if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
+              ex.unplaced.push({ text: l.text || "", token: l.newToken || "" });
+              continue;
+            }
+            moved = true;
+          }
+          l.line = m;
+          l.savedText = s.text || "";
+          l.warn = !!s.warn;
+          l.warn_reason = s.warn_reason || "";
+          l.serverToken = typeof s.token === "string" ? s.token : "";
+        }
+        kept.push(l);
+      }
       const have = new Set(kept.map((l) => l.line));
       for (const [line, s] of subs) {
         if (have.has(line) || cues.has(line)) continue;
+        if (typeof s.token === "string" && runningTokens.has(s.token)) continue;
         const l = { line, _k: nextLineKey() };
         adopt(l, s);
         kept.push(l);
@@ -1835,7 +2294,6 @@ function createLogger() {
         ...this._queuedLineNumbers(ex),
       ]);
       displaced.sort((a, b) => (a.line || 0) - (b.line || 0));
-      let moved = false;
       for (const l of displaced) {
         let n = null;
         for (let i = 1; i <= MAX_CELL_LINE; i += 1) {
@@ -1848,7 +2306,7 @@ function createLogger() {
         const owned = !!own && !!own.id && !!this._ownEntries[own.id];
         if (n == null) {
           if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
-          ex.unplaced.push({ text: l.text || "" });
+          ex.unplaced.push({ text: l.text || "", token: l.newToken || "" });
           continue;
         }
         let token = "";
@@ -1858,7 +2316,7 @@ function createLogger() {
             // The outbox wouldn't move (storage, or a target in the way): the
             // text must not sit on a number its write doesn't follow.
             if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
-            ex.unplaced.push({ text: l.text || "" });
+            ex.unplaced.push({ text: l.text || "", token: l.newToken || "" });
             continue;
           }
           moved = true;
@@ -1922,6 +2380,15 @@ function createLogger() {
           ? data.new_records[0]
           : null;
       entry.pr = earned ? `${earned.value} ${earned.unit}` : "";
+      // Whatever still sits on the target number is replaced by the entry. A
+      // line holding text the server may not have is never dropped silently
+      // (the merge above should have moved it): it stays visible as unplaced.
+      for (const l of ex.sub_lines) {
+        if (l.line === target && this._lineIsDirty(ex, l) && (l.text || "") !== "") {
+          if (!Array.isArray(ex.unplaced)) ex.unplaced = [];
+          ex.unplaced.push({ text: l.text, token: l.newToken || "" });
+        }
+      }
       ex.sub_lines = ex.sub_lines.filter((l) => l.line !== target);
       ex.sub_lines.push(entry);
       ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));

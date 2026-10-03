@@ -71,6 +71,9 @@ export interface UseGridOptions {
   planId: Id;
   csrf: string;
   initialGrid: MesoGrid | null;
+  /** #709 PR 2: called on every local write, so the live-sync poll can switch
+   * to its fast cadence. Read through a ref (a new function each render is fine). */
+  onActivity?: () => void;
 }
 
 function findRow(grid: MesoGrid | null, exerciseSlotId: Id): GridRow | undefined {
@@ -80,6 +83,30 @@ function findRow(grid: MesoGrid | null, exerciseSlotId: Id): GridRow | undefined
     if (row) return row;
   }
   return undefined;
+}
+
+/** The (slot, week) key of the cell with this prescription id, if on screen. */
+function cellKeyOfPrescription(grid: MesoGrid | null, cellId: Id): string | null {
+  if (!grid) return null;
+  for (const day of grid.days) {
+    for (const r of day.rows) {
+      for (const [weekId, c] of Object.entries(r.cells)) {
+        if (c.prescription_id === cellId) return cellUiKey(r.exercise_slot_id, weekId);
+      }
+    }
+  }
+  return null;
+}
+
+/** Key-order-insensitive JSON, to tell whether a merge changed anything. */
+function stableStringify(v: unknown): string {
+  return JSON.stringify(v, (_k, val) => {
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      const o = val as Record<string, unknown>;
+      return Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
+    }
+    return val;
+  });
 }
 
 /** The row's FIRST live week's cell — always non-swapped in normal data (see
@@ -364,6 +391,31 @@ function findCell(grid: MesoGrid | null, exerciseSlotId: Id, weekId: Id): GridCe
 
 export function useGrid(options: UseGridOptions) {
   const { planId, csrf, initialGrid } = options;
+  const onActivityRef = useRef(options.onActivity);
+  onActivityRef.current = options.onActivity;
+  const touch = useCallback(() => onActivityRef.current?.(), []);
+  // #709 PR 2 (live sync). `adoptedVRef[cellKey]`: the sync_v of the last write
+  // answer adopted for that (slot, week) cell, line writes AND line-0
+  // patchCell answers; a fetched grid stamped below it is OLDER than that
+  // write and must not revert the cell (#718). `line0InflightRef`/
+  // `rowInflightRef`: writes sent but not answered. `appliedVRef`: the stamp
+  // of the last fetched grid merged (also the version the poll sends).
+  const adoptedVRef = useRef<Map<string, number>>(new Map());
+  const line0InflightRef = useRef<Map<string, number>>(new Map());
+  const rowInflightRef = useRef<Map<Id, number>>(new Map());
+  const appliedVRef = useRef<number | undefined>(
+    typeof initialGrid?.sync_v === "number" ? initialGrid.sync_v : undefined,
+  );
+  const recordAdoptedV = (key: string, v: unknown) => {
+    if (typeof v !== "number") return;
+    const cur = adoptedVRef.current.get(key);
+    if (cur === undefined || v > cur) adoptedVRef.current.set(key, v);
+  };
+  const bump = <K,>(m: Map<K, number>, k: K, by: 1 | -1) => {
+    const n = (m.get(k) ?? 0) + by;
+    if (n <= 0) m.delete(k);
+    else m.set(k, n);
+  };
   const [grid, setGridState] = useState<MesoGrid | null>(initialGrid);
   // The latest grid, updated synchronously with every set — writeCellLine's
   // per-cell queue predicts and re-applies against it between renders.
@@ -472,62 +524,122 @@ export function useGrid(options: UseGridOptions) {
     await Promise.allSettled([...pendingWritesRef.current]);
   }, []);
 
-  const refetchGrid = useCallback(async () => {
-    try {
-      const res = await fetch(`/meso/api/plan/${planId}/grid/`);
-      if (!res.ok) throw new Error("Request failed: " + res.status);
-      const data = (await res.json()) as MesoGrid & { ok?: boolean };
-      // Issue #455 phase A5: plan/athlete/phases must ride every
-      // refetch too, not just the initial hydration — this is now the
-      // front-end's ONLY source for the top bar / left rail / block view (the
-      // one-week plan_data owner that used to carry them is gone). Dropping
-      // any of these here would silently blank that chrome after the very
-      // next structural edit (regression test: useGrid.test.ts "refetchGrid
-      // carries the new plan/athlete/phases fields through").
-      const fetched: MesoGrid = {
-        plan: data.plan,
-        athlete: data.athlete,
-        phases: data.phases,
-        mesocycle: data.mesocycle,
-        weeks: data.weeks,
-        days: data.days,
-        history: data.history,
-      };
-      // Line writes still in flight (or failed) must stay on screen: lay them
-      // back over the fetched grid, the same way adopting a server answer does.
+  // Merge a fetched grid (a structural refetch or a live-sync poll) into local
+  // state. Rules, in order:
+  //  1. A grid stamped BELOW the last one merged is older than what is on
+  //     screen: ignored whole. (A stamp-less grid, an old server, is taken.)
+  //  2. Structure (weeks, days, rows, plan, athlete, phases, history) comes
+  //     from the fetched grid.
+  //  3. Per cell: if a write answer already adopted for that cell is newer
+  //     than the fetched stamp, the LOCAL cell stays (#718).
+  //  4. Otherwise the fetched cell is taken, except its line-0 text when a
+  //     line-0 write is in flight, then queued/unsaved line writes are laid
+  //     back over it.
+  //     That suppression does NOT advance the applied stamp (see below).
+  //  5. A row with an unanswered columns/rename write keeps its local
+  //     name/tempo/rest/note.
+  // Returns whether anything the coach can see changed.
+  const applyRemoteGrid = useCallback(
+    (fetchedGrid: MesoGrid): boolean => {
+      const v = typeof fetchedGrid.sync_v === "number" ? fetchedGrid.sync_v : undefined;
+      if (v !== undefined && appliedVRef.current !== undefined && v < appliedVRef.current) return false;
+      const gv = v ?? Number.POSITIVE_INFINITY;
+      const prev = gridRef.current;
       const settleLater: Array<[string, CellWrite[]]> = [];
-      setGrid({
-        ...fetched,
-        days: fetched.days.map((day) => ({
+      // True when a fetched line-0 text was dropped for a local in-flight one.
+      let suppressed = false;
+      // plan/athlete/phases must ride every merge, not just the initial
+      // hydration (issue #455 phase A5: the top bar / left rail / block view
+      // have no other source).
+      const merged: MesoGrid = {
+        plan: fetchedGrid.plan,
+        athlete: fetchedGrid.athlete,
+        phases: fetchedGrid.phases,
+        mesocycle: fetchedGrid.mesocycle,
+        weeks: fetchedGrid.weeks,
+        days: fetchedGrid.days.map((day) => ({
           ...day,
-          rows: day.rows.map((row) => {
-            let cells = row.cells;
-            for (const [weekId, c] of Object.entries(row.cells)) {
-              const k = cellUiKey(row.exercise_slot_id, weekId);
-              const unsaved = unsavedRef.current.get(k) ?? [];
-              const queued = queuedRef.current.get(k) ?? [];
-              if (!unsaved.length && !queued.length) continue;
-              const refused: CellWrite[] = [];
-              const next = reapplyWrites(c, unsaved, queued, (w) => refused.push(w));
-              if (unsaved.length) settleLater.push([k, refused]);
-              if (cells === row.cells) cells = { ...row.cells };
-              cells[weekId] = next;
+          rows: day.rows.map((fetchedRow) => {
+            const localRow = findRow(prev, fetchedRow.exercise_slot_id);
+            let rowOut: GridRow = fetchedRow;
+            if (localRow && (rowInflightRef.current.get(fetchedRow.exercise_slot_id) ?? 0) > 0) {
+              rowOut = {
+                ...fetchedRow,
+                name: localRow.name,
+                exercise_id: localRow.exercise_id,
+                tempo: localRow.tempo,
+                rest: localRow.rest,
+                note: localRow.note,
+              };
             }
-            return cells === row.cells ? row : { ...row, cells };
+            let cells = rowOut.cells;
+            for (const [weekId, c] of Object.entries(fetchedRow.cells)) {
+              const k = cellUiKey(fetchedRow.exercise_slot_id, weekId);
+              const local = prev ? findCell(prev, fetchedRow.exercise_slot_id, weekId) : undefined;
+              let next: GridCell = c;
+              const adopted = adoptedVRef.current.get(k);
+              if (local && adopted !== undefined && adopted > gv) {
+                next = local;
+              } else {
+                if (local && (line0InflightRef.current.get(k) ?? 0) > 0) {
+                  if (local.text !== next.text) suppressed = true;
+                  next = { ...next, text: local.text };
+                }
+                const unsaved = unsavedRef.current.get(k) ?? [];
+                const queued = queuedRef.current.get(k) ?? [];
+                if (unsaved.length || queued.length) {
+                  const refused: CellWrite[] = [];
+                  next = reapplyWrites(next, unsaved, queued, (w) => refused.push(w));
+                  if (unsaved.length) settleLater.push([k, refused]);
+                }
+              }
+              if (next !== c) {
+                if (cells === rowOut.cells) cells = { ...rowOut.cells };
+                cells[weekId] = next;
+              }
+            }
+            return cells === rowOut.cells ? rowOut : { ...rowOut, cells };
           }),
         })),
-      });
+        history: fetchedGrid.history,
+        sync_v: v !== undefined && !suppressed ? v : prev?.sync_v ?? v,
+      };
+      // Content was held back (a fetched line-0 text lost to an in-flight
+      // write): don't claim this stamp, so the next poll refetches and
+      // reconciles once nothing is in flight.
+      if (v !== undefined && !suppressed) appliedVRef.current = v;
+      const changed =
+        !prev || stableStringify({ ...prev, sync_v: 0 }) !== stableStringify({ ...merged, sync_v: 0 });
+      if (changed) setGrid(merged);
       for (const [k, refused] of settleLater) settleUnsaved(k, refused);
-      setHistory(data.history);
+      if (fetchedGrid.history) setHistory(fetchedGrid.history);
+      return changed;
+    },
+    [setGrid],
+  );
+
+  const getSyncV = useCallback(() => appliedVRef.current, []);
+
+  const refetchGrid = useCallback(async () => {
+    try {
+      // The block the coach has open, not the plan's default one (else a
+      // refetch and the next changed poll would alternate between two blocks).
+      const openBlock = gridRef.current?.mesocycle?.id;
+      const q = openBlock != null ? `?mesocycle=${openBlock}` : "";
+      const res = await fetch(`/meso/api/plan/${planId}/grid/${q}`);
+      if (!res.ok) throw new Error("Request failed: " + res.status);
+      const data = (await res.json()) as MesoGrid & { ok?: boolean };
+      applyRemoteGrid(data);
     } catch (err) {
       reportFailure("Refetch grid failed", err);
     }
-  }, [planId, setGrid, reportFailure]);
+  }, [planId, applyRemoteGrid, reportFailure]);
 
   const runStructural = useCallback(async (fn: () => Promise<void>) => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
+    touch();
     try {
       // A just-blurred line write must land before the refetch replaces the grid.
       if (pendingWritesRef.current.size) await flushPendingWrites();
@@ -536,18 +648,28 @@ export function useGrid(options: UseGridOptions) {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [flushPendingWrites]);
+  }, [flushPendingWrites, touch]);
 
   const patchCell = useCallback(
     (cellId: Id, patch: GridCellPatch) => {
+      touch();
+      // Line 0 is in flight until answered; its answer's stamp guards the cell.
+      const cellKey = cellKeyOfPrescription(gridRef.current, cellId);
+      if (cellKey) bump(line0InflightRef.current, cellKey, 1);
       setGrid((prev) => (prev ? updateCellInGrid(prev, cellId, patch) : prev));
       const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, patch, csrf)
-        .then((data) => adoptGridHistory(data as GridHistoryCarrier))
-        .catch((err) => reportFailure("Cell autosave failed", err));
+        .then((data) => {
+          if (cellKey) recordAdoptedV(cellKey, (data as { sync_v?: unknown } | null)?.sync_v);
+          adoptGridHistory(data as GridHistoryCarrier);
+        })
+        .catch((err) => reportFailure("Cell autosave failed", err))
+        .finally(() => {
+          if (cellKey) bump(line0InflightRef.current, cellKey, -1);
+        });
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
-    [planId, csrf, adoptGridHistory],
+    [planId, csrf, adoptGridHistory, touch],
   );
 
   const renameExercise = useCallback(
@@ -562,14 +684,17 @@ export function useGrid(options: UseGridOptions) {
       if (exerciseId !== undefined) patch.exercise_id = exerciseId;
       else if (row && row.name !== name) patch.exercise_id = null;
       const body = exerciseId !== undefined ? { name, exercise_id: exerciseId } : { name };
+      touch();
+      bump(rowInflightRef.current, exerciseSlotId, 1);
       setGrid((prev) => (prev ? updateRowInGrid(prev, exerciseSlotId, patch) : prev));
       const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, body, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
-        .catch((err) => reportFailure("Rename exercise failed", err));
+        .catch((err) => reportFailure("Rename exercise failed", err))
+        .finally(() => bump(rowInflightRef.current, exerciseSlotId, -1));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
-    [grid, planId, csrf, adoptGridHistory],
+    [grid, planId, csrf, adoptGridHistory, touch],
   );
 
   const renamePlan = useCallback(
@@ -726,6 +851,8 @@ export function useGrid(options: UseGridOptions) {
       const data =
         result.data && typeof result.data === "object" ? (result.data as Record<string, any>) : null;
 
+      if ((result.ok || result.status === 422) && data) recordAdoptedV(key, data.sync_v);
+
       if (result.ok && data) {
         dropQueued();
         // This line reached the server: any earlier unsaved mark on it is moot.
@@ -821,6 +948,7 @@ export function useGrid(options: UseGridOptions) {
         line !== 0 && opts?.intent === "new" && cellNow
           ? predictNewLine(cellNow.lines ?? [], line, text)
           : line;
+      touch();
       const write: CellWrite = { line, text, placed, ...opts };
       if (opts?.intent === "new" && line !== 0) write.token = makeToken();
       setGrid((prev) =>
@@ -836,7 +964,7 @@ export function useGrid(options: UseGridOptions) {
       }));
       enqueueCellWrite(exerciseSlotId, weekId, write);
     },
-    [enqueueCellWrite, patchCellUi, setGrid],
+    [enqueueCellWrite, patchCellUi, setGrid, touch],
   );
 
   /** Re-send a line whose write never reached the server (same write,
@@ -847,12 +975,13 @@ export function useGrid(options: UseGridOptions) {
       const list = unsavedRef.current.get(key) ?? [];
       const write = list.find((w) => w.placed === line);
       if (!write) return;
+      touch();
       const rest = list.filter((w) => w !== write);
       unsavedRef.current.set(key, rest);
       patchCellUi(key, (cur) => ({ ...cur, unsaved: rest.map((w) => w.placed) }));
       enqueueCellWrite(exerciseSlotId, weekId, write);
     },
-    [enqueueCellWrite, patchCellUi],
+    [enqueueCellWrite, patchCellUi, touch],
   );
 
   const dismissCellNotice = useCallback(
@@ -878,14 +1007,17 @@ export function useGrid(options: UseGridOptions) {
   // `exercise_slot_patch`. Same optimistic fire-and-forget shape as patchCell.
   const patchRowColumns = useCallback(
     (exerciseSlotId: Id, patch: GridRowPatch) => {
+      touch();
+      bump(rowInflightRef.current, exerciseSlotId, 1);
       setGrid((prev) => (prev ? updateRowInGrid(prev, exerciseSlotId, patch) : prev));
       const write = apiPost(`/meso/api/plan/${planId}/row/${exerciseSlotId}/`, patch, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
-        .catch((err) => reportFailure("Row columns autosave failed", err));
+        .catch((err) => reportFailure("Row columns autosave failed", err))
+        .finally(() => bump(rowInflightRef.current, exerciseSlotId, -1));
       pendingWritesRef.current.add(write);
       write.finally(() => pendingWritesRef.current.delete(write));
     },
-    [planId, csrf, adoptGridHistory],
+    [planId, csrf, adoptGridHistory, touch],
   );
 
   const addExercise = useCallback(
@@ -1150,5 +1282,7 @@ export function useGrid(options: UseGridOptions) {
     undo,
     redo,
     refetchGrid,
+    applyRemoteGrid,
+    getSyncV,
   };
 }

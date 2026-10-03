@@ -1469,6 +1469,45 @@ class PlanQuerySet(models.QuerySet):
         return self.filter(status=Plan.Status.ACTIVE)
 
 
+def bump_plan_sync(plan_id, *, modified=None):
+    """Advance a plan's ``sync_version`` by one (#709 PR 2); returns nothing.
+
+    One atomic ``UPDATE ... SET sync_version = sync_version + 1`` so concurrent
+    writers never lose a bump. A ``modified`` timestamp, when given, is stamped
+    in the same statement (``_touch_plan``); the athlete-side bumps (Finish, notes,
+    settle) leave it alone because ``modified`` orders the coach's "working
+    plan" redirect and an athlete tapping Finish must not reorder that.
+
+    LOCK ORDER: this UPDATE takes the Plan row's FOR NO KEY UPDATE lock, so it
+    belongs to the Plan step of Plan -> Session -> Prescription (decisions.md,
+    "Row-lock order"). Every caller inside a transaction already holds the
+    Plan lock (``select_for_update(no_key=True)`` or ``record_plan_action``)
+    before it runs, which makes this a re-entrant no-op for the lock; the one
+    autocommit caller (``plan_deliver`` via ``_touch_plan``) holds no other row
+    lock, so it cannot invert the order either. Never call it
+    BEFORE taking that lock in a path that goes on to lock a Session or
+    Prescription: it would acquire the Plan row late, after a lower-order lock.
+    """
+    updates = {"sync_version": models.F("sync_version") + 1}
+    if modified is not None:
+        updates["modified"] = modified
+    Plan.objects.filter(pk=plan_id).update(**updates)
+
+
+def read_plan_sync(plan_id):
+    """The plan's current ``sync_version`` (one small query), or 0 if gone.
+
+    Serializers read this BEFORE any row they return, so a write that commits
+    mid-serialization can only pair NEW rows with an OLD stamp (harmless: the
+    next poll refetches). The reverse, OLD rows under a NEW stamp, would tell a
+    client "you're current" about a payload that predates the write (#718).
+    """
+    return (
+        Plan.objects.filter(pk=plan_id).values_list("sync_version", flat=True).first()
+        or 0
+    )
+
+
 class Plan(models.Model):
     """A periodized training plan rooted at one coach↔athlete ``relationship`` (D-a).
 
@@ -1531,6 +1570,15 @@ class Plan(models.Model):
     )
     created = models.DateTimeField(_("Time created"), auto_now_add=True)
     modified = models.DateTimeField(_("Time last modified"), auto_now=True)
+    # Live-sync change stamp (#709 PR 2). Bumped with ``F() + 1`` in the same
+    # transaction as every write either screen can see (see ``bump_plan_sync``),
+    # so the coach's designer and the athlete's logger can poll one integer and
+    # fetch the full payload only when it moved. ``modified`` can't do this job:
+    # it is only touched by designer edits and has timestamp resolution, so two
+    # writes in the same tick are indistinguishable.
+    sync_version = models.PositiveBigIntegerField(
+        _("Sync version"), default=0, db_default=0
+    )
 
     objects = PlanQuerySet.as_manager()
 

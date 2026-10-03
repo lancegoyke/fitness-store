@@ -614,6 +614,7 @@ class TestSerializeMesocycleGrid:
         # and hydrate the top bar / left rail / block view straight off the
         # grid (see this class's TestSerializeMesocycleGridIdentity below).
         assert set(result.keys()) == {
+            "sync_v",
             "plan",
             "athlete",
             "phases",
@@ -973,12 +974,13 @@ class TestSerializeMesocycleGridQueries:
     """
 
     def test_individual_grid_query_count(self, django_assert_num_queries):
-        # 11 = weeks, session slots, sessions, newest session logs, exercise slots, cells,
+        # 13 = the plan's sync_version (#709 PR 2, read first) + the mesocycle/plan
+        # re-fetch after it (no stamp passed), weeks, session slots, sessions, newest session logs, exercise slots, cells,
         # parsed_sets (athlete-line summary, #645, #665),
         # 2x PlanAction (serialize_plan_history), mesocycles (phases),
         # contraindications (serialize_athlete_identity).
         f = _build_grid_meso()
-        with django_assert_num_queries(11):
+        with django_assert_num_queries(13):
             serialize_mesocycle_grid(f.meso)
 
 

@@ -224,6 +224,8 @@ export interface MesoGrid {
   weeks: GridWeek[];
   days: GridDay[];
   history: GridHistory;
+  /** #709 PR 2: the plan's change stamp, read before any row. */
+  sync_v?: number;
 }
 
 /**

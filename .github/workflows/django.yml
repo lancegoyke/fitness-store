@@ -233,6 +233,9 @@ jobs:
       # test_coach_athlete_collision_postgres is the #709 new-line race: a coach and an
       # athlete both adding line 1 queue on the Plan/Session locks, so neither text is
       # overwritten. test_coach_logs_709 drives the same lock path in `cell_line_write`.
+      # test_live_sync_postgres is the #709 PR 2 / #718 read-order race: a grid read
+      # that overlaps a write must never return a NEW sync_version over OLD rows,
+      # which needs a second connection that shares the database (not SQLite).
       # Add a new Postgres-only file here in the same commit that creates it.
       - name: Run the PostgreSQL-only tests
         run: |
@@ -260,4 +263,5 @@ jobs:
             app/store_project/meso/tests/test_migration_0063_lift_stamp_backfill.py \
             app/store_project/meso/tests/test_lift_identity_708.py \
             app/store_project/meso/tests/test_coach_athlete_collision_postgres.py \
-            app/store_project/meso/tests/test_coach_logs_709.py
+            app/store_project/meso/tests/test_coach_logs_709.py \
+            app/store_project/meso/tests/test_live_sync_postgres.py

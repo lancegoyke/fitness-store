@@ -469,8 +469,10 @@ function GridCellEditor({
   // action) — never while the coach is mid-edit, since this only runs when
   // the value actually changes.
   useEffect(() => {
+    // #709 PR 2: never over a dirty draft (a remote merge can change the text
+    // mid-edit); the commit then wins, as it always has.
+    if (dirtyRef.current) return;
     setDraft(cell.text);
-    dirtyRef.current = false;
   }, [cell.text]);
 
   function commitIfDirty() {
@@ -792,8 +794,8 @@ function RowColumnInput({ row, field, label, tableNav, onPatchRowColumns }: RowC
   const dirtyRef = useRef(false);
 
   useEffect(() => {
+    if (dirtyRef.current) return; // #709 PR 2: never over a dirty draft
     setDraft(synced);
-    dirtyRef.current = false;
   }, [synced]);
 
   function commitIfDirty() {
@@ -865,8 +867,8 @@ function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
   const optionId = (i: number) => `${listId}-opt-${i}`;
 
   useEffect(() => {
+    if (dirtyRef.current) return; // #709 PR 2: never over a dirty draft
     setValue(displayName(row.name));
-    dirtyRef.current = false;
   }, [row.name]);
 
   // The popup is PORTALED to <body> with position: fixed from the input's

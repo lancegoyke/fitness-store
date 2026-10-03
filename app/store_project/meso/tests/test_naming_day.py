@@ -227,7 +227,11 @@ def test_renamed_and_blank_days_reach_athlete_surfaces(client):
     ).content.decode()
     assert "Day 1" in blank_home
     assert "Day 1" in blank_detail
-    assert presenters.athlete_session(session, plan.athlete)["name"] == "Day 1"
+    # The presenter reads the day's CURRENT name (it re-fetches rows older than
+    # the stamp, #709 PR 2): blank in the database, the templates supply "Day 1".
+    # The test's own `session` instance predates the blanking.
+    fresh = presenters.athlete_session(session, plan.athlete)
+    assert fresh["name"] == ""
 
 
 def test_delivery_diff_label_falls_back_for_a_blank_day_name():
