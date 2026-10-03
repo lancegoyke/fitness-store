@@ -893,7 +893,8 @@ def restore_plan_snapshot(plan, snapshot):
         # Replay token (#709, #726): undo restores the line's state as recorded,
         # token included. The pre-write state recorded none (a late replay must
         # not find it); a redo puts the write's own line back with its token; and
-        # one token never lands on two cells. A snapshot recorded before #726
+        # in history recorded since #709 one token never lands on two cells (an
+        # older non-blank handback row can still do it). A snapshot recorded before #726
         # carries no key: then an unchanged line keeps its token, a changed or
         # recreated one gets "".
         if "client_token" in row:
