@@ -100,6 +100,39 @@ class TestRestoreReturnsTheRecordedToken:
         _replay_lands_once(client, s)
 
 
+class TestRestorePutsBackExactlyTheRecordedToken:
+    def test_undoing_a_same_text_write_leaves_no_token_to_replay(self, client):
+        s = seed()
+        start(s)
+        client.force_login(s.coach)
+        assert coach_write(client, s, "225 x 5", kind="set").status_code == 200
+        assert cells(s)[1].client_token == ""
+        resp = coach_write(client, s, "225 x 5", intent="new", kind="set", token="t3")
+        assert resp.status_code == 200, resp.content
+        assert cells(s)[1].client_token == "t3"
+        undo(client, s)
+        assert cells(s)[1].client_token == ""
+
+    def test_one_token_never_ends_up_on_two_cells(self, client):
+        s = seed()
+        client.force_login(s.coach)
+        assert coach_write(client, s, "Z").status_code == 200
+        w = coach_write(client, s, "X", intent="new", token="T")
+        assert w.status_code == 200 and w.json()["cell"]["line"] == 2
+        assert coach_write(client, s, "X", line=1).status_code == 200
+        assert coach_write(client, s, "Y", line=2).status_code == 200
+        again = coach_write(client, s, "X", intent="new", token="T")
+        assert again.status_code == 200, again.content
+        undo(client, s)
+        undo(client, s)
+        holders = Prescription.objects.filter(client_token="T")
+        assert holders.count() <= 1
+        replay = coach_write(client, s, "X", intent="new", token="T")
+        assert replay.status_code == 200
+        if holders.count():
+            assert replay.json()["cell"]["id"] == holders.get().pk
+
+
 def _blank_athlete_line(client, s):
     client.force_login(s.athlete)
     write_cell(client, s.session, s.squat, 1, "225 x 5")

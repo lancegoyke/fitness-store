@@ -890,13 +890,16 @@ def restore_plan_snapshot(plan, snapshot):
             coach_set = bool(row.get("entered_by_coach"))
             cell.athlete_authored = coach_set
             cell.entered_by_coach = coach_set
-        # Replay token (#709, #726). A line the restore leaves exactly as it was
-        # keeps its token: it still is the result of the write that stamped it.
-        # A changed or recreated line takes the token recorded with the state
-        # being restored: the pre-write state recorded none (a late replay must
-        # not find it), a redo puts the write's own line back with its token.
-        if prior_line != (cell.text, cell.athlete_authored, cell.entered_by_coach):
-            cell.client_token = row.get("client_token", "")
+        # Replay token (#709, #726): undo restores the line's state as recorded,
+        # token included. The pre-write state recorded none (a late replay must
+        # not find it); a redo puts the write's own line back with its token; and
+        # one token never lands on two cells. A snapshot recorded before #726
+        # carries no key: then an unchanged line keeps its token, a changed or
+        # recreated one gets "".
+        if "client_token" in row:
+            cell.client_token = row["client_token"]
+        elif prior_line != (cell.text, cell.athlete_authored, cell.entered_by_coach):
+            cell.client_token = ""
         cell.save()
         if cell.line == 0 and was_skipped and not cell.skipped:
             unskipped.append(cell)
