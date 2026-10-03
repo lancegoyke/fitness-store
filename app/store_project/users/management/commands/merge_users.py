@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
 from django.db import transaction
+from django.db.models import Q
 
 from store_project.challenges.models import Record
 from store_project.pages.models import Page
@@ -67,6 +68,25 @@ class Command(BaseCommand):
         self.stdout.write(f"- Total Products: {products_count}")
 
         # Show user data comparison
+        # Meso data is never moved by this command (see the refusal below).
+        # Imported here, not at module level, to avoid coupling users' command
+        # imports to Meso during Django's app-loading phase.
+        from store_project.meso.models import SessionLog
+
+        own_logs = SessionLog.objects.filter(athlete=source_user).count()
+        coached_logs = (
+            SessionLog.objects.filter(
+                Q(session__week__mesocycle__plan__relationship__coach=source_user)
+                | Q(session__week__mesocycle__plan__owner=source_user)
+            )
+            .exclude(athlete=source_user)
+            .distinct()
+            .count()
+        )
+        self.stdout.write(f"- Meso session logs (own): {own_logs}")
+        self.stdout.write(f"- Meso session logs (their athletes'): {coached_logs}")
+
+        # Show user data comparison
         self.stdout.write("\nUser Data Comparison:")
         self.stdout.write(f"Name: '{source_user.name}' → '{target_user.name}'")
         self.stdout.write(f"Points: {source_user.points} → {target_user.points}")
@@ -77,8 +97,27 @@ class Command(BaseCommand):
         )
 
         if dry_run:
+            if own_logs or coached_logs:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"\nWARNING: {source_email} has Meso training history "
+                        f"({own_logs} own session logs, {coached_logs} on plans "
+                        "they coach); a real run would refuse."
+                    )
+                )
             self.stdout.write(self.style.WARNING("\n[DRY RUN] No changes will be made"))
             return
+
+        # #700: logs outlive structure. Deleting the source would delete its own
+        # logs (SessionLog.athlete CASCADE) and, for a coach, hit RESTRICT on
+        # its athletes' logs. Refuse before anything is changed.
+        if own_logs or coached_logs:
+            raise CommandError(
+                f"{source_email} has Meso training history ({own_logs} session "
+                f"logs of their own, {coached_logs} on plans they coach). "
+                "merge_users does not move Meso data, and deleting the account "
+                "would delete or strand it. Move it first; nothing was changed."
+            )
 
         # Confirm before proceeding
         confirm = input(

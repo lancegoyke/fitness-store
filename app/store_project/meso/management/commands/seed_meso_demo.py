@@ -1726,7 +1726,20 @@ class Command(BaseCommand):
                 )
                 return plan
             # Stale / partial hierarchy — rebuild it from the current spec.
-            plan.mesocycles.all().delete()
+            # #700 logs outlive structure (RESTRICT): this rebuild replaces the
+            # demo athlete's seeded history with a fresh one (the history
+            # logger below re-logs it), so delete that plan's logs explicitly
+            # first. Locks the plan first per docs/meso/decisions.md § Row-lock
+            # order. ``demo`` imports this module, hence the local import.
+            from store_project.meso import demo
+
+            with transaction.atomic():
+                demo.lock_cascade_from_plans([plan.pk])
+                LoggedSet.objects.filter(
+                    exercise_slot__session_slot__mesocycle__plan=plan
+                ).delete()
+                SessionLog.objects.filter(session__week__mesocycle__plan=plan).delete()
+                plan.mesocycles.all().delete()
             self.stdout.write(
                 f"  - sample plan '{plan.title}' was partial; rebuilding hierarchy"
             )
