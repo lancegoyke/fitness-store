@@ -38,6 +38,7 @@ from decimal import Decimal
 import pytest
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
+from django.db.models import RestrictedError
 from django.urls import reverse
 
 from store_project.meso import history
@@ -615,35 +616,25 @@ class TestLastLoggedLabelsSurvivesAHardDelete:
 # -- 9. CASCADE blast radius + admin inlines can't reach it ------------------
 
 
-class TestExerciseSlotCascadeBlastRadius:
-    """Hard-deleting an ``ExerciseSlot`` deletes its ``LoggedSet`` rows.
+class TestExerciseSlotHardDeleteRestricted:
+    """Hard-deleting an ``ExerciseSlot`` refuses while a ``LoggedSet`` points at it.
 
-    Nothing in this module pins what CASCADE (``LoggedSet.exercise_slot``'s
-    model comment) actually does end to end — every other test here
-    hard-deletes a ``Prescription`` (the line-0 cell), never the
-    ``ExerciseSlot`` itself. Paired with the admin-inline guard: an inline
-    delete calls ``obj.delete()`` straight from
-    ``BaseModelFormSet.save_existing_objects()`` with no confirmation page,
-    so ``ExerciseSlotInline``/``SessionSlotInline`` both set
-    ``can_delete = False``.
+    ``LoggedSet.exercise_slot`` is ``RESTRICT`` since #700 ("logs outlive
+    structure"): the performed history is never cascaded away by a structure
+    delete, it blocks it. Nothing else in this module pins that end to end —
+    every other test here hard-deletes a ``Prescription`` (the line-0 cell),
+    never the ``ExerciseSlot`` itself.
 
-    That guard is NOT "this CASCADE can only be triggered through a model's
-    OWN admin page" — ``MesocycleInline`` (on ``PlanAdmin``) and
-    ``WeekInline`` (on ``MesocycleAdmin``) have no ``can_delete = False`` and
-    both reach ``LoggedSet`` too, via ``Mesocycle``/``Week`` → ``SessionSlot``/
-    ``Session`` → ... The accurate boundary: no inline can silently destroy a
-    ``LoggedSet`` row that ``origin/main`` would have preserved. A
-    ``Mesocycle``/``Week`` inline delete also cascades ``Week`` → ``Session``
-    → ``SessionLog`` → ``LoggedSet`` down the other branch, so those rows die
-    on ``main`` too — not a divergence this FK introduces. Freezing
-    ``MesocycleInline``/``WeekInline`` with ``can_delete = False`` would buy
-    nothing for this PR, so they're deliberately left alone; only
-    ``ExerciseSlotInline``/``SessionSlotInline`` — the two inlines whose
-    silent delete would newly detach a ``LoggedSet`` that ``main`` would have
-    kept alive as an orphan (``prescription = NULL``) — get the guard.
+    Paired with the admin-inline guard: an inline delete calls ``obj.delete()``
+    straight from ``BaseModelFormSet.save_existing_objects()`` with no
+    confirmation page, so a refusal there would be an unhandled
+    ``RestrictedError`` (a 500). ``ExerciseSlotInline``/``SessionSlotInline``
+    set ``can_delete = False`` (#578 C1), and since #700 so do
+    ``MesocycleInline``, ``WeekInline`` and ``SessionInline``. The full-page
+    refusal is covered in ``test_logs_outlive_structure_700.py``.
     """
 
-    def test_hard_deleting_the_slot_cascades_to_the_logged_set(self):
+    def test_hard_deleting_the_slot_refuses_while_a_logged_set_points_at_it(self):
         s = seed()
         log = SessionLogFactory(
             session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
@@ -659,12 +650,14 @@ class TestExerciseSlotCascadeBlastRadius:
         slot_id = s.squat.exercise_slot_id
         assert row.exercise_slot_id == slot_id
 
-        ExerciseSlot.objects.get(pk=slot_id).delete()
+        with pytest.raises(RestrictedError):
+            ExerciseSlot.objects.get(pk=slot_id).delete()
 
-        assert not LoggedSet.objects.filter(pk=row.pk).exists(), (
-            "hard-deleting the ExerciseSlot should CASCADE to its LoggedSet rows"
+        assert ExerciseSlot.objects.filter(pk=slot_id).exists()
+        assert LoggedSet.objects.filter(pk=row.pk).exists(), (
+            "the athlete's set must outlive the structure delete (#700)"
         )
-        assert not Prescription.objects.filter(pk=s.squat.pk).exists()
+        assert Prescription.objects.filter(pk=s.squat.pk).exists()
 
     def test_admin_inlines_refuse_the_delete(self, client):
         """Drives the real ``SessionSlotAdmin`` change form, not just the class attribute.
@@ -778,7 +771,7 @@ class TestModelInvariantClosesTheAdminPath:
     ``test_the_real_admin_inline_post_derives_the_anchor`` below also drives
     the actual ``LoggedSetInline`` POST end to end: hand-built
     management-form data DOES have a precedent in this suite —
-    ``TestExerciseSlotCascadeBlastRadius.test_admin_inlines_refuse_the_delete``
+    ``TestExerciseSlotHardDeleteRestricted.test_admin_inlines_refuse_the_delete``
     builds exactly that for ``ExerciseSlotInline`` — so there is no reason
     left to settle for the model-level test alone.
     """
@@ -899,7 +892,7 @@ class TestModelInvariantClosesTheAdminPath:
         """Drives the real ``SessionLogAdmin``/``LoggedSetInline`` POST, not just ``.save()``.
 
         Reuses the hand-built management-form recipe
-        ``TestExerciseSlotCascadeBlastRadius.test_admin_inlines_refuse_the_delete``
+        ``TestExerciseSlotHardDeleteRestricted.test_admin_inlines_refuse_the_delete``
         established for ``ExerciseSlotInline``. ``exercise_slot`` is readonly
         on ``LoggedSetInline`` (never a form field the POST can name), so the
         only thing this proves that the ``.save()``-level tests above don't
