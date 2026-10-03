@@ -231,3 +231,19 @@ class TestForeignLiftNames:
 
         got = foreign_lift_names(Lift(1, "Squat"), self.sets((2, "Squat")))
         assert got == (["Squat"], False)
+
+    def test_catalog_lift_known_under_another_name(self):
+        from store_project.meso.lift_identity import foreign_lift_names
+
+        # Free-text "Back Squat" later linked to catalog E, and E now shows as
+        # "Squat": one lift under the module's alias rule, not a swap.
+        target = Lift(7, "Squat")
+        got = foreign_lift_names(
+            target, self.sets((None, "Back Squat"), (7, "Back Squat"))
+        )
+        assert got == ([], False)
+        # Without E ever stamped under that name it IS a different lift.
+        assert foreign_lift_names(target, self.sets((None, "Back Squat"))) == (
+            ["Back Squat"],
+            False,
+        )

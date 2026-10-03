@@ -1419,7 +1419,7 @@ def session_results(session):
         # Name the lift actually performed when the row was swapped since (#714).
         flag_name = (
             worst_row["logged_as"][0]
-            if worst_row["logged_as"] and not worst_row["logged_as_mixed"]
+            if len(worst_row["logged_as"]) == 1 and not worst_row["logged_as_mixed"]
             else worst_row["name"]
         )
         flag = (

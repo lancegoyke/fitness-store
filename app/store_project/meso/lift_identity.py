@@ -86,11 +86,24 @@ def foreign_lift_names(target, sets):
     names = []
     seen = set()
     foreign = native = 0
+    sets = list(sets)
+    # A catalog target is also known by every name its FK was stamped under in
+    # these sets (see the module docstring), so a free-text stamp under one of
+    # those names is the same lift, not a swap.
+    aliases = {norm_name(target.name)}
+    if target.exercise_id is not None:
+        aliases |= {
+            norm_name(s.exercise_name)
+            for s in sets
+            if s.exercise_name is not None and s.exercise_id == target.exercise_id
+        }
     for s in sets:
         if s.exercise_name is None:
             native += 1
             continue
-        if same_lift(Lift(s.exercise_id, s.exercise_name), target):
+        if same_lift(Lift(s.exercise_id, s.exercise_name), target) or (
+            s.exercise_id is None and norm_name(s.exercise_name) in aliases
+        ):
             native += 1
             continue
         foreign += 1
