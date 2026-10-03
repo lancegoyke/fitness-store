@@ -158,7 +158,7 @@ export interface GridCell {
    * lines included so the editor can show a cleared line in place. */
   lines: CellLine[];
   /** Roll-up of the athlete-authored lines (null when there are none). */
-  athlete_summary?: { sets: number; load: string; unit: string; rpe: string; missed?: number } | null;
+  athlete_summary?: { sets: number; load: string; unit: string; rpe: string; missed?: number; logged_as?: string[]; logged_as_mixed?: boolean } | null;
   /** #709: this cell's live session already has a SessionLog for the
    * plan's athlete. */
   session_started?: boolean;

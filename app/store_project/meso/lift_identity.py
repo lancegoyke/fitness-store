@@ -72,6 +72,48 @@ def same_lift(a, b):
     return norm_name(a.name) == norm_name(b.name)
 
 
+def foreign_lift_names(target, sets):
+    """Names ``sets`` were logged under that are NOT ``target``'s lift (#714).
+
+    ``(names, mixed)``: the stamped names that aren't :func:`same_lift` as
+    ``target`` (stripped, de-duplicated by :func:`norm_name`, first-seen
+    order), and whether the row is mixed -- at least one set is not foreign
+    AND at least one is. An unstamped set (``exercise_name is None``) reads as
+    the row's current identity, so it is never foreign and never read through
+    ``.lift`` (that would resolve the anchor slot, a query). Display only: the
+    caller shows a quiet "logged as ..." hint after a swap or rename.
+    """
+    names = []
+    seen = set()
+    foreign = native = 0
+    sets = list(sets)
+    # A catalog target is also known by every name its FK was stamped under in
+    # these sets (see the module docstring), so a free-text stamp under one of
+    # those names is the same lift, not a swap.
+    aliases = {norm_name(target.name)}
+    if target.exercise_id is not None:
+        aliases |= {
+            norm_name(s.exercise_name)
+            for s in sets
+            if s.exercise_name is not None and s.exercise_id == target.exercise_id
+        }
+    for s in sets:
+        if s.exercise_name is None:
+            native += 1
+            continue
+        if same_lift(Lift(s.exercise_id, s.exercise_name), target) or (
+            s.exercise_id is None and norm_name(s.exercise_name) in aliases
+        ):
+            native += 1
+            continue
+        foreign += 1
+        key = norm_name(s.exercise_name)
+        if key not in seen:
+            seen.add(key)
+            names.append(s.exercise_name.strip())
+    return names, bool(foreign and native)
+
+
 class LiftIndex:
     """Items indexed by their lift, for :func:`same_lift` lookups by target.
 

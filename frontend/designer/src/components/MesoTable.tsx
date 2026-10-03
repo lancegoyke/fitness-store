@@ -519,6 +519,11 @@ function GridCellEditor({
   const athleteMarkerText = `✓ ${athleteSetCount} ${athleteSetCount === 1 ? "set" : "sets"}${loadPart}${
     summary && summary.rpe ? ` @${summary.rpe}` : ""
   }${missed > 0 ? ` · ${missed} ${missed === 1 ? "miss" : "misses"}` : ""}`;
+  // #714: the lift the sets were performed as, when a swap/rename since has
+  // changed the row's name. Server payload only (it rides athlete_summary).
+  const loggedAsNames = (summary?.logged_as ?? []).filter((n) => typeof n === "string" && n !== "");
+  const loggedAsHint =
+    loggedAsNames.length > 0 ? `${summary?.logged_as_mixed ? "partly logged as" : "logged as"} ${loggedAsNames.join(", ")}` : "";
   const athleteSetsLabel = `${athleteSetCount} ${athleteSetCount === 1 ? "set" : "sets"} logged by your athlete${
     missed > 0 ? `, ${missed} missed` : ""
   }`;
@@ -688,6 +693,15 @@ function GridCellEditor({
           >
             {athleteMarkerText}
           </button>
+          {loggedAsHint ? (
+            <div
+              className="meso-athlete-logged-as"
+              data-testid={`logged-as-hint-${cellId}`}
+              title={loggedAsHint}
+            >
+              {loggedAsHint}
+            </div>
+          ) : null}
           {athleteOpen
             ? athleteLines.map((l) => (
                 <CellSubLineInput

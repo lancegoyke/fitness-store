@@ -720,6 +720,10 @@ function createLogger() {
         if ("logged_readonly" in sx) {
           ex.logged_readonly = Array.isArray(sx.logged_readonly) ? sx.logged_readonly : [];
         }
+        if ("logged_as" in sx || "logged_as_mixed" in sx) {
+          ex.logged_as = Array.isArray(sx.logged_as) ? sx.logged_as : [];
+          ex.logged_as_mixed = !!sx.logged_as_mixed;
+        }
         // The 1RM, unless the athlete is on it: a typed value waiting to be
         // saved, or a save running. Seeded as `_initExercise` does.
         if (

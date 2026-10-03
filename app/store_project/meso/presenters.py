@@ -44,6 +44,7 @@ from . import tour
 from .billing import access as billing_access
 from .billing import agent_usage_report
 from .lift_identity import Lift
+from .lift_identity import foreign_lift_names
 from .lift_identity import same_lift
 from .models import AgentProposalBatch
 from .models import CoachAthlete
@@ -1266,8 +1267,14 @@ def _exercise_result(prescription, logged_sets, unit, sub_lines_by_slot):
         note = f"RPE {_fmt_num(top_rpe)} over target"
     else:
         note = ""
+    logged_as, logged_as_mixed = foreign_lift_names(
+        Lift(prescription.exercise_id, prescription.name), logged_sets
+    )
     row = {
         "name": prescription.name,
+        # What the sets were logged as after a swap/rename (#714); [] normally.
+        "logged_as": logged_as,
+        "logged_as_mixed": logged_as_mixed,
         "target": _results_target_label(prescription, recovered_rpe, unit),
         "logged": _logged_label(logged_sets, unit) if logged_sets else "—",
         "rpe": _fmt_num(top_rpe) if top_rpe is not None else "—",
@@ -1409,8 +1416,14 @@ def session_results(session):
     ]
     if flagged:
         worst_row, worst_over = max(flagged, key=lambda pair: pair[1])
+        # Name the lift actually performed when the row was swapped since (#714).
+        flag_name = (
+            worst_row["logged_as"][0]
+            if len(worst_row["logged_as"]) == 1 and not worst_row["logged_as_mixed"]
+            else worst_row["name"]
+        )
         flag = (
-            f"{worst_row['name']} ran {_fmt_num(worst_over)} RPE over target "
+            f"{flag_name} ran {_fmt_num(worst_over)} RPE over target "
             "— consider holding load next session."
         )
     else:
@@ -2303,6 +2316,17 @@ def athlete_session(session, athlete, sync_v=None):
                 # count, 3 for a free-form cell, never more than 12.
                 "pad_lines": max(1, min(_prescribed_set_count(p) or 3, 12)),
                 "logged_readonly": readonly_by_slot.get(p.exercise_slot_id, []),
+                # The lift(s) this row's sets were logged as when that isn't the
+                # row's current lift (#714): [] normally.
+                **dict(
+                    zip(
+                        ("logged_as", "logged_as_mixed"),
+                        foreign_lift_names(
+                            Lift(p.exercise_id, p.name),
+                            sets_by_slot.get(p.exercise_slot_id, ()),
+                        ),
+                    )
+                ),
             }
             for p in prescriptions
         ],
@@ -2374,6 +2398,9 @@ def athlete_log_payload(session_ctx):
                 "placeholder_reps": e.get("placeholder_reps", ""),
                 "pad_lines": e["pad_lines"],
                 "logged_readonly": e["logged_readonly"],
+                # "Logged as ..." hint after a swap/rename (#714).
+                "logged_as": e.get("logged_as", []),
+                "logged_as_mixed": e.get("logged_as_mixed", False),
             }
             for e in session_ctx["exercises"]
         ],
