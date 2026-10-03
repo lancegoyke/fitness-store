@@ -487,12 +487,18 @@ def _classify_one_set_comma(head, segments):
     reps = {"reps": int(match.group(1))}
     if not _reps_are_plausible(reps):
         return None
-    for segment in segments[1:]:
-        segment = segment.strip().rstrip(".")
+    for index, raw_segment in enumerate(segments[1:], start=1):
+        segment = raw_segment.strip().rstrip(".")
         if not segment or _RPE.match(segment):
             continue
         if not _LOAD.match(segment):
             return None
+        # A comma inside the load (``22,5kg``, ``1,000``) split it across two
+        # segments. Refuse rather than store the front half, as the leading
+        # load position does.
+        tail = segments[index + 1] if index + 1 < len(segments) else ""
+        if re.search(r"\d$", raw_segment) and re.match(r"\d", tail):
+            return {"kind": "unresolved-set", "warn": True}
         if not _load_is_plausible(segment):
             return {"kind": "unresolved-set", "warn": True}
         return {"load": segment.replace(" ", ""), **reps}

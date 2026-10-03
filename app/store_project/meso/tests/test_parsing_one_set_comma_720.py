@@ -47,10 +47,20 @@ def test_one_set_comma_load(text, expected):
     assert _norm(parse_performed(text)) == _norm(expected)
 
 
-def test_fat_fingered_load_is_unresolved_not_one_pound():
-    assert parse_performed("1x5, 2255") == {
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1x5, 2255",
+        # Review: a comma inside the load splits it; storing ``22`` (in the
+        # plan's unit) would be a different set from 22.5 kg.
+        "1x5, 22,5kg",
+        "1x1, 1,000",
+    ],
+)
+def test_unreadable_load_is_unresolved_not_one_pound(text):
+    assert parse_performed(text) == {
         "kind": "unresolved-set",
-        "raw": "1x5, 2255",
+        "raw": text,
         "warn": True,
     }
 
