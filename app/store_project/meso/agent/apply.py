@@ -314,6 +314,13 @@ def _apply_swap(change, name):
 
 def apply_change(change):
     """Apply one change to the program. Returns a describing dict, or None (no-op)."""
+    # The agent never targets a sub-line: sub-lines (cues and the athlete's or
+    # coach's set lines) are written only through ``cell_line_write``, which
+    # applies the #709 kind rules; an agent rewrite would bypass them and could
+    # rewrite the athlete's own performance line (#732). Validation refuses
+    # these now; this skips one persisted before that check existed.
+    if change.prescription is not None and change.prescription.line != 0:
+        return None
     payload = change.payload or {}
     if change.kind == ProposedChange.Kind.SWAP:
         # A swap may carry its new name in the payload or only in the
