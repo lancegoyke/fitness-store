@@ -39,6 +39,7 @@ from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
@@ -2091,6 +2092,7 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         ctx["pending"] = presenters.athlete_pending(self.request.user)
         # The athlete's standing bests, in their current plan's unit (Phase 4d).
         ctx["personal_records"] = presenters.athlete_personal_records(self.request.user)
+        ctx["has_training_log"] = presenters.athlete_has_training_log(self.request.user)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         # First-log coachmark (Phase 4): only when there's a session to tap
@@ -2100,6 +2102,62 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         ctx["show_first_log_hint"] = has_sessions and not _athlete_has_completed_log(
             self.request.user
         )
+        ctx.update(_pwa_context())
+        return ctx
+
+
+# Online-only pages (#700): ``no-store`` keeps the browser's HTTP and
+# back-forward caches from holding one athlete's history past a logout, the
+# same reason the service worker never stores them.
+@method_decorator(never_cache, name="dispatch")
+class AthleteTrainingLogView(LoginRequiredMixin, TemplateView):
+    """The athlete's Training log (#700): every workout they logged, newest first.
+
+    Read-only, and built from ``SessionLog``/``LoggedSet`` alone — a set that
+    counts toward a PR is listed here whether or not its day, plan or coach is
+    still around (``presenters.training_log_logs``).
+    """
+
+    template_name = "meso/athlete_log.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["active"] = "training"
+        ctx["log"] = presenters.athlete_training_log(
+            self.request.user, self.request.GET.get("page")
+        )
+        ctx["athlete_name"] = self.request.user.display_name()
+        ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
+        ctx.update(_pwa_context())
+        return ctx
+
+
+@method_decorator(never_cache, name="dispatch")
+class AthleteWorkoutView(LoginRequiredMixin, TemplateView):
+    """One logged workout, read-only (#700).
+
+    404 for another athlete's log, an empty one or an unknown id. "Open
+    session" is offered only when ``_athlete_session_or_404`` still reaches the
+    day; otherwise the page says what was logged is kept here.
+    """
+
+    template_name = "meso/athlete_workout.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        workout = presenters.athlete_workout(self.request.user, kwargs["log_pk"])
+        if workout is None:
+            raise Http404("Unknown workout")
+        try:
+            session = _athlete_session_or_404(self.request.user, workout["session_id"])
+            open_url = reverse("meso:athlete_session", kwargs={"pk": session.pk})
+        except Http404:
+            open_url = None
+        ctx["active"] = "training"
+        ctx["workout"] = workout
+        ctx["open_url"] = open_url
+        ctx["athlete_name"] = self.request.user.display_name()
+        ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         ctx.update(_pwa_context())
         return ctx
 
@@ -3839,7 +3897,9 @@ def manifest_webmanifest(request):
 #     page loses its Set rows and gains the progress header and the single
 #     "Finish session" button. A cached page would still post `sets`, which the
 #     server now ignores, so installed clients need a fresh cache namespace.
-PWA_CACHE_VERSION = "meso-pwa-v16"
+# v17: the athlete home gains the Training log link and the read-only
+#     `/meso/me/log/` pages (#700), which the worker never stores (online only).
+PWA_CACHE_VERSION = "meso-pwa-v17"
 
 
 @require_GET
@@ -3856,6 +3916,7 @@ def service_worker(request):
             "cache_version": PWA_CACHE_VERSION,
             "offline_url": reverse("meso:offline"),
             "home_url": reverse("meso:athlete_home"),
+            "log_url": reverse("meso:athlete_log"),
             "static_url": settings.STATIC_URL,
         },
         request=request,

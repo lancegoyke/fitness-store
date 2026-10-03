@@ -8,7 +8,8 @@
  *       * navigations (HTML): network-first, falling back to the last-good
  *         cached page for that URL, then to the offline page. This is what lets
  *         the athlete re-open a session they viewed online and keep logging when
- *         the gym wifi drops.
+ *         the gym wifi drops. The Training log (/meso/me/log/, #700) is the
+ *         exception: network-only, never stored, offline page when offline.
  *       * same-origin static GETs: stale-while-revalidate from the cache.
  *       * POSTs (logging): never intercepted — the page's own offline queue owns
  *         writes (more reliable on iOS than the Background Sync API).
@@ -18,6 +19,7 @@
 const CACHE = "{{ cache_version }}";
 const OFFLINE_URL = "{{ offline_url }}";
 const HOME_URL = "{{ home_url }}";
+const LOG_URL = "{{ log_url }}"; // the Training log: online only (#700)
 const STATIC_PREFIX = "{{ static_url }}"; // only these GETs are cacheable
 
 // Static shell — safe to precache (no auth, hashed URLs resolved at render time).
@@ -90,6 +92,14 @@ self.addEventListener("fetch", (event) => {
     // (/meso/roster/, designer, …) reach here too — let them pass straight
     // through, never cached or served offline, matching the athlete-only wiring.
     if (!(url.pathname.startsWith(HOME_URL) || url.pathname === OFFLINE_URL)) {
+      return;
+    }
+    // The Training log (#700) is an online page: never stored, so a phone two
+    // athletes share can't reopen one's history for the other once offline,
+    // and nothing here is needed at the gym (logging happens on the session
+    // page). Offline, it lands on the offline page.
+    if (url.pathname.startsWith(LOG_URL)) {
+      event.respondWith(fetch(request).catch(() => caches.match(OFFLINE_URL)));
       return;
     }
     event.respondWith(

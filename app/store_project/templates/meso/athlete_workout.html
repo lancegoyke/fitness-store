@@ -1,0 +1,65 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}{{ workout.session_name }} · Training log · Meso{% endblock %}
+
+{% block pwa %}{% include "meso/_pwa_head.html" %}{% endblock %}
+
+{# Phone-first PWA surface — no marketing site nav (keep the installed-app feel). #}
+{% block site_nav %}{% endblock %}
+
+{% block navlinks %}
+  <a class="meso-navlink {% if active == 'training' %}is-active{% endif %}" href="{% url 'meso:athlete_home' %}">Training</a>
+{% endblock %}
+
+{% block topnav_avatar %}
+  <a class="meso-avatar meso-avatar--sm meso-avatar--accent meso-avatar--link meso-avatar--tap" href="{% url 'meso:settings' %}" title="{{ athlete_name }} — settings">{{ athlete_initials }}</a>
+{% endblock %}
+
+{% block content %}
+  <div class="meso-page meso-athlete">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:athlete_home' %}">Training</a> <span>/</span>
+      <a href="{% url 'meso:athlete_log' %}">Training log</a> <span>/</span>
+      <span>{{ workout.date_label }}</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div style="min-width:0;">
+        <p class="meso-eyebrow">{{ workout.date_label }}</p>
+        <h1 class="meso-h1">{{ workout.session_name }}</h1>
+        <p class="meso-sub">{{ workout.plan_title }} · {{ workout.coach }}</p>
+      </div>
+      <div class="meso-spacer"></div>
+      {% if workout.in_progress %}<span class="meso-badge" data-testid="in-progress">In progress</span>{% endif %}
+    </div>
+
+    {% if open_url %}
+      <div style="margin-bottom:12px;">
+        <a data-testid="open-session" href="{{ open_url }}" style="display:inline-flex;align-items:center;min-height:44px;font-weight:650;color:var(--accent);text-decoration:none;">Open session →</a>
+        <p class="meso-row-meta">This is where you can edit what you logged.</p>
+      </div>
+    {% else %}
+      <p class="meso-row-meta" data-testid="workout-readonly-note" style="margin-bottom:12px;">This day is no longer in your program. What you logged is kept here.</p>
+    {% endif %}
+
+    {% for ex in workout.exercises %}
+      <div class="meso-card" data-testid="workout-exercise" style="margin-bottom:12px;overflow:hidden;">
+        <div style="padding:11px 16px 9px;border-bottom:1px solid var(--line-2);">
+          <div style="font-size:14px;font-weight:700;letter-spacing:-0.01em;overflow-wrap:break-word;">{{ ex.name }}</div>
+        </div>
+        <div style="padding:9px 16px 11px;">
+          {% for s in ex.sets %}
+            <div class="meso-row-meta meso-mono" data-testid="workout-set" data-logged-set="{{ s.id }}">{{ s.label }}{% if s.by_coach %}<span style="color:var(--dim);"> · logged by coach</span>{% endif %}</div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+
+    {% if workout.notes.strip %}
+      <div class="meso-card meso-card--pad" data-testid="workout-notes">
+        <p class="meso-eyebrow">Notes</p>
+        <p style="font-size:14px;overflow-wrap:break-word;">{{ workout.notes|linebreaksbr }}</p>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

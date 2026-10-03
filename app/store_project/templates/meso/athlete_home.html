@@ -21,7 +21,8 @@
       <div>
         <p class="meso-eyebrow">Your training</p>
         <h1 class="meso-h1">Your programs</h1>
-        <p class="meso-sub">Your program, live as your coach writes it — tap a session to see the plan.</p>
+        {% if plans %}<p class="meso-sub">Your program, live as your coach writes it — tap a session to see the plan.</p>{% endif %}
+        <a href="{% url 'meso:athlete_log' %}" data-testid="training-log-link" style="display:inline-flex;align-items:center;min-height:44px;font-size:13.5px;font-weight:650;color:var(--accent);text-decoration:none;">Training log →</a>
       </div>
     </div>
 
@@ -171,7 +172,11 @@
       </div>
     {% empty %}
       <div class="meso-card meso-card--pad">
-        <p class="meso-row-meta">No active programs yet. Once a coach starts you on a program, it shows up here.</p>
+        {% if has_training_log %}
+          <p class="meso-row-meta">No active program right now. Your past workouts are still in your <a href="{% url 'meso:athlete_log' %}" style="color:var(--accent);font-weight:650;text-decoration:none;">Training log</a>.</p>
+        {% else %}
+          <p class="meso-row-meta">No active programs yet. Once a coach starts you on a program, it shows up here.</p>
+        {% endif %}
       </div>
     {% endfor %}
 

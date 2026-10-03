@@ -520,12 +520,15 @@ class TestServiceWorker:
         # the network untouched.
         guard = text.index("if (!url.pathname.startsWith(STATIC_PREFIX)) return;")
         assert text.index("event.respondWith(", guard) > guard
-        # Before the guard the only respondWith is the navigation branch's.
+        # Before the guard every respondWith is in the navigation branch (the
+        # Training log's network-only one, #700, and the cached-page one).
         before = text[:guard]
-        assert before.count("event.respondWith(") == 1
-        assert before.index("if (isNavigation(request))") < before.index(
-            "event.respondWith("
-        )
+        navigation = before.index("if (isNavigation(request))")
+        responds = [
+            i for i in range(len(before)) if before.startswith("event.respondWith(", i)
+        ]
+        assert len(responds) == 2
+        assert all(i > navigation for i in responds)
 
 
 # -- review round 1 -----------------------------------------------------------

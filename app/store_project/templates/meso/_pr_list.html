@@ -1,8 +1,10 @@
 {% comment %}
 Personal records panel (Phase 4d) — shared by the athlete's training home and the
 coach's athlete-profile. Expects `personal_records` = {rows: [...], unit: "kg"},
-each row {name, e1rm, unit, reps, load, date}, best e1RM per lift alphabetical
-(presenters.athlete_personal_records / coach_personal_records). Renders nothing
+each row {name, e1rm, unit, reps, load, date[, log_url]}, best e1RM per lift alphabetical
+(presenters.athlete_personal_records / coach_personal_records). `log_url`
+(athlete panel only, #700) links the provenance to that workout's read-only
+page; the coach panel has none and shows plain text. Renders nothing
 when there are no records (a lift with no numeric-parseable best is simply
 absent), so a new surface stays uncluttered.
 {% endcomment %}
@@ -16,7 +18,7 @@ absent), so a new surface stays uncluttered.
             <span style="flex:1;min-width:0;font-size:13px;font-weight:600;letter-spacing:-0.01em;">{{ pr.name }}</span>
             <span class="meso-mono" style="font-size:13px;font-weight:700;color:var(--accent-deep);white-space:nowrap;">{{ pr.e1rm }} {{ pr.unit }}</span>
           </div>
-          <div class="meso-row-meta meso-mono">est. 1RM · from {{ pr.reps }}×{{ pr.load }}{% if pr.date %} on {{ pr.date|date:"M j, Y" }}{% endif %}</div>
+          <div class="meso-row-meta meso-mono">est. 1RM · {% if pr.log_url %}<a href="{{ pr.log_url }}" data-testid="pr-provenance" style="color:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px;">from {{ pr.reps }}×{{ pr.load }}{% if pr.date %} on {{ pr.date|date:"M j, Y" }}{% endif %}</a>{% else %}from {{ pr.reps }}×{{ pr.load }}{% if pr.date %} on {{ pr.date|date:"M j, Y" }}{% endif %}{% endif %}</div>
         </div>
       {% endfor %}
     </div>
