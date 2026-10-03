@@ -131,7 +131,7 @@ class TestUnskipRederivesThePerformanceLines:
         assert len(rows) == 1
         assert values(rows[0]) == ("225", "5")
 
-    def test_an_athlete_line_typed_while_skipped_gets_its_set_without_an_event(
+    def test_an_athlete_line_typed_while_skipped_gets_its_set_and_one_event(
         self, client
     ):
         s = seed()
