@@ -1166,9 +1166,10 @@ def restore_plan_snapshot(plan, snapshot):
             ).delete()
 
     # #717: a row this restore un-skipped gets its performance lines re-derived,
-    # last, after the stray purge. The restore already holds the Plan lock and
-    # has UPDATEd the Session rows above, so the Plan -> Session -> Prescription
-    # lock order holds (decisions.md § Row-lock order).
+    # last, after the stray purge. The purge may already have written
+    # LoggedSet/SessionLog rows, so the Plan -> Session -> Prescription order is
+    # not claimed here; this is safe because every competing path takes the Plan
+    # row first and this restore holds it throughout.
     _rederive_unskipped_rows(plan, unskipped)
 
 

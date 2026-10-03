@@ -2364,6 +2364,9 @@ class SessionLogQuerySet(models.QuerySet):
         (staff-only, same instant; no row is doubled or lost). The insert runs in its
         own savepoint so a lost race does not poison the caller's transaction,
         and the loser adopts the winner's row rather than raising or doubling.
+
+        The locked writers that can meet an unlocked admin/seed insert include
+        ``prescription_skip``'s un-skip and the undo/redo re-derives (#719).
         """
         try:
             with transaction.atomic():
@@ -2425,10 +2428,11 @@ class SessionLog(models.Model):
     last_activity_at = models.DateTimeField(
         _("Last activity"), default=timezone.now, db_default=Now()
     )
-    # #719: True while a COACH's set is the only reason this log exists, i.e.
-    # a coach grid write created it and the athlete has not touched it since
-    # (a real edit of theirs, or any post to the log endpoint, clears it). A coach undo
-    # may reap an empty log only when this is set: an athlete-started or
+    # #719: True while a COACH action is the only reason this log exists, i.e.
+    # a coach action (a grid write, an un-skip re-derive) created it and the
+    # athlete has not touched it since (a real edit of theirs, or any post to
+    # the log endpoint, clears it). A coach action may reap an empty log only
+    # when this is set: an athlete-started or
     # athlete-dated log is theirs even with no sets and no notes. `db_default`
     # for the same rolling-deploy reason as `last_activity_at`; existing rows
     # read False ("the athlete's"), so a coach path never reaps one.

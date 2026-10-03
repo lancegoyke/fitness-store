@@ -24,6 +24,7 @@ from django.utils import timezone
 from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
 from store_project.meso import presenters
+from store_project.meso import views
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
@@ -144,8 +145,22 @@ class TestUnskipRederivesThePerformanceLines:
         rows = sets_of(s)
         assert len(rows) == 1
         assert values(rows[0]) == ("225", "5")
-        # the athlete did not log it just now
-        assert set_events() == events
+        # the athlete's set is recorded once, as theirs: nothing else will
+        # (their own repair re-post now finds the row)
+        assert set_events() == events + 1
+        event = Event.objects.filter(name=EventName.SET_LOGGED).latest("pk")
+        assert event.actor_id == s.athlete.pk
+
+    def test_unskipping_a_coach_set_line_records_no_event(self, client):
+        s = seed()
+        start(s)
+        as_coach(client, s)
+        ok(coach_write(client, s, "225 x 5", intent="new"))
+        skip_row(client, s, True)
+        ok(coach_write(client, s, "230 x 3", intent="edit"))
+        skip_row(client, s, False)
+        assert len(sets_of(s)) == 1
+        assert set_events() == 0
 
     def test_guard_an_existing_coach_set_keeps_its_pk(self, client):
         s = seed()
@@ -408,3 +423,69 @@ class TestOnlyALineZeroCanBeSkipped:
         sub.refresh_from_db()
         assert sub.skipped is False
         assert PlanAction.objects.filter(plan=s.plan).count() == actions
+
+
+# -- round 1 review fixes -------------------------------------------------
+
+
+def adopted_then_reposted(client, s):
+    """The athlete's A, adopted by a coach line, then re-posted unchanged by them."""
+    skipped_with_blank_athlete_line(client, s)
+    skip_row(client, s, False)
+    ok(coach_write(client, s, "225 x 5", intent="new"))
+    athlete_write(client, s, "225 x 5")  # the delete-then-recreate of its own row
+    as_coach(client, s)
+
+
+class TestARepostKeepsWhoEnteredTheSet:
+    def test_the_coach_blanking_the_line_spares_the_athletes_reposted_set(self, client):
+        s = seed()
+        adopted_then_reposted(client, s)
+        assert [values(r) for r in all_sets(s)] == [("225", "5")]
+        ok(coach_write(client, s, "", intent="edit"))
+        assert [values(r) for r in all_sets(s)] == [("225", "5")]
+        assert presenters.athlete_set_progress(s.session, s.athlete)["logged"] == 1
+
+    def test_the_coach_undoing_the_write_spares_the_athletes_reposted_set(self, client):
+        s = seed()
+        adopted_then_reposted(client, s)
+        undo(client, s)
+        assert [values(r) for r in all_sets(s)] == [("225", "5")]
+        assert presenters.athlete_set_progress(s.session, s.athlete)["logged"] == 1
+
+
+class TestACoachActionReapsTheLogItCreatedForNothing:
+    def overlong_while_skipped(self, client, s):
+        as_coach(client, s)
+        skip_row(client, s, True)
+        athlete_write(client, s, "1." + "0" * 35 + " x 5")
+        as_coach(client, s)
+
+    def test_unskip_leaves_no_log_when_the_set_cannot_be_stored(self, client):
+        s = seed()
+        self.overlong_while_skipped(client, s)
+        skip_row(client, s, False)
+        assert all_sets(s) == []
+        assert not SessionLog.objects.filter(session=s.session).exists()
+
+    def test_undoing_the_skip_leaves_no_log_either(self, client):
+        s = seed()
+        self.overlong_while_skipped(client, s)
+        undo(client, s)  # the skip
+        assert not Prescription.objects.get(pk=s.squat.pk).skipped
+        assert all_sets(s) == []
+        assert not SessionLog.objects.filter(session=s.session).exists()
+
+
+class TestUnskipSkipsADeadRow:
+    def test_a_slot_soft_deleted_since_derives_nothing(self, client):
+        s = seed()
+        as_coach(client, s)
+        skip_row(client, s, True)
+        athlete_write(client, s, "225 x 5")
+        slot = s.squat.exercise_slot
+        slot.soft_delete()
+        Prescription.objects.filter(pk=s.squat.pk).update(skipped=False)
+        views._rederive_unskipped_row(s.plan, Prescription.objects.get(pk=s.squat.pk))
+        assert all_sets(s) == []
+        assert not SessionLog.objects.filter(session=s.session).exists()

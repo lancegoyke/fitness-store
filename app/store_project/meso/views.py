@@ -3064,7 +3064,9 @@ def _upsert_parsed_set(
                     session,
                     athlete,
                     date=timezone.localdate(),
-                    opened_by_coach=bool(by_coach and cell.entered_by_coach),
+                    # A coach action created it: it holds no set a coach action could
+                    # ever delete, and the athlete's next edit clears the flag.
+                    opened_by_coach=bool(by_coach),
                 )
 
             # Replace only the rows THIS LINE WAS SHOWING. A set the line no
@@ -3292,7 +3294,15 @@ def _upsert_parsed_set(
                                 source_line=cell,
                                 set_number=number,
                                 unit=unit,
-                                entered_by_coach=cell.entered_by_coach,
+                                # Like the #708 stamp above, a
+                                # delete-then-recreate of the line's own row
+                                # keeps who entered it: the athlete's unchanged
+                                # re-post of a coach line mustn't restamp their
+                                # adopted set as the coach's (#719).
+                                entered_by_coach=bool(
+                                    cell.entered_by_coach
+                                    and (previous is None or previous.entered_by_coach)
+                                ),
                                 **values,
                             )
                             is_new_set = previous is None
@@ -3354,8 +3364,9 @@ def _upsert_parsed_set(
 
         # Not for a set the coach entered (#709): the event is attributed to
         # the athlete as actor, and they didn't log this one.
-        # Nor for any coach action, even one that derives the athlete's own line.
-        if is_new_set and not cell.entered_by_coach and not by_coach:
+        # A coach action that derives the athlete's own typed line (the un-skip)
+        # records the athlete's set; a coach-entered line never does.
+        if is_new_set and not cell.entered_by_coach:
             track(EventName.SET_LOGGED, actor=athlete, subject=log, via="typed")
 
         # The toast read gets its OWN savepoint, deliberately. Inside the one
@@ -3420,6 +3431,17 @@ def _rederive_unskipped_row(plan, line_zero):
         deleted_at__isnull=True,
     ).first()
     if session is None:
+        return
+    # `prescription_skip` loaded the cell before its locks, so a concurrent
+    # exercise delete may have soft-deleted the slot or week since: re-check.
+    if not (
+        ExerciseSlot.objects.filter(
+            pk=line_zero.exercise_slot_id,
+            deleted_at__isnull=True,
+            session_slot__deleted_at__isnull=True,
+        ).exists()
+        and Week.objects.filter(pk=line_zero.week_id, deleted_at__isnull=True).exists()
+    ):
         return
     for cell in Prescription.objects.filter(
         exercise_slot_id=line_zero.exercise_slot_id,
